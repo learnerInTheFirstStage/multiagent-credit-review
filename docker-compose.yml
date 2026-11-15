@@ -1,0 +1,87 @@
+name: credit-review
+
+# Only the gateway is reachable from outside (port 8080).
+# The 127.0.0.1 ports are for local development and are not exposed on a server.
+# Passwords fall back to local defaults. On a server, set real ones in a .env file.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-postgres}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-local-auth}
+      BANK_DB_PASSWORD: ${BANK_DB_PASSWORD:-local-bank}
+      CARD_DB_PASSWORD: ${CARD_DB_PASSWORD:-local-card}
+      ORCHESTRATOR_DB_PASSWORD: ${ORCHESTRATOR_DB_PASSWORD:-local-orchestrator}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # TCP check: during first-run init Postgres listens on the socket only.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  auth:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://auth:${AUTH_DB_PASSWORD:-local-auth}@postgres:5432/auth
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8001:8000"
+
+  bank:
+    build:
+      context: .
+      dockerfile: services/bank/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://bank:${BANK_DB_PASSWORD:-local-bank}@postgres:5432/bank
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8002:8000"
+
+  card:
+    build:
+      context: .
+      dockerfile: services/card/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://card:${CARD_DB_PASSWORD:-local-card}@postgres:5432/card
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8003:8000"
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://orchestrator:${ORCHESTRATOR_DB_PASSWORD:-local-orchestrator}@postgres:5432/orchestrator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8004:8000"
+
+  frontend:
+    build: ./frontend
+
+  gateway:
+    build: ./gateway
+    depends_on:
+      - auth
+      - orchestrator
+      - frontend
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:

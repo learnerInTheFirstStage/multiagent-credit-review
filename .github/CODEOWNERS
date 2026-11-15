@@ -1,0 +1,8 @@
+# Who to ask for a review. GitHub does not enforce code owners on a private
+# repository on the Free plan, so this is a list, not a gate.
+# Add the Bank and Card owners' GitHub handles once they have joined the repo.
+
+/services/orchestrator/   @lqc412
+/packages/contracts/      @lqc412
+/data/                    @lqc412
+/docker-compose.yml       @lqc412
