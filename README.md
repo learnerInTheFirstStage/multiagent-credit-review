@@ -45,7 +45,7 @@ To start again with empty databases: `docker compose down -v`.
 
 ### Configuration
 
-Compose falls back to local default passwords, so no `.env` file is needed on your machine. On a server, create a `.env` file next to `docker-compose.yml` and set real values. `.env` is ignored by git.
+Compose falls back to local default passwords, so no `.env` file is needed on your machine. To override them, or on a server, copy `.env.example` to `.env` and set real values. `.env` is ignored by git.
 
 | Variable | Used by | Notes |
 |---|---|---|
