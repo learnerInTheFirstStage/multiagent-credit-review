@@ -2,7 +2,9 @@
 
 Owner: Allen.
 
-Linked accounts, daily balances and transactions, plus the Cash Flow Agent that answers where a customer's money went. It reports facts with evidence and never recommends a limit action.
+Linked accounts, daily balances and transactions, served as read-only analysis tools. No model runs here.
+
+The Cash Flow Agent that calls these tools lives in `services/orchestrator/app/agents/cash_flow`.
 
 Today: `GET /health` only. Next: the tasks under the "Bank Service + Cash Flow Agent" epic (KAN-5).
 

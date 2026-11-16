@@ -2,7 +2,9 @@
 
 Owner: James.
 
-Customers, limits, card spend and repayments, plus the Credit Behavior Agent that answers whether a customer is behaving normally. It also carries out an action after a person approves it.
+Customers, limits, card spend and repayments, served as read-only analysis tools. It also carries out an action after a person approves it. No model runs here.
+
+The Credit Behavior Agent that calls these tools lives in `services/orchestrator/app/agents/credit_behavior`.
 
 Today: `GET /health` only. Next: the tasks under the "Card Service + Credit Behavior Agent" epic (KAN-6).
 
