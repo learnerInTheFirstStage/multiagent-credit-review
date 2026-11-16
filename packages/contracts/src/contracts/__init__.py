@@ -1,12 +1,13 @@
 """Models shared by the services.
 
 One module per contract, re-exported here, so that people adding different
-contracts do not edit the same file. The business contracts (the specialist
-request and response, the analysis tools, the signal, the report) are added
-once agreed. See KAN-13 and KAN-14.
+contracts do not edit the same file. The contracts here are drafts until
+agreed in KAN-13 and KAN-14: the signal, and the specialist request and
+response. Still to come: the analysis tools and the report.
 """
 
 from contracts.health import Health
+from contracts.investigate import Evidence, Finding, InvestigateRequest, InvestigateResponse
 from contracts.signal import Signal
 
-__all__ = ["Health", "Signal"]
+__all__ = ["Evidence", "Finding", "Health", "InvestigateRequest", "InvestigateResponse", "Signal"]

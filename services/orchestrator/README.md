@@ -32,3 +32,4 @@ They run on a throwaway SQLite file with foreign keys enforced, so no stack is n
 - An agent's tools call the read-only analysis endpoints on its service over HTTP. Nothing in an agent folder opens a database connection.
 - A specialist holds no state and reports facts with evidence. It never recommends a limit action.
 - Model and LangFuse settings are read in one place in this service, not in each agent folder.
+- Until the real agents can be called, `app/agents/mock.py` stands in for both. `mock.cash_flow` and `mock.credit_behavior` take the same request and return the same response as the real `investigate` functions, with canned answers for c_002 and c_010.
