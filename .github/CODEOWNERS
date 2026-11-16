@@ -1,8 +1,15 @@
 # Who to ask for a review. GitHub does not enforce code owners on a private
 # repository on the Free plan, so this is a list, not a gate.
-# Add the Bank and Card owners' GitHub handles once they have joined the repo.
 
 /services/orchestrator/   @lqc412
+/services/bank/           @learnerInTheFirstStage
+/services/card/           @James-Z-Zhang00
 /packages/contracts/      @lqc412
 /data/                    @lqc412
 /docker-compose.yml       @lqc412
+
+# The specialist agents run inside the Orchestrator Service but belong to the
+# Bank and Card owners. These lines come last so they win over the
+# /services/orchestrator/ line.
+/services/orchestrator/app/agents/cash_flow/        @learnerInTheFirstStage
+/services/orchestrator/app/agents/credit_behavior/  @James-Z-Zhang00

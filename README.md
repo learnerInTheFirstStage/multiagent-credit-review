@@ -15,9 +15,9 @@ flowchart LR
   browser[Browser] --> gateway[API gateway, Nginx]
   gateway --> frontend[Frontend]
   gateway --> auth[Auth Service]
-  gateway --> orch[Orchestrator Service and agent]
-  orch -->|POST /investigate| bank[Bank Service and Cash Flow Agent]
-  orch -->|POST /investigate| card[Card Service and Credit Behavior Agent]
+  gateway --> orch[Orchestrator Service with all three agents]
+  orch -->|read-only analysis tools| bank[Bank Service]
+  orch -->|analysis tools and approved actions| card[Card Service]
   auth --> authdb[(auth)]
   orch --> orchdb[(orchestrator)]
   bank --> bankdb[(bank)]
@@ -25,6 +25,8 @@ flowchart LR
 ```
 
 Four FastAPI services, each with its own Postgres database and login role. The gateway exposes only the frontend, Auth and the Orchestrator. The Bank and Card services are called by the Orchestrator only.
+
+All three agents run in the Orchestrator Service: the main agent and the two specialists (Cash Flow, Credit Behavior), which it calls as tools in-process. Bank and Card run no model. They own the data and serve read-only analysis tools over HTTP.
 
 ## Run it
 
@@ -54,15 +56,17 @@ Compose falls back to local default passwords, so no `.env` file is needed on yo
 
 Database passwords are applied when the Postgres volume is first created. After changing one, run `docker compose down -v` and start again.
 
-Names reserved for later, so every service uses the same ones: `JWT_SECRET`, `AS_OF_DATE`, `LLM_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`.
+Names reserved for later, so every service uses the same ones: `JWT_SECRET`, `AS_OF_DATE`, `LLM_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`. The last four are used by the Orchestrator only.
 
 ## Layout
 
 | Path | What | Owner |
 |---|---|---|
-| `services/bank` | Bank Service and Cash Flow Agent | Allen |
-| `services/card` | Card Service and Credit Behavior Agent | James |
-| `services/orchestrator` | Orchestrator Service and agent | Vincent |
+| `services/bank` | Bank Service: bank data and read-only analysis tools | Allen |
+| `services/card` | Card Service: card data, read-only analysis tools, approved actions | James |
+| `services/orchestrator` | Orchestrator Service: the graph, cases and approvals | Vincent |
+| `services/orchestrator/app/agents/cash_flow` | Cash Flow Agent | Allen |
+| `services/orchestrator/app/agents/credit_behavior` | Credit Behavior Agent | James |
 | `services/auth` | login, JWT, roles | to be assigned |
 | `gateway` | Nginx API gateway | to be assigned |
 | `frontend` | review app (React) | to be assigned |
@@ -73,9 +77,10 @@ Names reserved for later, so every service uses the same ones: `JWT_SECRET`, `AS
 
 ## Working agreements
 
-- One branch per Jira ticket, named after it: `KAN-21-bank-investigate`. Open a pull request into `main` and put the ticket key in the title.
+- One branch per Jira ticket, named after it: `KAN-20-cash-flow-tools`. Open a pull request into `main` and put the ticket key in the title.
 - Another member reviews before merge. GitHub does not enforce this on our plan, so it is on us.
 - Services never import each other's code and never read each other's database. They talk over HTTP. Shared types live in `packages/contracts`.
+- Inside the Orchestrator, each agent folder exposes one entry function. The graph calls that function and nothing else in the folder. An agent reaches data only through the analysis tools, never through a database connection.
 - A change to `packages/contracts` or `data` needs all three owners.
 - No secrets and no real customer data in git.
 - `main` always starts with `docker compose up --build`.
