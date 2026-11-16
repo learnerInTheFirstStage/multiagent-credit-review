@@ -6,10 +6,33 @@ Turns a signal into a reviewed recommendation with evidence and carries the case
 
 Today: `GET /health`, and `POST /signals`. A signal opens a case, or joins the case the customer already has open, and a repeated signal is ignored (no token check yet, that comes with KAN-35). Next: the tasks under the "Orchestrator Agent" epic (KAN-7).
 
+The case graph in `app/graph` runs in the tests only. Nothing starts it from `POST /signals` yet.
+
 Tables are created at startup. There are no migrations: all data is generated, so after a schema change run `docker compose down -v` and start again.
 
 Database: `orchestrator`. Local port: 8004. Behind the gateway: `/api/orchestrator/...`.
 Inside the compose network the Bank and Card services are at `http://bank:8000` and `http://card:8000`.
+
+## The graph
+
+`app/graph` is one LangGraph graph, one thread per case. Code fixes the order of the steps.
+
+| Step | Decided by | What it does |
+|---|---|---|
+| 1. Open the case | code | Loads the signal, sets the 7-day window |
+| 2. Investigate | model | Asks one specialist one question, or says it has enough. At most 6 questions |
+| Ask a specialist | code | Runs the specialist, checks its answer against the contract, stores it |
+| 3. Look for gaps | model | Says what is still unexplained. May send the case back to step 2 twice |
+| 4. Fetch the guidelines | code | All of them for now |
+| 5. Draft the report | model | Structured output |
+| 6. Check the report | code | Cited evidence was returned, each review reason is addressed, a cited guideline allows the recommendation, a reduction lowers the limit. One redraft, then `needs_human` |
+| 7. Analyst approval | person | The graph pauses. An answer that is not a decision pauses it again |
+| 8. Manager approval | person | Only for a card pause or a cut over half the limit |
+| 9. Act on the decision | code | Sends an approved reduction or pause to Card |
+
+`build_graph` takes the model, the two specialists, the guideline loader, the function that calls Card, and a checkpointer. The tests pass a scripted model and the stand-in specialists. Step 9 is separate from the approvals because a resumed step runs again from its first line.
+
+A case is started once on its thread and resumed with a decision `{"decision": "approve" or "reject", "by": who}`. If the call to Card fails, the case stays approved and open, and running the thread again sends the action again.
 
 ## Tests
 
