@@ -4,7 +4,7 @@ Owner: Vincent.
 
 Turns a signal into a reviewed recommendation with evidence and carries the case through approval. All three agents run here: the main agent in the graph, and the two specialists under `app/agents/`, which the graph calls as tools in-process.
 
-Today: `GET /health`, and `POST /signals`, which opens a case for a new signal and ignores a repeated one (no token check yet, that comes with KAN-35). Next: the tasks under the "Orchestrator Agent" epic (KAN-7).
+Today: `GET /health`, and `POST /signals`. A signal opens a case, or joins the case the customer already has open, and a repeated signal is ignored (no token check yet, that comes with KAN-35). Next: the tasks under the "Orchestrator Agent" epic (KAN-7).
 
 Tables are created at startup. There are no migrations: all data is generated, so after a schema change run `docker compose down -v` and start again.
 
