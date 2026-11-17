@@ -21,10 +21,12 @@ nothing between calls.
 |            |       | block, deterministic ordering                            |
 
 The model and the Bank tools travel in the run's Runtime context — never
-serialised into state — so the graph can be compiled with
-checkpointer=False and run inside the case graph without inheriting its
-Postgres checkpointer. In LangFuse the case trace shows cash_flow and its
-step names inside it.
+serialised into state. The graph is compiled with checkpointer=False as a
+defence against future subgraph composition; today cash_flow() calls
+_GRAPH.invoke() as a plain nested call rather than a subgraph node, so the
+flag is belt-and-braces. Trace integration with LangFuse goes through
+LangChain callbacks and is expected to attach automatically; verified in
+KAN-36 against a live model.
 """
 
 from __future__ import annotations
@@ -132,10 +134,7 @@ def _investigate(
     except Exception as error:  # noqa: BLE001
         log.warning("model invoke raised: %s", error)
         return Command(
-            update={
-                "messages": [],  # nothing to add, but keeps the key present
-                "unknown": [f"The model call failed: {error}"],
-            },
+            update={"unknown": [f"The model call failed: {error}"]},
             goto="check",
         )
 
@@ -184,12 +183,22 @@ def _tools(state: AgentState, runtime: Runtime[AgentContext]) -> Command[Any]:
                 try:
                     raw = tool.invoke(args)
                     # Pool keeps Bank's raw result; model sees sanitised copy.
-                    # The Orchestrator's downstream (facts.shown with
-                    # untrusted=True) applies its own text sanitation, so
-                    # raw memo text never flows unescorted into a model.
+                    # Downstream (Orchestrator's facts.shown with untrusted=True)
+                    # applies its own text sanitation, so raw memo text never
+                    # flows unescorted into a model.
+                    #
+                    # Validate each evidence item before stashing it — matches
+                    # the old EvidencePool.add semantics exactly: a malformed
+                    # first record is skipped, so a later valid record with the
+                    # same id can still win.
                     for item in (raw.get("evidence") or []) if isinstance(raw, dict) else []:
-                        if isinstance(item, dict) and item.get("id"):
-                            new_records.setdefault(item["id"], item)
+                        if not (isinstance(item, dict) and item.get("id")):
+                            continue
+                        try:
+                            validated = Evidence.model_validate(item)
+                        except Exception:  # noqa: BLE001
+                            continue
+                        new_records.setdefault(validated.id, validated.model_dump())
                     observation = guardrails.sanitize_tool_result(raw)
                 except Exception as error:  # noqa: BLE001
                     log.warning("tool %s raised: %s", name, error)
@@ -244,7 +253,7 @@ def _summarise(
     )
 
 
-def _check(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, Any]:
+def _check(state: AgentState) -> dict[str, Any]:
     """Code step: run guardrails over the model's findings and the pool."""
     pool = guardrails.EvidencePool()
     for eid, data in state.get("records", {}).items():
@@ -283,8 +292,9 @@ def _build_graph():
     builder.add_node("check", _check)
     builder.add_edge(START, "investigate")
     builder.add_edge("check", END)
-    # Compile without a checkpointer: run inside the case graph, this does
-    # not inherit the case graph's Postgres checkpointer, and it saves nothing.
+    # checkpointer=False is a defence against future subgraph composition.
+    # With the current plain .invoke() nested call, no parent checkpointer
+    # would have been inherited anyway.
     return builder.compile(checkpointer=False)
 
 
