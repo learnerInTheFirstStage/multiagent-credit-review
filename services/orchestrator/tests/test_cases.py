@@ -11,9 +11,9 @@ from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from app import card, runner, runtime
+from app import card_client, runner, runtime
 from app.agents import mock
-from app.card import CardError
+from app.card_client import CardError
 from app.db import Base, SessionLocal, engine
 from app.db.models import Case
 from app.graph import build_graph
@@ -433,7 +433,7 @@ def card_answers(monkeypatch, answer):
             raise answer
         return httpx.Response(*answer[:1], **answer[1], request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(card.httpx, "post", post)
+    monkeypatch.setattr(card_client.httpx, "post", post)
     return sent
 
 
@@ -444,7 +444,7 @@ def test_the_card_call_carries_the_action_and_the_token(monkeypatch):
     monkeypatch.setenv("CARD_URL", "http://card.test")
     sent = card_answers(monkeypatch, (200, {"json": {"applied": True}}))
 
-    assert card.carry_out(ACTION, "the-token") == {"applied": True}
+    assert card_client.carry_out(ACTION, "the-token") == {"applied": True}
     assert sent[0]["url"] == "http://card.test/customers/c_010/actions"
     assert sent[0]["json"] == ACTION
     assert sent[0]["headers"] == {"Authorization": "Bearer the-token"}
@@ -464,7 +464,7 @@ def test_any_answer_but_a_clear_yes_from_card_is_a_card_error(monkeypatch, answe
     card_answers(monkeypatch, answer)
 
     with pytest.raises(CardError):
-        card.carry_out(ACTION, "the-token")
+        card_client.carry_out(ACTION, "the-token")
 
 
 @pytest.mark.parametrize("token", [None, ""])
@@ -472,7 +472,7 @@ def test_no_action_goes_to_card_without_an_approver_token(monkeypatch, token):
     sent = card_answers(monkeypatch, (200, {"json": {"applied": True}}))
 
     with pytest.raises(CardError):
-        card.carry_out(ACTION, token)
+        card_client.carry_out(ACTION, token)
     assert sent == []
 
 

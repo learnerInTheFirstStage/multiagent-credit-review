@@ -1,4 +1,7 @@
-"""The one call from the Orchestrator that changes anything: an approved action, sent to Card."""
+"""The Orchestrator's side of its one call that changes anything: an approved action, sent to the Card Service.
+
+The Card Service itself is services/card. This file only makes the HTTP request.
+"""
 
 import os
 

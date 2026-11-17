@@ -11,7 +11,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from app import card
+from app import card_client
 from app.agents import mock
 from app.db import engine
 from app.graph import build_graph
@@ -34,7 +34,7 @@ def case_graph() -> Iterator:
             specialists={"cash_flow": mock.cash_flow, "credit_behavior": mock.credit_behavior},
             # No guidelines yet (KAN-33). Without one a report can only recommend needs_human.
             load_guidelines=lambda: [],
-            carry_out=card.carry_out,
+            carry_out=card_client.carry_out,
             checkpointer=checkpointer,
         )
 

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import runner
 from app.auth import User, current_user
-from app.card import CardError
+from app.card_client import CardError
 from app.db import get_session
 from app.db.models import Case, CaseStatus
 
