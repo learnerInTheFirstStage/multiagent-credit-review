@@ -1,8 +1,8 @@
-# Credit Behavior Agent
+# Card Service agent (Credit Behavior)
 
 Owner: James. KAN-26.
 
-`credit_behavior(request: InvestigateRequest) -> InvestigateResponse`, the same signature as `mock.credit_behavior`, so the graph can swap one for the other (KAN-36). It answers one question about one customer's card: how the card is used and how it is repaid. It keeps nothing between calls and never recommends a limit action. All data and business logic stay on the Card Service; this folder reaches them only through Card's analysis tools (`services/card/README.md`), with a 3-minute service token that names the one customer.
+`card_service(request: InvestigateRequest) -> InvestigateResponse`, the same signature as `mock.credit_behavior`, so the graph can swap one for the other (KAN-36). The folder and function are named for the service it reads; its answers still say `agent: "credit_behavior"`, the shared contract's name for this specialist (`contracts.investigate.AgentName`), so the graph and the guidelines take them as the Credit Behavior side. It answers one question about one customer's card: how the card is used and how it is repaid. It keeps nothing between calls and never recommends a limit action. All data and business logic stay on the Card Service; this folder reaches them only through Card's analysis tools (`services/card/README.md`), with a 3-minute service token that names the one customer.
 
 ## How a call runs
 
@@ -28,6 +28,6 @@ Settings: `CARD_URL` (compose sets `http://card:8000`), `JWT_SECRET`, and the se
 | `findings.py` | findings code writes from records, used for hard facts and when there is no model |
 | `prompts.py` | the system prompt and the first and repair messages |
 
-Tests: `services/orchestrator/tests/test_credit_behavior_agent.py`, against Card responses recorded from the seeded stack (`tests/fixtures/card_tools.json`) and a scripted model. To record them again after a Card change, run the stack and call each tool in that file's keys with a token from `docker compose exec card python -m app.dev_token --sub fixture --customers <id>`.
+Tests: `services/orchestrator/tests/test_card_service_agent.py`, against Card responses recorded from the seeded stack (`tests/fixtures/card_tools.json`) and a scripted model. To record them again after a Card change, run the stack and call each tool in that file's keys with a token from `docker compose exec card python -m app.dev_token --sub fixture --customers <id>`.
 
 Not done yet: the swap in `app/runtime.py` (KAN-36), and a run on a real model.

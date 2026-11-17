@@ -4,7 +4,7 @@ Owner: James.
 
 Customers, limits, card spend and repayments, served as read-only analysis tools. It also carries out an action after a person approves it. No model runs here.
 
-The Credit Behavior Agent that calls these tools lives in `services/orchestrator/app/agents/credit_behavior`.
+The Credit Behavior Agent that calls these tools lives in `services/orchestrator/app/agents/card_service`.
 
 Today: `GET /snapshots`, the analysis tools, `POST /customers/{id}/actions` (all below) and `GET /health`. Every start refuses to run without `JWT_SECRET`, creates five tables and, when the database is empty, seeds the 12 customers from `data/shared_customers.yaml` (`SHARED_CUSTOMERS_YAML` overrides the path). After changing that file, run `docker compose down -v` and `docker compose up --build`, since the file is copied into the image. To seed an empty database by hand: `docker compose exec card python -m app.db.seed`. Tests: `services/card/tests`. Nothing calls Card's data yet: the Orchestrator's stand-in Credit Behavior specialist reads the YAML file directly.
 

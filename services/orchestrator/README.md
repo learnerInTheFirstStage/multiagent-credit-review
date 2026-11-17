@@ -120,7 +120,7 @@ TEST_DATABASE_URL=postgresql+psycopg://user:password@127.0.0.1:5432/dbname pytes
 | Folder | Agent | Owner |
 |---|---|---|
 | `app/agents/cash_flow` | Cash Flow Agent | Allen |
-| `app/agents/credit_behavior` | Credit Behavior Agent | James |
+| `app/agents/card_service` | Credit Behavior Agent (Card Service agent) | James |
 
 - Each folder exposes one entry function, `investigate(request) -> response`, with the shapes from `packages/contracts`. The graph calls only that function.
 - An agent's tools call the read-only analysis endpoints on its service over HTTP. Nothing in an agent folder opens a database connection.

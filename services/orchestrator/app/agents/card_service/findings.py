@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from contracts import Evidence, Finding
 
-from app.agents.credit_behavior.guardrails import TOO_SHORT, EvidencePool
+from app.agents.card_service.guardrails import TOO_SHORT, EvidencePool
 
 
 def usd(cents: int) -> str:
