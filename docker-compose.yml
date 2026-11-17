@@ -65,6 +65,10 @@ services:
       dockerfile: services/orchestrator/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://orchestrator:${ORCHESTRATOR_DB_PASSWORD:-local-orchestrator}@postgres:5432/orchestrator
+      JWT_SECRET: ${JWT_SECRET:-local-jwt-secret-for-development-only}
+      CARD_URL: http://card:8000
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

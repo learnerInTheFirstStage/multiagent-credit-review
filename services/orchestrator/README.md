@@ -4,9 +4,36 @@ Owner: Vincent.
 
 Turns a signal into a reviewed recommendation with evidence and carries the case through approval. All three agents run here: the main agent in the graph, and the two specialists under `app/agents/`, which the graph calls as tools in-process.
 
-Today: `GET /health`, and `POST /signals`. A signal opens a case, or joins the case the customer already has open, and a repeated signal is ignored (no token check yet, that comes with KAN-35). Next: the tasks under the "Orchestrator Agent" epic (KAN-7).
+| Endpoint | What it does |
+|---|---|
+| `GET /health` | Fails if the database is unreachable |
+| `POST /signals` | Opens a case, or joins the case the customer already has open. A repeated signal is ignored. A new case is investigated after the answer is sent. No token check yet |
+| `GET /cases/{id}` | The case page: status, whose move it is, the checked report, the decisions, the action |
+| `POST /cases/{id}/decision` | `{"decision": "approve" or "reject"}`. Who decides comes from the token |
 
-The case graph in `app/graph` runs in the tests only. Nothing starts it from `POST /signals` yet.
+`GET /cases` (the queue) is not built yet.
+
+## Running cases
+
+The service runs cases only when `LLM_MODEL` is set (`provider:model`, with that provider's package installed). Without it a signal is stored, its case waits as `queued`, and the next start with a model picks it up. A start also picks up a case that a restart stopped part-way, and corrects a status in the table that is older than what the graph saved. Graph state is saved in this service's database by the Postgres checkpointer, so a case waiting for approval survives a restart.
+
+Until the real pieces exist, the running service uses the stand-in specialists and no guidelines (KAN-33), so a report can only recommend `needs_human`.
+
+## Tokens and decisions
+
+`GET /cases/{id}` and the decision endpoint need a bearer token signed with `JWT_SECRET` (HS256), with the claims `sub`, `role`, `customers`, `exp`. The token must list the case's customer.
+
+| Step | Who may decide |
+|---|---|
+| Analyst approval | analyst or manager |
+| Manager approval | a manager who did not approve the analyst step |
+
+An approved reduction or pause goes to `POST {CARD_URL}/customers/{id}/actions` inside the decision request, with the approver's own token and an `approval_id` that stays the same on a retry. The token is never saved.
+
+If Card does not confirm the action, the answer is 502 and the approval is kept. Then two things can happen:
+
+- The person who approved sends the approval again, and the action is retried. Nobody else can retry it.
+- A manager sends a rejection, and the case closes as `failed` with nothing more sent. It is `failed` and not `rejected` because Card may have applied the action and lost its answer, so a person has to check.
 
 Tables are created at startup. There are no migrations: all data is generated, so after a schema change run `docker compose down -v` and start again.
 
@@ -42,7 +69,11 @@ pip install -r requirements-dev.txt ../../packages/contracts
 pytest
 ```
 
-They run on a throwaway SQLite file with foreign keys enforced, so no stack is needed.
+They run on a throwaway SQLite file with foreign keys enforced, so no stack is needed. To run them on Postgres, which adds the tests that only mean something there (the checkpointer, and two requests at the same moment):
+
+```bash
+TEST_DATABASE_URL=postgresql+psycopg://user:password@127.0.0.1:5432/dbname pytest
+```
 
 ## Agents
 

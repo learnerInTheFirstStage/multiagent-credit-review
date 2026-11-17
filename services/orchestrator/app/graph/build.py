@@ -14,12 +14,13 @@ from typing import Literal
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from app.graph import prompts
 from app.graph.report import ReportDraft
-from app.graph.state import CaseState
+from app.graph.state import CaseState, RunContext
 from contracts import InvestigateRequest, InvestigateResponse
 
 log = logging.getLogger(__name__)
@@ -138,14 +139,15 @@ def build_graph(
     model: BaseChatModel,
     specialists: dict[str, Specialist],
     load_guidelines: Callable[[], list[dict]],
-    carry_out: Callable[[dict], dict],
+    carry_out: Callable[[dict, str | None], dict],
     checkpointer=None,
 ):
     """Build the graph.
 
     specialists maps "cash_flow" and "credit_behavior" to their entry functions.
     load_guidelines returns dicts with an "id" and the recommendations each "allows".
-    carry_out sends one approved action to the Card Service and returns its answer.
+    carry_out sends one approved action to the Card Service, with the approver's
+    token from the call's context, and returns Card's answer.
 
     Start a case once per thread, then resume it with Command(resume=...). The
     caller must not invoke a thread with a signal twice: the answers add up.
@@ -325,7 +327,7 @@ def build_graph(
             return Command(goto=END, update={**update, "status": "rejected"})
         return Command(goto="act", update=update)
 
-    def act(state: CaseState) -> dict:
+    def act(state: CaseState, runtime: Runtime[RunContext]) -> dict:
         # Its own step: a resumed approval step runs again from its first line, this one does not.
         recommendation = state["report"]["recommendation"]
         action = None
@@ -334,15 +336,19 @@ def build_graph(
         elif recommendation == "pause_card":
             action = {"type": "pause_card"}
         if action is not None:
+            approval = state["decisions"][-1]
             action |= {
                 "case_id": state["case_id"],
                 "customer_id": state["signal"]["customer_id"],
-                "approved_by": state["decisions"][-1]["by"],
+                "approved_by": approval["by"],
+                # The same if this step runs again, so Card can apply each approval once.
+                "approval_id": f"{state['case_id']}:{approval['step']}",
             }
-            action["result"] = carry_out(action)
+            token = (runtime.context or {}).get("approver_token")
+            action["result"] = carry_out(action, token)
         return {"action": action, "status": "done"}
 
-    graph = StateGraph(CaseState)
+    graph = StateGraph(CaseState, context_schema=RunContext)
     graph.add_node("open_case", open_case)
     graph.add_node("investigate", investigate)
     graph.add_node("ask_specialist", ask_specialist)

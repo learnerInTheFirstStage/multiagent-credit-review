@@ -2,12 +2,13 @@ import logging
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app import runner
 from app.db import get_session
 from app.db.models import OPEN_STATUSES, Case, CaseStatus, SignalRow
 from contracts import Signal
@@ -80,9 +81,16 @@ def _place(session: Session, signal: Signal) -> tuple[Case, Result]:
 
 @router.post("/signals", response_model=SignalAccepted, status_code=status.HTTP_201_CREATED)
 def receive_signal(
-    signal: Signal, response: Response, session: Session = Depends(get_session)
+    signal: Signal,
+    request: Request,
+    response: Response,
+    background: BackgroundTasks,
+    session: Session = Depends(get_session),
 ) -> SignalAccepted:
-    """Open a case for a signal, or attach the signal to the customer's open case."""
+    """Open a case for a signal, or attach the signal to the customer's open case.
+
+    A new case is investigated after the response is sent. The answer says "queued".
+    """
     attempts_left = 3
     while True:
         try:
@@ -104,4 +112,10 @@ def receive_signal(
         result,
         case.case_id,
     )
+    if result == "opened":
+        graph = request.app.state.graph
+        if graph is None:
+            log.warning("case %s stays queued: no model is configured", case.case_id)
+        else:
+            background.add_task(runner.run_case, graph, case.case_id)
     return SignalAccepted(case_id=case.case_id, status=CaseStatus(case.status), result=result)

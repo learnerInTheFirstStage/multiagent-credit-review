@@ -5,6 +5,13 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
 
+class RunContext(TypedDict, total=False):
+    """What one call to the graph brings with it. Unlike the state, it is never saved."""
+
+    # The token of the person whose decision this call carries. Card checks it again.
+    approver_token: str | None
+
+
 class CaseState(TypedDict, total=False):
     """What the graph knows about one case. Saved after every step.
 
