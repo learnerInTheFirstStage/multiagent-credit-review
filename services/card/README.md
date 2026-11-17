@@ -6,11 +6,34 @@ Customers, limits, card spend and repayments, served as read-only analysis tools
 
 The Credit Behavior Agent that calls these tools lives in `services/orchestrator/app/agents/credit_behavior`.
 
-Today: `GET /health` is the only endpoint. Every start creates four tables and, when the database is empty, seeds the 12 customers from `data/shared_customers.yaml` (`SHARED_CUSTOMERS_YAML` overrides the path). After changing that file, run `docker compose down -v` and `docker compose up --build`, since the file is copied into the image. To seed an empty database by hand: `docker compose exec card python -m app.db.seed`. Tests: `services/card/tests`. Nothing calls Card's data yet: the Orchestrator's stand-in Credit Behavior specialist reads the YAML file directly.
+Today: `GET /snapshots` (below) and `GET /health`. Every start refuses to run without `JWT_SECRET`, creates four tables and, when the database is empty, seeds the 12 customers from `data/shared_customers.yaml` (`SHARED_CUSTOMERS_YAML` overrides the path). After changing that file, run `docker compose down -v` and `docker compose up --build`, since the file is copied into the image. To seed an empty database by hand: `docker compose exec card python -m app.db.seed`. Tests: `services/card/tests`. Nothing calls Card's data yet: the Orchestrator's stand-in Credit Behavior specialist reads the YAML file directly.
 
 Next: the tasks under the "Card Service + Credit Behavior Agent" epic (KAN-6). The topics the Credit Behavior Agent must answer are listed in `services/orchestrator/README.md` (Agents). The evidence kinds are `KIND_TOPIC` in `services/orchestrator/app/graph/causes.py`, and `services/orchestrator/app/agents/mock.py` returns every kind and key the checks read.
 
 Database: `card`. Local port: 8003. Not routed by the gateway; only the Orchestrator calls it.
+
+## GET /snapshots
+
+A few raw numbers per customer, with no judgment attached. Every case starts from these: they are the card half of a signal's snapshot (`contracts.signal.CardSnapshot`), plus the limit and the account that pays the card.
+
+```bash
+TOKEN=$(docker compose exec -T card python -m app.dev_token --sub detection-job --scope snapshots:read)
+curl -s -H "Authorization: Bearer $TOKEN" "localhost:8003/snapshots?customer_id=c_010"
+```
+
+```json
+{"as_of": "2026-11-10",
+ "customers": [{"customer_id": "c_010", "credit_limit_cents": 10000000, "balance_cents": 9200000,
+                "used_share_bp": 9200, "card_status": "active", "funding_account_id": "acct_c010_a",
+                "repayments": [{"due": "2026-09-05", "amount_cents": 4500000, "status": "paid"},
+                               {"due": "2026-10-05", "amount_cents": 4500000, "status": "paid"},
+                               {"due": "2026-11-05", "amount_cents": 5000000, "status": "failed"}]}]}
+```
+
+- Query: `customer_id` for one customer (all when left out); `as_of` to read the ledger at the end of an earlier day (default and latest: `AS_OF_DATE`, or the shared file's `signal_date` when it is unset). A later day is a 422, an unknown customer a 404.
+- Token: role `service` with `snapshots:read` in a `scope` claim (a list, or a space-separated string). An agent's token names one customer and no scope, so it cannot read every customer. `python -m app.dev_token` makes one for local use.
+- `balance_cents`: everything authorized and not declined, less every completed repayment, at the end of `as_of`. `used_share_bp` is that over the limit in basis points.
+- `repayments`: the last three due on or before `as_of` whose outcome is known, oldest first. `paid` settled by its due date, `late` settled after it (or is past due and not settled yet), `failed` came back from the bank. The rules are in `app/ledger.py`, which the analysis tools use too.
 
 ## Tables
 

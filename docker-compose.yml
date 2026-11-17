@@ -54,6 +54,7 @@ services:
       dockerfile: services/card/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://card:${CARD_DB_PASSWORD:-local-card}@postgres:5432/card
+      JWT_SECRET: ${JWT_SECRET:-local-jwt-secret-for-development-only}
     depends_on:
       postgres:
         condition: service_healthy
