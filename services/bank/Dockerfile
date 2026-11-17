@@ -9,6 +9,7 @@ COPY services/bank/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt /packages/contracts
 
 COPY services/bank/app ./app
+COPY data/shared_customers.yaml ./data/shared_customers.yaml
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
