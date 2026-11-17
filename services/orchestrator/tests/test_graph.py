@@ -17,6 +17,7 @@ GUIDELINES = [
     {"id": "G-03", "when": "The fall is explained by payroll or tax.", "allows": ["keep_limit"]},
     {"id": "G-07", "when": "A repayment failed.", "allows": ["reduce_limit", "request_documents"]},
     {"id": "G-11", "when": "Cash cannot cover the balance owed.", "allows": ["pause_card", "reduce_limit"]},
+    {"id": "G-12", "when": "The limit is very large.", "allows": ["needs_human"]},
 ]
 CONFIG = {"configurable": {"thread_id": "case_test"}}
 APPROVE = {"decision": "approve", "by": "u_analyst"}
@@ -564,6 +565,11 @@ def test_a_specialist_with_no_usable_answer_does_not_stop_the_case(cash_flow):
             report(evidence=[]),
             "It recommends reduce_limit without citing evidence.",
             id="an action with no evidence",
+        ),
+        pytest.param(
+            report(guideline_ids=["G-12", "G-07"]),
+            "It cites G-12, under which a person decides, so it may only recommend needs_human.",
+            id="an action next to a guideline that leaves the decision to a person",
         ),
         pytest.param(
             call("ReportDraft", likely_cause="aliens"),

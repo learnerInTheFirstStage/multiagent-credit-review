@@ -18,7 +18,11 @@ Every endpoint but `/health` needs a token. Every error has one shape, `{"error"
 
 The service runs cases only when `LLM_MODEL` is set (`provider:model`, with that provider's package installed). Without it a signal is stored, its case waits as `queued`, and the next start with a model picks it up. A start also picks up a case that a restart stopped part-way, and corrects a status in the table that is older than what the graph saved. Graph state is saved in this service's database by the Postgres checkpointer, so a case waiting for approval survives a restart.
 
-Until the real pieces exist, the running service uses the stand-in specialists and no guidelines (KAN-33), so a report can only recommend `needs_human`.
+Until the real specialists exist, the running service uses the stand-ins in `app/agents/mock.py`.
+
+## Guidelines
+
+`app/guidelines.py` holds the 14 credit guidelines, G-01 to G-14, with the text from tab 3 of "3. Scenario table". Each says when it applies and which recommendations it allows. All 14 go into the report prompt. A report that recommends an action has to cite a guideline that allows it, and code checks that.
 
 ## Tracing
 
