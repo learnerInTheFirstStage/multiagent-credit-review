@@ -6,7 +6,7 @@ Customers, limits, card spend and repayments, served as read-only analysis tools
 
 The Credit Behavior Agent that calls these tools lives in `services/orchestrator/app/agents/credit_behavior`.
 
-Today: `GET /snapshots`, the analysis tools (both below) and `GET /health`. Every start refuses to run without `JWT_SECRET`, creates four tables and, when the database is empty, seeds the 12 customers from `data/shared_customers.yaml` (`SHARED_CUSTOMERS_YAML` overrides the path). After changing that file, run `docker compose down -v` and `docker compose up --build`, since the file is copied into the image. To seed an empty database by hand: `docker compose exec card python -m app.db.seed`. Tests: `services/card/tests`. Nothing calls Card's data yet: the Orchestrator's stand-in Credit Behavior specialist reads the YAML file directly.
+Today: `GET /snapshots`, the analysis tools, `POST /customers/{id}/actions` (all below) and `GET /health`. Every start refuses to run without `JWT_SECRET`, creates five tables and, when the database is empty, seeds the 12 customers from `data/shared_customers.yaml` (`SHARED_CUSTOMERS_YAML` overrides the path). After changing that file, run `docker compose down -v` and `docker compose up --build`, since the file is copied into the image. To seed an empty database by hand: `docker compose exec card python -m app.db.seed`. Tests: `services/card/tests`. Nothing calls Card's data yet: the Orchestrator's stand-in Credit Behavior specialist reads the YAML file directly.
 
 Next: the tasks under the "Card Service + Credit Behavior Agent" epic (KAN-6). The topics the Credit Behavior Agent must answer are listed in `services/orchestrator/README.md` (Agents). The evidence kinds are `KIND_TOPIC` in `services/orchestrator/app/graph/causes.py`, and `services/orchestrator/app/agents/mock.py` returns every kind and key the checks read.
 
@@ -54,6 +54,32 @@ Evidence ids keep their content, since the Orchestrator refuses an answer in whi
 
 What the seeded customers give (tested in `tests/test_tools.py`): c_003 utilization `rising`, spend `up`, the Nov 5 repayment `late` by 3 days, two declines at the limit; c_010 `spiking`, the Nov 5 repayment `failed`, R01, `paid_since: no`; c_006 paying account changed from `acct_c006_a` to `acct_external_new_c006` on 2026-09-20; every other customer `steady`, spend not unusual, account unchanged.
 
+## POST /customers/{customer_id}/actions
+
+Carries out an action a person approved. Called by the Orchestrator's code (`services/orchestrator/app/card_client.py`) after the approval step, with the approver's own token; never by an agent. Code: `app/api/actions.py`.
+
+```json
+{"type": "reduce_limit", "limit_cents": 5800000, "case_id": "case_ab12cd34", "customer_id": "c_010",
+ "approved_by": "u_analyst", "approval_id": "case_ab12cd34:analyst"}
+{"type": "pause_card", "case_id": "case_ab12cd34", "customer_id": "c_010",
+ "approved_by": "u_manager", "approval_id": "case_ab12cd34:manager"}
+```
+
+Card checks it all again:
+
+- **The approver's own token.** Role `analyst`, `manager` or `admin` (a service token is a 403), `customers` names this customer, and `sub` is `approved_by`.
+- **An approval id.** Without `approval_id`, or with one that is not `<case_id>:analyst` or `<case_id>:manager`, it is a 422. So is any other field, `limit_cents` that is not below the current limit, or a `limit_cents` on a pause.
+- **The role again**, by the Orchestrator's own rules (`MANAGER_CUT`, `MAY_DECIDE`). A pause, or a cut of more than half the current limit, needs the `:manager` step, which only a manager decides. Any other reduction needs the `:analyst` step (an analyst or a manager); a manager's approval also covers it. An admin decides neither step, as in the Orchestrator.
+- **Each approval once.** The receipt goes into `applied_actions`, keyed by `approval_id`, in the same transaction as the change, with the customer row locked. A retry of the same approval (the Orchestrator sends the same id when it retries) gets the stored receipt back as `already_applied` and changes nothing; the same id with another action is a 409.
+
+A reduction sets `customers.credit_limit_cents` and adds a `credit_limits` row with the `approval_id`, dated the data's as-of day, so `/snapshots` and the tools read the new limit. A pause sets `card_status` to `paused`. The answer, 200 either way:
+
+```json
+{"approval_id": "case_ab12cd34:analyst", "case_id": "case_ab12cd34", "customer_id": "c_010", "type": "reduce_limit",
+ "status": "applied", "approved_by": "u_analyst", "approver_role": "analyst", "applied_at": "2026-11-17T21:42:59Z",
+ "details": {"previous_limit_cents": 10000000, "limit_cents": 5800000, "cut_bp": 4200}}
+```
+
 ## Tables
 
 Money is integer cents. Columns follow what commercial card platforms expose (Ramp's Transaction and Transfer objects, Stripe Issuing, Brex).
@@ -63,6 +89,7 @@ Money is integer cents. Columns follow what commercial card platforms expose (Ra
 | `customers` | a business with a card program | the current limit, `card_status` (`active`, `paused`), `funding_account_id` (the bank account autopay pulls from) and since when, and when the card and payment feeds last reported |
 | `credit_limits` | one limit the customer has had | seeded with the initial limit. `approval_id` is unique, so an approved change (KAN-28) applies once |
 | `card_transactions` | one authorization and its settlement | `PENDING` → `CLEARED`, or `DECLINED` with the issuer's reason (`AUTHORIZER_BUSINESS_LIMIT`, `SUSPECTED_FRAUD`, ...); merchant descriptor and normalised name; ISO 18245 MCC; spend category; merchant amount and currency (a few hotel stays are in euros); card present; recurring |
+| `applied_actions` | one approved action Card carried out | keyed by `approval_id`; the type, the new limit, who approved it and in which role, when, and what changed |
 | `repayments` | one statement and the payment that settles it | statement period and balance, due date, `COMPLETED` / `RETURNED` / `INITIATED` / `SCHEDULED`, NACHA return code on a returned payment, and the account it was pulled from |
 
 Ids: `ctx_c_001_00001` for a transaction (in time order), `rep_c_001_202611` for the repayment due in that month, `crd_c_001_1` for a card. `funding_account_id` uses the Bank Service's linked account ids (`acct_c006_a`), which is what lets the Orchestrator match the two sides.

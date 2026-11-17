@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from app.api.actions import router as actions_router
 from app.api.snapshots import router as snapshots_router
 from app.api.tools import router as tools_router
 from app.db import Base, SessionLocal, engine
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Card Service", lifespan=lifespan)
 app.include_router(snapshots_router)
 app.include_router(tools_router)
+app.include_router(actions_router)
 
 
 @app.get("/health", response_model=Health)
