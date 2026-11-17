@@ -1,6 +1,6 @@
 """Card Service data model.
 
-Four tables:
+Five tables:
   customers          one row per business with a card program: the current limit,
                      the card program's status, the bank account that pays the card,
                      and when each upstream feed last reported.
@@ -8,6 +8,8 @@ Four tables:
                      initial limit; an approved action (KAN-28) adds a row.
   card_transactions  one card authorization and its settlement.
   repayments         one statement and the payment that settles it.
+  applied_actions    one approved action Card carried out (KAN-28), keyed by approval_id,
+                     so each approval is applied once.
 
 Columns follow what commercial card platforms expose (Ramp's Transaction and Transfer
 objects, Stripe Issuing, Brex): signed integer amounts in cents, a lifecycle
@@ -25,6 +27,7 @@ the key the Orchestrator matches across the two sides.
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -46,6 +49,7 @@ TRANSACTION_STATES = ("PENDING", "CLEARED", "DECLINED")
 TRANSACTION_TYPES = ("purchase", "refund")
 REPAYMENT_STATUSES = ("SCHEDULED", "INITIATED", "COMPLETED", "RETURNED")
 PAYMENT_METHODS = ("ach_autopay", "ach_manual")
+ACTION_TYPES = ("reduce_limit", "pause_card")
 
 
 def _enum(values: tuple[str, ...], name: str) -> Enum:
@@ -179,3 +183,24 @@ class Repayment(Base):
             "(status = 'RETURNED') = (ach_return_code IS NOT NULL)", name="return_code_iff_returned"
         ),
     )
+
+
+class AppliedAction(Base):
+    """An approved action, written in the same transaction as the change it made."""
+
+    __tablename__ = "applied_actions"
+
+    # <case_id>:analyst or <case_id>:manager. The primary key is what makes a retry harmless.
+    approval_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    case_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    customer_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("customers.customer_id"), nullable=False, index=True
+    )
+    type: Mapped[str] = mapped_column(_enum(ACTION_TYPES, "action_type"), nullable=False)
+    # The new limit a reduce_limit asked for; None for pause_card.
+    limit_cents: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    approved_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    approver_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # What changed, as the receipt reports it: previous and new limit, or previous and new card status.
+    details: Mapped[dict] = mapped_column(JSON, nullable=False)
