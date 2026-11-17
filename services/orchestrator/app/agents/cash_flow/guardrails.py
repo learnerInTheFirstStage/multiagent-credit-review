@@ -65,6 +65,12 @@ def _sanitize(value: Any) -> Any:
 
 
 def _wrap_if_memo(key: str, value: Any) -> Any:
+    # Scope: only the `memo` key is treated as potentially attacker-controlled.
+    # The other string fields in Bank's responses come from controlled sources:
+    # counterparty names are set by the shared seeder, kind/category are
+    # enums, and Bank error bodies originate from the service itself. If Bank
+    # later surfaces counterparty-authored descriptions or references, extend
+    # this list with their keys.
     if isinstance(value, str) and key == "memo" and value:
         # Neutralise any angle brackets in the memo before wrapping, so a
         # malicious memo cannot close the <memo> tag early and smuggle text

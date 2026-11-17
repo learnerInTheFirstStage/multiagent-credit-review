@@ -90,9 +90,12 @@ def cash_flow(
     could_not_determine: list[str] = []
     suggested_next: str | None = None
     tool_calls_made = 0
-    # Checked between steps. A long single invoke is not pre-empted; callers
-    # upstream (graph) also enforce an overall case timeout.
+    # Soft cap: checked between steps. A long single invoke or a slow Bank
+    # tool call is not pre-empted; the graph upstream also enforces an
+    # overall case timeout as the hard cap.
     deadline = time.monotonic() + MAX_SECONDS
+    # Set inside the for-loop when the model requests a 6th tool call. Read
+    # right after the loop to trigger the summary-only final invoke.
     budget_exhausted = False
 
     try:
@@ -143,7 +146,10 @@ def cash_flow(
                             # Pool keeps Bank's raw result; the model sees a
                             # sanitised copy. Response evidence[].data is
                             # therefore Bank's text, not the <memo>-wrapped
-                            # form, so downstream (report) renders faithfully.
+                            # form. The Orchestrator's downstream report step
+                            # applies its own text sanitation (facts.shown with
+                            # untrusted=True), so raw text never flows into the
+                            # synthesis model unescorted.
                             pool.add(raw)
                             observation = guardrails.sanitize_tool_result(raw)
                         except Exception as error:  # noqa: BLE001 — surface any tool-level problem
@@ -151,10 +157,14 @@ def cash_flow(
                             observation = {"error": "tool_raised", "message": str(error)}
                     tool_calls_made += 1
 
+                # Some providers (older configs, mocked conversions) leave id
+                # unset. Fall back to a generated one so ToolMessage always has
+                # a tool_call_id.
+                tool_call_id = call.get("id") or f"call_fallback_{id(call)}"
                 messages.append(
                     ToolMessage(
                         content=json.dumps(observation),
-                        tool_call_id=call["id"],
+                        tool_call_id=tool_call_id,
                     )
                 )
 
@@ -250,8 +260,9 @@ def _extract_json(text: str) -> str:
     """Pull the first JSON object out of a text blob — the model may wrap it
     in prose or a ```json fence."""
     text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`").removeprefix("json").strip()
+    # Precise fence stripping: handle ```json and ``` without eating stray
+    # backticks elsewhere in the content.
+    text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     start = text.find("{")
     end = text.rfind("}")
     if start >= 0 and end > start:
