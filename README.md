@@ -6,7 +6,8 @@ All customers and data are simulated. This project is not affiliated with Ramp.
 
 ## Status
 
-Skeleton only. Every service starts, connects to its own database and answers `/health`. Nothing else is built yet.
+- **Orchestrator**: takes a review signal at `POST /signals`, investigates the case on a LangGraph graph, pauses for the analyst and, where needed, the manager, and sends an approved action to Card. It runs on stand-in specialists and has not been run with a real model yet. See `services/orchestrator/README.md`.
+- **Auth, Bank, Card, frontend**: skeletons. Each starts, connects to its own database and answers `/health`.
 
 ## Architecture
 
@@ -47,16 +48,18 @@ To start again with empty databases: `docker compose down -v`.
 
 ### Configuration
 
-Compose falls back to local default passwords, so no `.env` file is needed on your machine. To override them, or on a server, copy `.env.example` to `.env` and set real values. `.env` is ignored by git.
+Compose falls back to local defaults for the passwords and the signing secret, so no `.env` file is needed on your machine. To override them, or on a server, copy `.env.example` to `.env` and set real values. `.env` is ignored by git.
 
 | Variable | Used by | Notes |
 |---|---|---|
 | `POSTGRES_PASSWORD` | postgres | superuser password |
 | `AUTH_DB_PASSWORD`, `BANK_DB_PASSWORD`, `CARD_DB_PASSWORD`, `ORCHESTRATOR_DB_PASSWORD` | postgres and the matching service | letters, digits and hyphens only, because they go into a connection URL |
+| `JWT_SECRET` | the Orchestrator today, every service later | signs and checks tokens. One shared secret in the POC, 32 characters or more |
+| `LLM_MODEL`, `LLM_API_KEY` | Orchestrator | the model cases run on, as `provider:model`. Empty by default: signals are stored and their cases wait as `queued` |
 
 Database passwords are applied when the Postgres volume is first created. After changing one, run `docker compose down -v` and start again.
 
-Names reserved for later, so every service uses the same ones: `JWT_SECRET`, `AS_OF_DATE`, `LLM_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`. The last four are used by the Orchestrator only.
+Names reserved for later, so every service uses the same ones: `AS_OF_DATE`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`. The last three are used by the Orchestrator only.
 
 ## Layout
 

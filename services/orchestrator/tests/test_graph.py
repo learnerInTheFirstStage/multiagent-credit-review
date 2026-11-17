@@ -1,4 +1,5 @@
 import copy
+import pickle
 from itertools import count
 
 import pytest
@@ -125,28 +126,36 @@ class Run:
 
     def __init__(self, script, *, specialists=None, signal=SIGNAL):
         self.sent = []
+        self.tokens = []
         self.card_is_down = False
+        self.saver = InMemorySaver()
         self.graph = build_graph(
             model=scripted(script),
             specialists=specialists or {"cash_flow": mock.cash_flow, "credit_behavior": mock.credit_behavior},
             load_guidelines=lambda: GUIDELINES,
             carry_out=self._carry_out,
-            checkpointer=InMemorySaver(),
+            checkpointer=self.saver,
         )
         self.result = self.graph.invoke({"case_id": "case_test", "signal": signal}, CONFIG)
 
-    def _carry_out(self, action: dict) -> dict:
+    def _carry_out(self, action: dict, token: str | None) -> dict:
         if self.card_is_down:
             raise ConnectionError("the Card Service did not answer")
         self.sent.append(dict(action))
+        self.tokens.append(token)
         return {"applied": True}
 
     @property
     def state(self) -> dict:
         return self.graph.get_state(CONFIG).values
 
-    def decide(self, decision: dict) -> dict:
-        self.result = self.graph.invoke(Command(resume=decision), CONFIG)
+    @property
+    def saved(self) -> bytes:
+        """Everything the checkpointer holds, to search for what must not be in it."""
+        return pickle.dumps((dict(self.saver.storage), dict(self.saver.writes), dict(self.saver.blobs)))
+
+    def decide(self, decision: dict, token: str | None = None) -> dict:
+        self.result = self.graph.invoke(Command(resume=decision), CONFIG, context={"approver_token": token})
         return self.result
 
     @property
@@ -223,11 +232,25 @@ def test_an_approved_reduction_is_sent_to_card_once():
             "case_id": "case_test",
             "customer_id": "c_010",
             "approved_by": "u_analyst",
+            "approval_id": "case_test:analyst",
         }
     ]
     assert result["status"] == "done"
     assert result["action"]["result"] == {"applied": True}
     assert run.waiting_at == ()
+
+
+def test_the_approvers_token_reaches_card_and_is_never_saved():
+    run = Run([*INVESTIGATION, report(**PAUSE)])
+
+    run.decide(APPROVE, token="token-of-the-analyst")
+    run.decide(MANAGER_APPROVES, token="token-of-the-manager")
+
+    # Card gets the token of the person whose approval let the action through.
+    assert run.tokens == ["token-of-the-manager"]
+    assert run.sent[0]["approval_id"] == "case_test:manager"
+    assert b"case_test" in run.saved  # the search does find what is saved
+    assert b"token-of-the" not in run.saved
 
 
 def test_a_rejected_report_changes_nothing():
@@ -258,17 +281,18 @@ def test_a_failed_call_to_card_leaves_the_case_approved_and_open():
     run.card_is_down = True
 
     with pytest.raises(ConnectionError):
-        run.decide(APPROVE)
+        run.decide(APPROVE, token="token-of-the-analyst")
 
     assert run.waiting_at == ("act",)
+    assert b"token-of-the" not in run.saved  # not even with the error that was saved
     assert run.state["status"] != "done"
     assert run.state.get("action") is None
 
     run.card_is_down = False
     result = run.graph.invoke(None, CONFIG)
 
-    # The approval is not asked for again, and the action goes out.
-    assert len(run.sent) == 1
+    # The approval is not asked for again, and the action goes out under the same approval id.
+    assert [action["approval_id"] for action in run.sent] == ["case_test:analyst"]
     assert [d["by"] for d in result["decisions"]] == ["u_analyst"]
     assert result["status"] == "done"
 
@@ -571,7 +595,7 @@ def test_a_report_that_fails_the_check_is_redrafted_once(bad_draft, problem):
         model=scripted([*INVESTIGATION, bad_draft, report()], Recording),
         specialists={"cash_flow": mock.cash_flow, "credit_behavior": mock.credit_behavior},
         load_guidelines=lambda: GUIDELINES,
-        carry_out=sent.append,
+        carry_out=lambda action, token: sent.append(action),
         checkpointer=InMemorySaver(),
     )
     result = graph.invoke({"case_id": "case_test", "signal": SIGNAL}, CONFIG)
