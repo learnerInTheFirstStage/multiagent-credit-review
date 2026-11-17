@@ -146,3 +146,26 @@ def test_a_customer_with_no_canned_answer_gets_an_honest_no():
 
     assert answer.findings == []
     assert answer.could_not_determine
+
+
+# Agreed on PR 4: each service owns its id prefixes, so two services never make the same id.
+# An aggregate is agg_ plus a short id worked out from the tool's inputs.
+ID_PREFIXES = {
+    "cash_flow": ("txn_", "acct_", "bal_", "agg_"),
+    "credit_behavior": ("rep_", "bal_card_", "agg_"),
+}
+
+
+def test_the_stand_ins_use_the_id_prefixes_of_their_own_service():
+    ids = {
+        (agent, evidence.id)
+        for (agent, _customer), answers in mock._CANNED.items()
+        for _keywords, response in answers
+        for evidence in response.evidence
+    }
+
+    assert len(ids) >= 10  # the stand-ins do carry evidence
+    for agent, evidence_id in ids:
+        assert evidence_id.startswith(ID_PREFIXES[agent]), f"{agent} made {evidence_id}"
+        # bal_card_ also starts with bal_, so the Bank side needs this said separately.
+        assert agent == "credit_behavior" or not evidence_id.startswith("bal_card_"), f"{agent} made {evidence_id}"

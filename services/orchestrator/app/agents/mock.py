@@ -19,12 +19,12 @@ _CANNED: dict[tuple[str, str], list[tuple[tuple[str, ...], InvestigateResponse]]
                     Finding(
                         claim="Weekly inflows in this window are in line with the 12 weeks before it.",
                         confidence="high",
-                        evidence_ids=["series_c002_inflows"],
+                        evidence_ids=["agg_c002_inflows"],
                     )
                 ],
                 evidence=[
                     Evidence(
-                        id="series_c002_inflows",
+                        id="agg_c002_inflows",
                         kind="weekly_inflow_series",
                         data={"weeks": 13, "trend": "flat"},
                     )
@@ -89,7 +89,7 @@ _CANNED: dict[tuple[str, str], list[tuple[tuple[str, ...], InvestigateResponse]]
                     Finding(
                         claim="The card balance is 28% of the limit.",
                         confidence="high",
-                        evidence_ids=["bal_c002"],
+                        evidence_ids=["bal_card_c002"],
                     ),
                 ],
                 evidence=[
@@ -97,7 +97,7 @@ _CANNED: dict[tuple[str, str], list[tuple[tuple[str, ...], InvestigateResponse]]
                     Evidence(id="rep_2102", kind="card_repayment", data={"due": "2026-10-15", "status": "paid"}),
                     Evidence(id="rep_2103", kind="card_repayment", data={"due": "2026-11-05", "status": "paid"}),
                     Evidence(
-                        id="bal_c002",
+                        id="bal_card_c002",
                         kind="card_balance",
                         data={"balance_cents": 6160000, "limit_cents": 22000000},
                     ),
@@ -170,7 +170,7 @@ _CANNED: dict[tuple[str, str], list[tuple[tuple[str, ...], InvestigateResponse]]
                     Finding(
                         claim="The card balance is 92% of the limit.",
                         confidence="high",
-                        evidence_ids=["bal_c010"],
+                        evidence_ids=["bal_card_c010"],
                     ),
                 ],
                 evidence=[
@@ -180,7 +180,7 @@ _CANNED: dict[tuple[str, str], list[tuple[tuple[str, ...], InvestigateResponse]]
                         data={"due": "2026-11-05", "amount_cents": 5000000, "status": "failed"},
                     ),
                     Evidence(
-                        id="bal_c010",
+                        id="bal_card_c010",
                         kind="card_balance",
                         data={"balance_cents": 9200000, "limit_cents": 10000000},
                     ),
