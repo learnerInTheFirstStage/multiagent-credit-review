@@ -1,0 +1,1851 @@
+{
+ "c_001/paying_account": {
+  "data": {
+   "accounts": [
+    {
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c001_a",
+     "repayment_id": "rep_c_001_202609"
+    },
+    {
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c001_a",
+     "repayment_id": "rep_c_001_202610"
+    },
+    {
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c001_a",
+     "repayment_id": "rep_c_001_202611"
+    }
+   ],
+   "change_id": "agg_94a59718",
+   "changed": false,
+   "from": "acct_c001_a",
+   "repayment_ids": [
+    "rep_c_001_202609",
+    "rep_c_001_202610",
+    "rep_c_001_202611"
+   ],
+   "repayments_compared": 3,
+   "to": "acct_c001_a"
+  },
+  "evidence": [
+   {
+    "data": {
+     "changed": false,
+     "from": "acct_c001_a",
+     "repayment_ids": [
+      "rep_c_001_202609",
+      "rep_c_001_202610",
+      "rep_c_001_202611"
+     ],
+     "repayments_compared": 3,
+     "to": "acct_c001_a"
+    },
+    "id": "agg_94a59718",
+    "kind": "funding_account_change"
+   },
+   {
+    "data": {
+     "amount_cents": 4852661,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c001_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    "id": "rep_c_001_202609",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 5005590,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c001_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    "id": "rep_c_001_202610",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 5138147,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c001_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "paid"
+    },
+    "id": "rep_c_001_202611",
+    "kind": "card_repayment"
+   }
+  ]
+ },
+ "c_001/repayments": {
+  "data": {
+   "counts": {
+    "failed": 0,
+    "first_due": "2026-09-05",
+    "last_due": "2026-11-05",
+    "late": 0,
+    "n": 3,
+    "paid": 3
+   },
+   "repayments": [
+    {
+     "amount_cents": 4852661,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c001_a",
+     "id": "rep_c_001_202609",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    {
+     "amount_cents": 5005590,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c001_a",
+     "id": "rep_c_001_202610",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    {
+     "amount_cents": 5138147,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c001_a",
+     "id": "rep_c_001_202611",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "paid"
+    }
+   ],
+   "summary_id": "agg_82717c28"
+  },
+  "evidence": [
+   {
+    "data": {
+     "amount_cents": 4852661,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c001_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    "id": "rep_c_001_202609",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 5005590,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c001_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    "id": "rep_c_001_202610",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 5138147,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c001_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "paid"
+    },
+    "id": "rep_c_001_202611",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "failed": 0,
+     "first_due": "2026-09-05",
+     "last_due": "2026-11-05",
+     "late": 0,
+     "n": 3,
+     "paid": 3
+    },
+    "id": "agg_82717c28",
+    "kind": "repayment_summary"
+   }
+  ]
+ },
+ "c_001/spend_by_cycle": {
+  "data": {
+   "change_vs_usual_bp": 1738,
+   "current_cycle": {
+    "complete": true,
+    "end": "2026-11-10",
+    "projected_cents": 5950000,
+    "spend_cents": 5950000,
+    "start": "2026-10-11"
+   },
+   "cycles": [
+    {
+     "end": "2026-05-10",
+     "spend_cents": 5045579,
+     "start": "2026-04-11"
+    },
+    {
+     "end": "2026-06-10",
+     "spend_cents": 5119992,
+     "start": "2026-05-11"
+    },
+    {
+     "end": "2026-07-10",
+     "spend_cents": 5092692,
+     "start": "2026-06-11"
+    },
+    {
+     "end": "2026-08-10",
+     "spend_cents": 4852661,
+     "start": "2026-07-11"
+    },
+    {
+     "end": "2026-09-10",
+     "spend_cents": 5005590,
+     "start": "2026-08-11"
+    },
+    {
+     "end": "2026-10-10",
+     "spend_cents": 5138147,
+     "start": "2026-09-11"
+    }
+   ],
+   "history": "enough",
+   "monthly_card_spend_cents": 5069136,
+   "series_id": "agg_adf9a731",
+   "unusual": "no"
+  },
+  "evidence": [
+   {
+    "data": {
+     "change_vs_usual_bp": 1738,
+     "current_cycle": {
+      "complete": true,
+      "end": "2026-11-10",
+      "projected_cents": 5950000,
+      "spend_cents": 5950000,
+      "start": "2026-10-11"
+     },
+     "cycles": [
+      {
+       "end": "2026-05-10",
+       "spend_cents": 5045579,
+       "start": "2026-04-11"
+      },
+      {
+       "end": "2026-06-10",
+       "spend_cents": 5119992,
+       "start": "2026-05-11"
+      },
+      {
+       "end": "2026-07-10",
+       "spend_cents": 5092692,
+       "start": "2026-06-11"
+      },
+      {
+       "end": "2026-08-10",
+       "spend_cents": 4852661,
+       "start": "2026-07-11"
+      },
+      {
+       "end": "2026-09-10",
+       "spend_cents": 5005590,
+       "start": "2026-08-11"
+      },
+      {
+       "end": "2026-10-10",
+       "spend_cents": 5138147,
+       "start": "2026-09-11"
+      }
+     ],
+     "history": "enough",
+     "monthly_card_spend_cents": 5069136,
+     "unusual": "no"
+    },
+    "id": "agg_adf9a731",
+    "kind": "card_spend_series"
+   }
+  ]
+ },
+ "c_001/utilization": {
+  "data": {
+   "balance_cents": 5950000,
+   "balance_id": "bal_card_c_001_20261110",
+   "compared_with": [
+    "2026-10-10",
+    "2026-09-10",
+    "2026-08-10"
+   ],
+   "credit_limit_cents": 17000000,
+   "date": "2026-11-10",
+   "earlier": [
+    {
+     "date": "2026-10-10",
+     "id": "bal_card_c_001_20261010",
+     "used_share_bp": 3022
+    },
+    {
+     "date": "2026-09-10",
+     "id": "bal_card_c_001_20260910",
+     "used_share_bp": 2944
+    },
+    {
+     "date": "2026-08-10",
+     "id": "bal_card_c_001_20260810",
+     "used_share_bp": 2855
+    }
+   ],
+   "used_share_bp": 3500,
+   "usual_share_bp": 2940,
+   "utilization_trend": "steady"
+  },
+  "evidence": [
+   {
+    "data": {
+     "balance_cents": 5950000,
+     "compared_with": [
+      "2026-10-10",
+      "2026-09-10",
+      "2026-08-10"
+     ],
+     "credit_limit_cents": 17000000,
+     "date": "2026-11-10",
+     "used_share_bp": 3500,
+     "usual_share_bp": 2940,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_001_20261110",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 5138147,
+     "compared_with": [
+      "2026-09-10",
+      "2026-08-10",
+      "2026-07-10"
+     ],
+     "credit_limit_cents": 17000000,
+     "date": "2026-10-10",
+     "used_share_bp": 3022,
+     "usual_share_bp": 2932,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_001_20261010",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 5005590,
+     "compared_with": [
+      "2026-08-10",
+      "2026-07-10",
+      "2026-06-10"
+     ],
+     "credit_limit_cents": 17000000,
+     "date": "2026-09-10",
+     "used_share_bp": 2944,
+     "usual_share_bp": 2954,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_001_20260910",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 4852661,
+     "compared_with": [
+      "2026-07-10",
+      "2026-06-10",
+      "2026-05-10"
+     ],
+     "credit_limit_cents": 17000000,
+     "date": "2026-08-10",
+     "used_share_bp": 2855,
+     "usual_share_bp": 2992,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_001_20260810",
+    "kind": "card_balance"
+   }
+  ]
+ },
+ "c_003/paying_account": {
+  "data": {
+   "accounts": [
+    {
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c003_a",
+     "repayment_id": "rep_c_003_202609"
+    },
+    {
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c003_a",
+     "repayment_id": "rep_c_003_202610"
+    },
+    {
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c003_a",
+     "repayment_id": "rep_c_003_202611"
+    }
+   ],
+   "change_id": "agg_b9a36cfe",
+   "changed": false,
+   "from": "acct_c003_a",
+   "repayment_ids": [
+    "rep_c_003_202609",
+    "rep_c_003_202610",
+    "rep_c_003_202611"
+   ],
+   "repayments_compared": 3,
+   "to": "acct_c003_a"
+  },
+  "evidence": [
+   {
+    "data": {
+     "changed": false,
+     "from": "acct_c003_a",
+     "repayment_ids": [
+      "rep_c_003_202609",
+      "rep_c_003_202610",
+      "rep_c_003_202611"
+     ],
+     "repayments_compared": 3,
+     "to": "acct_c003_a"
+    },
+    "id": "agg_b9a36cfe",
+    "kind": "funding_account_change"
+   },
+   {
+    "data": {
+     "amount_cents": 5625000,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c003_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    "id": "rep_c_003_202609",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 5625000,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c003_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    "id": "rep_c_003_202610",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 4000000,
+     "days_late": 3,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c003_a",
+     "payment_method": "ach_manual",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "late"
+    },
+    "id": "rep_c_003_202611",
+    "kind": "card_repayment"
+   }
+  ]
+ },
+ "c_003/repayments": {
+  "data": {
+   "counts": {
+    "failed": 0,
+    "first_due": "2026-09-05",
+    "last_due": "2026-11-05",
+    "late": 1,
+    "n": 3,
+    "paid": 2
+   },
+   "repayments": [
+    {
+     "amount_cents": 5625000,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c003_a",
+     "id": "rep_c_003_202609",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    {
+     "amount_cents": 5625000,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c003_a",
+     "id": "rep_c_003_202610",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    {
+     "amount_cents": 4000000,
+     "days_late": 3,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c003_a",
+     "id": "rep_c_003_202611",
+     "payment_method": "ach_manual",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "late"
+    }
+   ],
+   "summary_id": "agg_19ef4bcd"
+  },
+  "evidence": [
+   {
+    "data": {
+     "amount_cents": 5625000,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c003_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    "id": "rep_c_003_202609",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 5625000,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c003_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    "id": "rep_c_003_202610",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 4000000,
+     "days_late": 3,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c003_a",
+     "payment_method": "ach_manual",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "late"
+    },
+    "id": "rep_c_003_202611",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "failed": 0,
+     "first_due": "2026-09-05",
+     "last_due": "2026-11-05",
+     "late": 1,
+     "n": 3,
+     "paid": 2
+    },
+    "id": "agg_19ef4bcd",
+    "kind": "repayment_summary"
+   }
+  ]
+ },
+ "c_003/spend_breakdown": {
+  "data": {
+   "breakdown_id": "agg_9ed50184",
+   "by": "category",
+   "change_bp": 14899,
+   "end": "2026-11-10",
+   "groups": [
+    {
+     "category": "Fuel",
+     "new": false,
+     "prior_cents": 2611167,
+     "share_bp": 6231,
+     "window_cents": 6620581
+    },
+    {
+     "category": "Vehicle maintenance",
+     "new": false,
+     "prior_cents": 1342016,
+     "share_bp": 3423,
+     "window_cents": 3636503
+    },
+    {
+     "category": "Software & cloud",
+     "new": false,
+     "prior_cents": 250000,
+     "share_bp": 235,
+     "window_cents": 250000
+    },
+    {
+     "category": "Office supplies",
+     "new": false,
+     "prior_cents": 64028,
+     "share_bp": 111,
+     "window_cents": 117916
+    }
+   ],
+   "prior_end": "2026-10-10",
+   "prior_start": "2026-09-10",
+   "prior_total_cents": 4267211,
+   "start": "2026-10-11",
+   "window_total_cents": 10625000
+  },
+  "evidence": [
+   {
+    "data": {
+     "by": "category",
+     "change_bp": 14899,
+     "end": "2026-11-10",
+     "groups": [
+      {
+       "category": "Fuel",
+       "new": false,
+       "prior_cents": 2611167,
+       "share_bp": 6231,
+       "window_cents": 6620581
+      },
+      {
+       "category": "Vehicle maintenance",
+       "new": false,
+       "prior_cents": 1342016,
+       "share_bp": 3423,
+       "window_cents": 3636503
+      },
+      {
+       "category": "Software & cloud",
+       "new": false,
+       "prior_cents": 250000,
+       "share_bp": 235,
+       "window_cents": 250000
+      },
+      {
+       "category": "Office supplies",
+       "new": false,
+       "prior_cents": 64028,
+       "share_bp": 111,
+       "window_cents": 117916
+      }
+     ],
+     "prior_end": "2026-10-10",
+     "prior_start": "2026-09-10",
+     "prior_total_cents": 4267211,
+     "start": "2026-10-11",
+     "window_total_cents": 10625000
+    },
+    "id": "agg_9ed50184",
+    "kind": "card_spend_breakdown"
+   }
+  ]
+ },
+ "c_003/spend_by_cycle": {
+  "data": {
+   "change_vs_usual_bp": 8889,
+   "current_cycle": {
+    "complete": true,
+    "end": "2026-11-10",
+    "projected_cents": 10625000,
+    "spend_cents": 10625000,
+    "start": "2026-10-11"
+   },
+   "cycles": [
+    {
+     "end": "2026-05-10",
+     "spend_cents": 5625000,
+     "start": "2026-04-11"
+    },
+    {
+     "end": "2026-06-10",
+     "spend_cents": 5625000,
+     "start": "2026-05-11"
+    },
+    {
+     "end": "2026-07-10",
+     "spend_cents": 5625000,
+     "start": "2026-06-11"
+    },
+    {
+     "end": "2026-08-10",
+     "spend_cents": 5625000,
+     "start": "2026-07-11"
+    },
+    {
+     "end": "2026-09-10",
+     "spend_cents": 5625000,
+     "start": "2026-08-11"
+    },
+    {
+     "end": "2026-10-10",
+     "spend_cents": 4000000,
+     "start": "2026-09-11"
+    }
+   ],
+   "history": "enough",
+   "monthly_card_spend_cents": 5625000,
+   "series_id": "agg_af9486b9",
+   "unusual": "up"
+  },
+  "evidence": [
+   {
+    "data": {
+     "change_vs_usual_bp": 8889,
+     "current_cycle": {
+      "complete": true,
+      "end": "2026-11-10",
+      "projected_cents": 10625000,
+      "spend_cents": 10625000,
+      "start": "2026-10-11"
+     },
+     "cycles": [
+      {
+       "end": "2026-05-10",
+       "spend_cents": 5625000,
+       "start": "2026-04-11"
+      },
+      {
+       "end": "2026-06-10",
+       "spend_cents": 5625000,
+       "start": "2026-05-11"
+      },
+      {
+       "end": "2026-07-10",
+       "spend_cents": 5625000,
+       "start": "2026-06-11"
+      },
+      {
+       "end": "2026-08-10",
+       "spend_cents": 5625000,
+       "start": "2026-07-11"
+      },
+      {
+       "end": "2026-09-10",
+       "spend_cents": 5625000,
+       "start": "2026-08-11"
+      },
+      {
+       "end": "2026-10-10",
+       "spend_cents": 4000000,
+       "start": "2026-09-11"
+      }
+     ],
+     "history": "enough",
+     "monthly_card_spend_cents": 5625000,
+     "unusual": "up"
+    },
+    "id": "agg_af9486b9",
+    "kind": "card_spend_series"
+   }
+  ]
+ },
+ "c_003/transactions": {
+  "data": {
+   "approved_total_cents": 0,
+   "declined": 4,
+   "declined_by_reason": {
+    "AUTHORIZER_BUSINESS_LIMIT": 2,
+    "AUTHORIZER_CARD_MCC_BLACKLIST": 1,
+    "WRONG_CVV": 1
+   },
+   "end": "2026-11-10",
+   "matches": 4,
+   "shown": 4,
+   "start": "2026-10-11",
+   "summary_id": "agg_07f09f4c",
+   "transactions": [
+    {
+     "amount_cents": 665990,
+     "authorized_at": "2026-11-06T17:54:00+00:00",
+     "card_id": "crd_c_003_3",
+     "card_name": "Fleet card B",
+     "card_present": true,
+     "category": "Fuel",
+     "decline_reason": "AUTHORIZER_BUSINESS_LIMIT",
+     "descriptor": "PILOT_00351",
+     "id": "ctx_c_003_00942",
+     "mcc": "5542",
+     "mcc_description": "Automated Fuel Dispensers",
+     "merchant": "Pilot Flying J",
+     "merchant_country": "US",
+     "recurring": false,
+     "state": "DECLINED",
+     "type": "purchase"
+    },
+    {
+     "amount_cents": 558400,
+     "authorized_at": "2026-11-07T17:45:00+00:00",
+     "card_id": "crd_c_003_3",
+     "card_name": "Fleet card B",
+     "card_present": true,
+     "category": "Vehicle maintenance",
+     "decline_reason": "AUTHORIZER_BUSINESS_LIMIT",
+     "descriptor": "TA TRUCK SERVICE 0234",
+     "id": "ctx_c_003_00945",
+     "mcc": "7538",
+     "mcc_description": "Automotive Service Shops (Non-Dealer)",
+     "merchant": "TA Truck Service",
+     "merchant_country": "US",
+     "recurring": false,
+     "state": "DECLINED",
+     "type": "purchase"
+    },
+    {
+     "amount_cents": 120565,
+     "authorized_at": "2026-11-09T14:56:00+00:00",
+     "card_id": "crd_c_003_1",
+     "card_name": "Office card",
+     "card_present": true,
+     "category": "Fuel",
+     "decline_reason": "AUTHORIZER_CARD_MCC_BLACKLIST",
+     "descriptor": "PILOT_00351",
+     "id": "ctx_c_003_00961",
+     "mcc": "5542",
+     "mcc_description": "Automated Fuel Dispensers",
+     "merchant": "Pilot Flying J",
+     "merchant_country": "US",
+     "recurring": false,
+     "state": "DECLINED",
+     "type": "purchase"
+    },
+    {
+     "amount_cents": 43360,
+     "authorized_at": "2026-11-09T15:17:00+00:00",
+     "card_id": "crd_c_003_1",
+     "card_name": "Office card",
+     "card_present": true,
+     "category": "Fuel",
+     "decline_reason": "WRONG_CVV",
+     "descriptor": "LOVES #0456 OUTSIDE",
+     "id": "ctx_c_003_00962",
+     "mcc": "5542",
+     "mcc_description": "Automated Fuel Dispensers",
+     "merchant": "Love's Travel Stops",
+     "merchant_country": "US",
+     "recurring": false,
+     "state": "DECLINED",
+     "type": "purchase"
+    }
+   ],
+   "truncated": false
+  },
+  "evidence": [
+   {
+    "data": {
+     "approved_total_cents": 0,
+     "declined": 4,
+     "declined_by_reason": {
+      "AUTHORIZER_BUSINESS_LIMIT": 2,
+      "AUTHORIZER_CARD_MCC_BLACKLIST": 1,
+      "WRONG_CVV": 1
+     },
+     "end": "2026-11-10",
+     "matches": 4,
+     "shown": 4,
+     "start": "2026-10-11",
+     "truncated": false
+    },
+    "id": "agg_07f09f4c",
+    "kind": "card_transaction_search"
+   },
+   {
+    "data": {
+     "amount_cents": 665990,
+     "authorized_at": "2026-11-06T17:54:00+00:00",
+     "card_id": "crd_c_003_3",
+     "card_name": "Fleet card B",
+     "card_present": true,
+     "category": "Fuel",
+     "decline_reason": "AUTHORIZER_BUSINESS_LIMIT",
+     "descriptor": "PILOT_00351",
+     "mcc": "5542",
+     "mcc_description": "Automated Fuel Dispensers",
+     "merchant": "Pilot Flying J",
+     "merchant_country": "US",
+     "recurring": false,
+     "state": "DECLINED",
+     "type": "purchase"
+    },
+    "id": "ctx_c_003_00942",
+    "kind": "card_transaction"
+   },
+   {
+    "data": {
+     "amount_cents": 558400,
+     "authorized_at": "2026-11-07T17:45:00+00:00",
+     "card_id": "crd_c_003_3",
+     "card_name": "Fleet card B",
+     "card_present": true,
+     "category": "Vehicle maintenance",
+     "decline_reason": "AUTHORIZER_BUSINESS_LIMIT",
+     "descriptor": "TA TRUCK SERVICE 0234",
+     "mcc": "7538",
+     "mcc_description": "Automotive Service Shops (Non-Dealer)",
+     "merchant": "TA Truck Service",
+     "merchant_country": "US",
+     "recurring": false,
+     "state": "DECLINED",
+     "type": "purchase"
+    },
+    "id": "ctx_c_003_00945",
+    "kind": "card_transaction"
+   },
+   {
+    "data": {
+     "amount_cents": 120565,
+     "authorized_at": "2026-11-09T14:56:00+00:00",
+     "card_id": "crd_c_003_1",
+     "card_name": "Office card",
+     "card_present": true,
+     "category": "Fuel",
+     "decline_reason": "AUTHORIZER_CARD_MCC_BLACKLIST",
+     "descriptor": "PILOT_00351",
+     "mcc": "5542",
+     "mcc_description": "Automated Fuel Dispensers",
+     "merchant": "Pilot Flying J",
+     "merchant_country": "US",
+     "recurring": false,
+     "state": "DECLINED",
+     "type": "purchase"
+    },
+    "id": "ctx_c_003_00961",
+    "kind": "card_transaction"
+   },
+   {
+    "data": {
+     "amount_cents": 43360,
+     "authorized_at": "2026-11-09T15:17:00+00:00",
+     "card_id": "crd_c_003_1",
+     "card_name": "Office card",
+     "card_present": true,
+     "category": "Fuel",
+     "decline_reason": "WRONG_CVV",
+     "descriptor": "LOVES #0456 OUTSIDE",
+     "mcc": "5542",
+     "mcc_description": "Automated Fuel Dispensers",
+     "merchant": "Love's Travel Stops",
+     "merchant_country": "US",
+     "recurring": false,
+     "state": "DECLINED",
+     "type": "purchase"
+    },
+    "id": "ctx_c_003_00962",
+    "kind": "card_transaction"
+   }
+  ]
+ },
+ "c_003/utilization": {
+  "data": {
+   "balance_cents": 10625000,
+   "balance_id": "bal_card_c_003_20261110",
+   "compared_with": [
+    "2026-10-10",
+    "2026-09-10",
+    "2026-08-10"
+   ],
+   "credit_limit_cents": 12500000,
+   "date": "2026-11-10",
+   "earlier": [
+    {
+     "date": "2026-10-10",
+     "id": "bal_card_c_003_20261010",
+     "used_share_bp": 3200
+    },
+    {
+     "date": "2026-09-10",
+     "id": "bal_card_c_003_20260910",
+     "used_share_bp": 4500
+    },
+    {
+     "date": "2026-08-10",
+     "id": "bal_card_c_003_20260810",
+     "used_share_bp": 4500
+    }
+   ],
+   "used_share_bp": 8500,
+   "usual_share_bp": 4067,
+   "utilization_trend": "rising"
+  },
+  "evidence": [
+   {
+    "data": {
+     "balance_cents": 10625000,
+     "compared_with": [
+      "2026-10-10",
+      "2026-09-10",
+      "2026-08-10"
+     ],
+     "credit_limit_cents": 12500000,
+     "date": "2026-11-10",
+     "used_share_bp": 8500,
+     "usual_share_bp": 4067,
+     "utilization_trend": "rising"
+    },
+    "id": "bal_card_c_003_20261110",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 4000000,
+     "compared_with": [
+      "2026-09-10",
+      "2026-08-10",
+      "2026-07-10"
+     ],
+     "credit_limit_cents": 12500000,
+     "date": "2026-10-10",
+     "used_share_bp": 3200,
+     "usual_share_bp": 4500,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_003_20261010",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 5625000,
+     "compared_with": [
+      "2026-08-10",
+      "2026-07-10",
+      "2026-06-10"
+     ],
+     "credit_limit_cents": 12500000,
+     "date": "2026-09-10",
+     "used_share_bp": 4500,
+     "usual_share_bp": 4500,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_003_20260910",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 5625000,
+     "compared_with": [
+      "2026-07-10",
+      "2026-06-10",
+      "2026-05-10"
+     ],
+     "credit_limit_cents": 12500000,
+     "date": "2026-08-10",
+     "used_share_bp": 4500,
+     "usual_share_bp": 4500,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_003_20260810",
+    "kind": "card_balance"
+   }
+  ]
+ },
+ "c_006/paying_account": {
+  "data": {
+   "accounts": [
+    {
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c006_a",
+     "repayment_id": "rep_c_006_202609"
+    },
+    {
+     "due": "2026-10-05",
+     "funding_account_id": "acct_external_new_c006",
+     "repayment_id": "rep_c_006_202610"
+    },
+    {
+     "due": "2026-11-05",
+     "funding_account_id": "acct_external_new_c006",
+     "repayment_id": "rep_c_006_202611"
+    }
+   ],
+   "change_id": "agg_e2b0e850",
+   "changed": true,
+   "changed_on": "2026-09-20",
+   "from": "acct_c006_a",
+   "repayment_ids": [
+    "rep_c_006_202609",
+    "rep_c_006_202610",
+    "rep_c_006_202611"
+   ],
+   "repayments_compared": 3,
+   "to": "acct_external_new_c006"
+  },
+  "evidence": [
+   {
+    "data": {
+     "changed": true,
+     "changed_on": "2026-09-20",
+     "from": "acct_c006_a",
+     "repayment_ids": [
+      "rep_c_006_202609",
+      "rep_c_006_202610",
+      "rep_c_006_202611"
+     ],
+     "repayments_compared": 3,
+     "to": "acct_external_new_c006"
+    },
+    "id": "agg_e2b0e850",
+    "kind": "funding_account_change"
+   },
+   {
+    "data": {
+     "amount_cents": 2951052,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c006_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    "id": "rep_c_006_202609",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 2995781,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_external_new_c006",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    "id": "rep_c_006_202610",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 3029527,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_external_new_c006",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "paid"
+    },
+    "id": "rep_c_006_202611",
+    "kind": "card_repayment"
+   }
+  ]
+ },
+ "c_006/repayments": {
+  "data": {
+   "counts": {
+    "failed": 0,
+    "first_due": "2026-09-05",
+    "last_due": "2026-11-05",
+    "late": 0,
+    "n": 3,
+    "paid": 3
+   },
+   "repayments": [
+    {
+     "amount_cents": 2951052,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c006_a",
+     "id": "rep_c_006_202609",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    {
+     "amount_cents": 2995781,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_external_new_c006",
+     "id": "rep_c_006_202610",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    {
+     "amount_cents": 3029527,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_external_new_c006",
+     "id": "rep_c_006_202611",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "paid"
+    }
+   ],
+   "summary_id": "agg_2032cf71"
+  },
+  "evidence": [
+   {
+    "data": {
+     "amount_cents": 2951052,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c006_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    "id": "rep_c_006_202609",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 2995781,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_external_new_c006",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    "id": "rep_c_006_202610",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 3029527,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_external_new_c006",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "paid"
+    },
+    "id": "rep_c_006_202611",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "failed": 0,
+     "first_due": "2026-09-05",
+     "last_due": "2026-11-05",
+     "late": 0,
+     "n": 3,
+     "paid": 3
+    },
+    "id": "agg_2032cf71",
+    "kind": "repayment_summary"
+   }
+  ]
+ },
+ "c_006/spend_by_cycle": {
+  "data": {
+   "change_vs_usual_bp": 1823,
+   "current_cycle": {
+    "complete": true,
+    "end": "2026-11-10",
+    "projected_cents": 3600000,
+    "spend_cents": 3600000,
+    "start": "2026-10-11"
+   },
+   "cycles": [
+    {
+     "end": "2026-05-10",
+     "spend_cents": 3074666,
+     "start": "2026-04-11"
+    },
+    {
+     "end": "2026-06-10",
+     "spend_cents": 3060248,
+     "start": "2026-05-11"
+    },
+    {
+     "end": "2026-07-10",
+     "spend_cents": 3080209,
+     "start": "2026-06-11"
+    },
+    {
+     "end": "2026-08-10",
+     "spend_cents": 2951052,
+     "start": "2026-07-11"
+    },
+    {
+     "end": "2026-09-10",
+     "spend_cents": 2995781,
+     "start": "2026-08-11"
+    },
+    {
+     "end": "2026-10-10",
+     "spend_cents": 3029527,
+     "start": "2026-09-11"
+    }
+   ],
+   "history": "enough",
+   "monthly_card_spend_cents": 3044888,
+   "series_id": "agg_244e9be7",
+   "unusual": "no"
+  },
+  "evidence": [
+   {
+    "data": {
+     "change_vs_usual_bp": 1823,
+     "current_cycle": {
+      "complete": true,
+      "end": "2026-11-10",
+      "projected_cents": 3600000,
+      "spend_cents": 3600000,
+      "start": "2026-10-11"
+     },
+     "cycles": [
+      {
+       "end": "2026-05-10",
+       "spend_cents": 3074666,
+       "start": "2026-04-11"
+      },
+      {
+       "end": "2026-06-10",
+       "spend_cents": 3060248,
+       "start": "2026-05-11"
+      },
+      {
+       "end": "2026-07-10",
+       "spend_cents": 3080209,
+       "start": "2026-06-11"
+      },
+      {
+       "end": "2026-08-10",
+       "spend_cents": 2951052,
+       "start": "2026-07-11"
+      },
+      {
+       "end": "2026-09-10",
+       "spend_cents": 2995781,
+       "start": "2026-08-11"
+      },
+      {
+       "end": "2026-10-10",
+       "spend_cents": 3029527,
+       "start": "2026-09-11"
+      }
+     ],
+     "history": "enough",
+     "monthly_card_spend_cents": 3044888,
+     "unusual": "no"
+    },
+    "id": "agg_244e9be7",
+    "kind": "card_spend_series"
+   }
+  ]
+ },
+ "c_006/utilization": {
+  "data": {
+   "balance_cents": 3600000,
+   "balance_id": "bal_card_c_006_20261110",
+   "compared_with": [
+    "2026-10-10",
+    "2026-09-10",
+    "2026-08-10"
+   ],
+   "credit_limit_cents": 8000000,
+   "date": "2026-11-10",
+   "earlier": [
+    {
+     "date": "2026-10-10",
+     "id": "bal_card_c_006_20261010",
+     "used_share_bp": 3787
+    },
+    {
+     "date": "2026-09-10",
+     "id": "bal_card_c_006_20260910",
+     "used_share_bp": 3745
+    },
+    {
+     "date": "2026-08-10",
+     "id": "bal_card_c_006_20260810",
+     "used_share_bp": 3689
+    }
+   ],
+   "used_share_bp": 4500,
+   "usual_share_bp": 3740,
+   "utilization_trend": "steady"
+  },
+  "evidence": [
+   {
+    "data": {
+     "balance_cents": 3600000,
+     "compared_with": [
+      "2026-10-10",
+      "2026-09-10",
+      "2026-08-10"
+     ],
+     "credit_limit_cents": 8000000,
+     "date": "2026-11-10",
+     "used_share_bp": 4500,
+     "usual_share_bp": 3740,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_006_20261110",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 3029527,
+     "compared_with": [
+      "2026-09-10",
+      "2026-08-10",
+      "2026-07-10"
+     ],
+     "credit_limit_cents": 8000000,
+     "date": "2026-10-10",
+     "used_share_bp": 3787,
+     "usual_share_bp": 3761,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_006_20261010",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 2995781,
+     "compared_with": [
+      "2026-08-10",
+      "2026-07-10",
+      "2026-06-10"
+     ],
+     "credit_limit_cents": 8000000,
+     "date": "2026-09-10",
+     "used_share_bp": 3745,
+     "usual_share_bp": 3788,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_006_20260910",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 2951052,
+     "compared_with": [
+      "2026-07-10",
+      "2026-06-10",
+      "2026-05-10"
+     ],
+     "credit_limit_cents": 8000000,
+     "date": "2026-08-10",
+     "used_share_bp": 3689,
+     "usual_share_bp": 3839,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_006_20260810",
+    "kind": "card_balance"
+   }
+  ]
+ },
+ "c_010/paying_account": {
+  "data": {
+   "accounts": [
+    {
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c010_a",
+     "repayment_id": "rep_c_010_202609"
+    },
+    {
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c010_a",
+     "repayment_id": "rep_c_010_202610"
+    },
+    {
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c010_a",
+     "repayment_id": "rep_c_010_202611"
+    }
+   ],
+   "change_id": "agg_fc38f056",
+   "changed": false,
+   "from": "acct_c010_a",
+   "repayment_ids": [
+    "rep_c_010_202609",
+    "rep_c_010_202610",
+    "rep_c_010_202611"
+   ],
+   "repayments_compared": 3,
+   "to": "acct_c010_a"
+  },
+  "evidence": [
+   {
+    "data": {
+     "changed": false,
+     "from": "acct_c010_a",
+     "repayment_ids": [
+      "rep_c_010_202609",
+      "rep_c_010_202610",
+      "rep_c_010_202611"
+     ],
+     "repayments_compared": 3,
+     "to": "acct_c010_a"
+    },
+    "id": "agg_fc38f056",
+    "kind": "funding_account_change"
+   },
+   {
+    "data": {
+     "amount_cents": 4500000,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c010_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    "id": "rep_c_010_202609",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 4500000,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c010_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    "id": "rep_c_010_202610",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "ach_return_code": "R01",
+     "amount_cents": 5000000,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c010_a",
+     "paid_since": "no",
+     "payment_method": "ach_autopay",
+     "return_reason": "Insufficient funds",
+     "returned_on": "2026-11-07",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "failed"
+    },
+    "id": "rep_c_010_202611",
+    "kind": "card_repayment"
+   }
+  ]
+ },
+ "c_010/repayments": {
+  "data": {
+   "counts": {
+    "failed": 1,
+    "first_due": "2026-09-05",
+    "last_due": "2026-11-05",
+    "late": 0,
+    "n": 3,
+    "paid": 2
+   },
+   "repayments": [
+    {
+     "amount_cents": 4500000,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c010_a",
+     "id": "rep_c_010_202609",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    {
+     "amount_cents": 4500000,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c010_a",
+     "id": "rep_c_010_202610",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    {
+     "ach_return_code": "R01",
+     "amount_cents": 5000000,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c010_a",
+     "id": "rep_c_010_202611",
+     "paid_since": "no",
+     "payment_method": "ach_autopay",
+     "return_reason": "Insufficient funds",
+     "returned_on": "2026-11-07",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "failed"
+    }
+   ],
+   "summary_id": "agg_b640a9b7"
+  },
+  "evidence": [
+   {
+    "data": {
+     "amount_cents": 4500000,
+     "due": "2026-09-05",
+     "funding_account_id": "acct_c010_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-08-10",
+     "statement_period_start": "2026-07-11",
+     "status": "paid"
+    },
+    "id": "rep_c_010_202609",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "amount_cents": 4500000,
+     "due": "2026-10-05",
+     "funding_account_id": "acct_c010_a",
+     "payment_method": "ach_autopay",
+     "statement_period_end": "2026-09-10",
+     "statement_period_start": "2026-08-11",
+     "status": "paid"
+    },
+    "id": "rep_c_010_202610",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "ach_return_code": "R01",
+     "amount_cents": 5000000,
+     "due": "2026-11-05",
+     "funding_account_id": "acct_c010_a",
+     "paid_since": "no",
+     "payment_method": "ach_autopay",
+     "return_reason": "Insufficient funds",
+     "returned_on": "2026-11-07",
+     "statement_period_end": "2026-10-10",
+     "statement_period_start": "2026-09-11",
+     "status": "failed"
+    },
+    "id": "rep_c_010_202611",
+    "kind": "card_repayment"
+   },
+   {
+    "data": {
+     "failed": 1,
+     "first_due": "2026-09-05",
+     "last_due": "2026-11-05",
+     "late": 0,
+     "n": 3,
+     "paid": 2
+    },
+    "id": "agg_b640a9b7",
+    "kind": "repayment_summary"
+   }
+  ]
+ },
+ "c_010/spend_by_cycle": {
+  "data": {
+   "change_vs_usual_bp": -667,
+   "current_cycle": {
+    "complete": true,
+    "end": "2026-11-10",
+    "projected_cents": 4200000,
+    "spend_cents": 4200000,
+    "start": "2026-10-11"
+   },
+   "cycles": [
+    {
+     "end": "2026-05-10",
+     "spend_cents": 4500000,
+     "start": "2026-04-11"
+    },
+    {
+     "end": "2026-06-10",
+     "spend_cents": 4500000,
+     "start": "2026-05-11"
+    },
+    {
+     "end": "2026-07-10",
+     "spend_cents": 4500000,
+     "start": "2026-06-11"
+    },
+    {
+     "end": "2026-08-10",
+     "spend_cents": 4500000,
+     "start": "2026-07-11"
+    },
+    {
+     "end": "2026-09-10",
+     "spend_cents": 4500000,
+     "start": "2026-08-11"
+    },
+    {
+     "end": "2026-10-10",
+     "spend_cents": 5000000,
+     "start": "2026-09-11"
+    }
+   ],
+   "history": "enough",
+   "monthly_card_spend_cents": 4500000,
+   "series_id": "agg_03e05db7",
+   "unusual": "no"
+  },
+  "evidence": [
+   {
+    "data": {
+     "change_vs_usual_bp": -667,
+     "current_cycle": {
+      "complete": true,
+      "end": "2026-11-10",
+      "projected_cents": 4200000,
+      "spend_cents": 4200000,
+      "start": "2026-10-11"
+     },
+     "cycles": [
+      {
+       "end": "2026-05-10",
+       "spend_cents": 4500000,
+       "start": "2026-04-11"
+      },
+      {
+       "end": "2026-06-10",
+       "spend_cents": 4500000,
+       "start": "2026-05-11"
+      },
+      {
+       "end": "2026-07-10",
+       "spend_cents": 4500000,
+       "start": "2026-06-11"
+      },
+      {
+       "end": "2026-08-10",
+       "spend_cents": 4500000,
+       "start": "2026-07-11"
+      },
+      {
+       "end": "2026-09-10",
+       "spend_cents": 4500000,
+       "start": "2026-08-11"
+      },
+      {
+       "end": "2026-10-10",
+       "spend_cents": 5000000,
+       "start": "2026-09-11"
+      }
+     ],
+     "history": "enough",
+     "monthly_card_spend_cents": 4500000,
+     "unusual": "no"
+    },
+    "id": "agg_03e05db7",
+    "kind": "card_spend_series"
+   }
+  ]
+ },
+ "c_010/utilization": {
+  "data": {
+   "balance_cents": 9200000,
+   "balance_id": "bal_card_c_010_20261110",
+   "compared_with": [
+    "2026-10-10",
+    "2026-09-10",
+    "2026-08-10"
+   ],
+   "credit_limit_cents": 10000000,
+   "date": "2026-11-10",
+   "earlier": [
+    {
+     "date": "2026-10-10",
+     "id": "bal_card_c_010_20261010",
+     "used_share_bp": 5000
+    },
+    {
+     "date": "2026-09-10",
+     "id": "bal_card_c_010_20260910",
+     "used_share_bp": 4500
+    },
+    {
+     "date": "2026-08-10",
+     "id": "bal_card_c_010_20260810",
+     "used_share_bp": 4500
+    }
+   ],
+   "used_share_bp": 9200,
+   "usual_share_bp": 4667,
+   "utilization_trend": "spiking"
+  },
+  "evidence": [
+   {
+    "data": {
+     "balance_cents": 9200000,
+     "compared_with": [
+      "2026-10-10",
+      "2026-09-10",
+      "2026-08-10"
+     ],
+     "credit_limit_cents": 10000000,
+     "date": "2026-11-10",
+     "used_share_bp": 9200,
+     "usual_share_bp": 4667,
+     "utilization_trend": "spiking"
+    },
+    "id": "bal_card_c_010_20261110",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 5000000,
+     "compared_with": [
+      "2026-09-10",
+      "2026-08-10",
+      "2026-07-10"
+     ],
+     "credit_limit_cents": 10000000,
+     "date": "2026-10-10",
+     "used_share_bp": 5000,
+     "usual_share_bp": 4500,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_010_20261010",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 4500000,
+     "compared_with": [
+      "2026-08-10",
+      "2026-07-10",
+      "2026-06-10"
+     ],
+     "credit_limit_cents": 10000000,
+     "date": "2026-09-10",
+     "used_share_bp": 4500,
+     "usual_share_bp": 4500,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_010_20260910",
+    "kind": "card_balance"
+   },
+   {
+    "data": {
+     "balance_cents": 4500000,
+     "compared_with": [
+      "2026-07-10",
+      "2026-06-10",
+      "2026-05-10"
+     ],
+     "credit_limit_cents": 10000000,
+     "date": "2026-08-10",
+     "used_share_bp": 4500,
+     "usual_share_bp": 4500,
+     "utilization_trend": "steady"
+    },
+    "id": "bal_card_c_010_20260810",
+    "kind": "card_balance"
+   }
+  ]
+ }
+}

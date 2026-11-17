@@ -29,7 +29,7 @@ flowchart LR
 
 Four FastAPI services, each with its own Postgres database and login role. The gateway exposes only the frontend, Auth and the Orchestrator. The Bank and Card services are called by the Orchestrator only.
 
-All three agents run in the Orchestrator Service: the main agent and the two specialists (Cash Flow, Credit Behavior), which it calls as tools in-process. Bank and Card run no model. They own the data and serve read-only analysis tools over HTTP. That is the target design: today the specialists are stand-ins in `services/orchestrator/app/agents/mock.py`, and Bank and Card serve no analysis tools yet.
+All three agents run in the Orchestrator Service: the main agent and the two specialists (Cash Flow, Credit Behavior), which it calls as tools in-process. Bank and Card run no model. They own the data and serve read-only analysis tools over HTTP. Both specialists are built (`app/agents/cash_flow`, `app/agents/credit_behavior`) and Bank and Card serve their tools, but the graph still calls the stand-ins in `services/orchestrator/app/agents/mock.py` until KAN-36 swaps them.
 
 ## Run it
 
