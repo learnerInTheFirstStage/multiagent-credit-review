@@ -1,11 +1,11 @@
 # eval
 
-The golden dataset run: every test customer through the whole system, scored on cause, recommendation, evidence and correct handoff, next to what the engine would do alone. KAN-42 and KAN-56.
+The golden dataset run: every test customer through the Orchestrator, scored on cause, recommendation, evidence and correct handoff, next to what the engine would do alone. KAN-42 and KAN-56. The specialists are the stand-ins, Bank and Auth are not started, the runner calls the Orchestrator directly with dev tokens, and every case is closed by a rejection, so Card is never called: a run tests the graph, the check and the policy.
 
 ## Files
 
-- `golden_set.yaml`: the cases and their accepted answers. `golden-set.md` is generated from it by `describe.py`; read that before a run.
-- `extra_customers.yaml`: the evaluation's own customers, added to `data/shared_customers.yaml`.
+- `golden_set.yaml`: the cases and their accepted answers. `golden-set.md` is generated from it by `describe.py` (run it with the Orchestrator's Python environment, since it imports the app); read that before a run.
+- `extra_customers.yaml`: the evaluation's own customers. The overlay adds them to the stand-ins' data through `SHARED_CUSTOMERS_FILE`; `data/shared_customers.yaml` does not change.
 - `history.yaml`: the one seeded review every stack has (`seed_c_007_2025`). The image copies it.
 - `history_eval.yaml`: the evaluation's other fourteen seeded reviews. Only the evaluation overlay names it.
 - `signals.py`: the review signal of each case. `run.py`: the runner. `grade.py`: the grading and the summary. `compare.py`: two arms side by side.
@@ -33,7 +33,7 @@ The runner stops before the first signal when:
 - the database is not clean: `python -m app.seed_history /eval/history.yaml /eval/history_eval.yaml --expect-clean` refuses a review that is not a seed dated before the data clock, or a seed with other content;
 - the service does not list every seeded case.
 
-Results go to `eval/results/<run id>/`: `runs.jsonl` as each run ends, `summary.md` at the end. Every record carries `arm`. A graded run also carries the case's question path (`GET /cases/{id}/path`) and its path grade, or `path_error` when the path page could not be read; a run that ended in an error carries neither. A run spends money on the model the stack is set to, about 80 runs for the whole set. The paid run is the owner's to start.
+Results go to `eval/results/<run id>/`: `runs.jsonl` as each run ends, `requests.json` with the five request checks (t_01 to t_05), `summary.md` at the end. Every record carries `arm`. A graded run also carries the case's question path (`GET /cases/{id}/path`) and its path grade, or `path_error` when the path page could not be read; a run that ended in an error carries neither. A run spends money on the model the stack is set to, about 80 runs for the whole set. The paid run is the owner's to start.
 
 `about` at the top of the summary holds the arm, whether search was on and with which embedder, how many reviews were seeded, every value of `services/orchestrator/app/policy.py` as one JSON line, and the first twelve hex digits of the SHA-256 of `app/graph/prompts.py`. Both are read inside the container.
 
