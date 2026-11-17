@@ -125,6 +125,11 @@ def _report_problems(state: CaseState) -> list[str]:
         problems.append(f"It cites a guideline that does not exist: {', '.join(unknown)}.")
     elif acts and not cited_guidelines:
         problems.append("It cites no guideline.")
+    elif acts and (a_person_decides := [g for g in cited_guidelines if allows[g] == ["needs_human"]]):
+        # Another guideline cited next to it must not outvote one that leaves the decision to a person.
+        problems.append(
+            f"It cites {', '.join(a_person_decides)}, under which a person decides, so it may only recommend needs_human."
+        )
     elif acts and not any(recommendation in allows[guideline_id] for guideline_id in cited_guidelines):
         problems.append(f"No guideline it cites allows {recommendation}.")
 

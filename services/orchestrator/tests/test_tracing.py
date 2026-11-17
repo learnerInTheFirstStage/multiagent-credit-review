@@ -86,7 +86,7 @@ def service_graph(monkeypatch, script):
     return runtime.case_graph()
 
 
-# The running service has no guidelines yet, so the only report that passes its check recommends nothing.
+# A report that recommends nothing, so that no call to Card is part of these runs.
 NOTHING_TO_DO = report(likely_cause="no_clear_cause", recommendation="needs_human", guideline_ids=[], evidence=[])
 
 

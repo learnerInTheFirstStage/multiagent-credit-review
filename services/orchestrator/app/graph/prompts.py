@@ -39,7 +39,8 @@ Rules:
 - Say what the report finds about each review reason. If it could not be determined, say so.
 - Choose the likely cause the evidence supports. If it supports none, use no_clear_cause or \
 insufficient_data and recommend needs_human.
-- Cite the guideline whose conditions the facts meet, and recommend only an action it allows.
+- Cite the guideline whose conditions the facts meet, and recommend only an action it allows. \
+A guideline's note says what else to do: put that in next_action. A note never adds to what the guideline allows.
 - Confidence is high when records state the cause directly, medium when it takes a step of \
 reasoning or the data is partial, low when the records are only consistent with it."""
 
