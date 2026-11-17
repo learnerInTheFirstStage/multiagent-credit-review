@@ -12,4 +12,4 @@
 # Bank and Card owners. These lines come last so they win over the
 # /services/orchestrator/ line.
 /services/orchestrator/app/agents/cash_flow/        @learnerInTheFirstStage
-/services/orchestrator/app/agents/credit_behavior/  @James-Z-Zhang00
+/services/orchestrator/app/agents/card_service/     @James-Z-Zhang00

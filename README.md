@@ -29,7 +29,7 @@ flowchart LR
 
 Four FastAPI services, each with its own Postgres database and login role. The gateway exposes only the frontend, Auth and the Orchestrator. The Bank and Card services are called by the Orchestrator only.
 
-All three agents run in the Orchestrator Service: the main agent and the two specialists (Cash Flow, Credit Behavior), which it calls as tools in-process. Bank and Card run no model. They own the data and serve read-only analysis tools over HTTP. That is the target design: today the specialists are stand-ins in `services/orchestrator/app/agents/mock.py`, and Bank and Card serve no analysis tools yet.
+All three agents run in the Orchestrator Service: the main agent and the two specialists (Cash Flow, Credit Behavior), which it calls as tools in-process. Bank and Card run no model. They own the data and serve read-only analysis tools over HTTP. Both specialists are built (`app/agents/cash_flow`, `app/agents/card_service`) and Bank and Card serve their tools, but the graph still calls the stand-ins in `services/orchestrator/app/agents/mock.py` until KAN-36 swaps them.
 
 ## Run it
 
@@ -81,7 +81,7 @@ Reserved for later, so every service uses the same name: `AS_OF_DATE`.
 | `services/card` | Card Service: card data, read-only analysis tools, approved actions | James |
 | `services/orchestrator` | Orchestrator Service: the graph, cases and approvals | Vincent |
 | `services/orchestrator/app/agents/cash_flow` | Cash Flow Agent | Allen |
-| `services/orchestrator/app/agents/credit_behavior` | Credit Behavior Agent | James |
+| `services/orchestrator/app/agents/card_service` | Credit Behavior Agent (Card Service agent) | James |
 | `services/auth` | login, JWT, roles | to be assigned |
 | `gateway` | Nginx API gateway | to be assigned |
 | `frontend` | review app (React) | to be assigned |
