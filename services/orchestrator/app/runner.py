@@ -24,9 +24,16 @@ _WAITING_AT: dict[tuple, WaitingFor] = {
 }
 
 
-def thread(case_id: str) -> dict:
-    """One graph thread per case."""
-    return {"configurable": {"thread_id": case_id}}
+def thread(case_id: str, user_id: str | None = None) -> dict:
+    """The graph config for a case: one thread per case, and one tracing session.
+
+    A case is several runs (the investigation, then each decision). LangFuse shows
+    them together under the session, with the person who decided on their run.
+    """
+    metadata = {"langfuse_session_id": case_id}
+    if user_id:
+        metadata["langfuse_user_id"] = user_id
+    return {"configurable": {"thread_id": case_id}, "metadata": metadata}
 
 
 def waiting_for(snapshot: StateSnapshot) -> WaitingFor | None:

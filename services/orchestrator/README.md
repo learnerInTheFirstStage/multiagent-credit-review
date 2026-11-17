@@ -19,6 +19,17 @@ The service runs cases only when `LLM_MODEL` is set (`provider:model`, with that
 
 Until the real pieces exist, the running service uses the stand-in specialists and no guidelines (KAN-33), so a report can only recommend `needs_human`.
 
+## Tracing
+
+With `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` set, every run of the graph is sent to LangFuse. Without them cases run the same, untraced.
+
+- A case is one LangFuse session, named by its `case_id`. Each run is a trace in it: the investigation, then one per decision, with the person who decided as the trace's user.
+- Every step of the graph and every model call is in the trace.
+- Tracing is set up once, in `app/runtime.py`. An agent folder needs no tracing code: a model call made inside a specialist lands in the same trace, as long as it goes through LangChain or LangGraph. A call made with a provider's own SDK does not show up.
+- A trace holds the case's data: the signal, the specialists' answers, the report. It never holds the approver's token.
+- If LangFuse cannot be reached, cases run the same and the traces are lost. Stopping the service can then take a few seconds longer.
+- When a manager closes a case that Card never confirmed, no run of the graph happens, so there is no trace of it. It is in the case's decisions and in the service log.
+
 ## Tokens and decisions
 
 `GET /cases/{id}` and the decision endpoint need a bearer token signed with `JWT_SECRET` (HS256), with the claims `sub`, `role`, `customers`, `exp`. The token must list the case's customer.
