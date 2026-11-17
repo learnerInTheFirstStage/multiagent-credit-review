@@ -1,56 +1,69 @@
-"""The Card Service agent's run (KAN-26): the Credit Behavior specialist.
+"""The Card Service agent (KAN-26): the Credit Behavior specialist, as a LangGraph graph.
 
     card_service(request) -> InvestigateResponse
 
-Same shape as mock.credit_behavior, so the graph can swap one for the other (KAN-36). Each call
-is self-contained: the agent keeps nothing between calls.
+Same shape as mock.credit_behavior, so the case graph can swap one for the other (KAN-36). Each
+call runs the graph once from the start: the agent keeps nothing between calls.
 
-The steps, and who does each:
-1. Preflight (code). Calls the tools the topic rests on (PREFLIGHT), so the facts that matter are
-   fetched whatever the model does. These calls do not count against the model's budget.
-2. Investigate (model). A standard tool-calling loop over the six Card tools: at most 5 calls
-   and 60 seconds. A repeated call gets the earlier result and is not counted again.
-3. Check (code, guardrails.check). Every cited id was returned by a tool, every $ and % is in the
-   cited records, no limit action is recommended, and too_short_to_tell is never called normal.
-   What fails goes back to the model once; what still fails is left out and said so.
-4. Hard facts (code). A failed or late repayment, or a change of the paying account, that no
-   accepted finding cites gets a finding written by code (findings.py).
-5. Evidence (code). The response's evidence is the records the findings cite, as the tools
-   returned them. The model never writes a record.
+    START → preflight ─┬─ nothing came back ─────────────────────────────► finalize → END
+                       ├─ no model ──────────► write_from_records ───────► finalize
+                       └─► investigate ⇄ tools                              ▲
+                              │          └─ budget used ─► summarise ─┐     │
+                              └─ an answer ──────────────────────────►├► check ─► finalize
+                                                                     repair ◄┘ (once)
 
-With no model configured (LLM_MODEL unset, and none passed in), steps 2 and 3 are skipped and the
-answer is what code alone can say from the preflight records, with a note that it did so.
+| Node               | Who   | What |
+|--------------------|-------|------|
+| preflight          | code  | calls the tools the topic rests on (PREFLIGHT); not counted in the budget |
+| investigate        | model | reads the question and the records, calls tools or answers in JSON |
+| tools              | code  | runs the model's tool calls: 5 at most, a repeated call free, memos marked as data |
+| summarise          | model | when the budget is used up: answers from what was fetched, with no tools |
+| check              | code  | guardrails.check on every finding (ids, figures, no action, too_short_to_tell) |
+| repair             | model | once: told what failed, writes its answer again |
+| write_from_records | code  | with no model, findings written from the records alone |
+| finalize           | code  | adds a finding for any failed or late repayment or paying-account change no finding cites; the evidence is the cited records as Card returned them |
+
+The model and the Card client travel in the run's context, not in the state, so nothing that
+cannot be serialised is ever in it. The graph is compiled with checkpointer=False: run inside the
+case graph, it does not inherit the case graph's Postgres checkpointer, and it saves nothing. Its
+nodes run as named steps of the caller's run, so LangFuse shows them inside the case's trace.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import operator
 import os
 import time
-from typing import Any
+from typing import Annotated, Any, Literal, TypedDict
 
 import httpx
 import jwt
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
+from langgraph.graph import START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.runtime import Runtime
+from langgraph.types import Command
 
 from app.agents.card_service import findings as written
 from app.agents.card_service import guardrails, prompts
 from app.agents.card_service.tools import CardTools
-from contracts import Finding, InvestigateRequest, InvestigateResponse
+from contracts import Evidence, Finding, InvestigateRequest, InvestigateResponse
 
 log = logging.getLogger(__name__)
 
 # The specialist's name in the shared contract (contracts.investigate.AgentName) and in the graph.
 AGENT = "credit_behavior"
-# Who the agent is in the tokens it signs for the Card Service.
+# Who the agent is in the tokens it signs for the Card Service, and the graph's name in traces.
 TOKEN_SUB = "card_service"
 TOPICS = ("repayments", "paying_account", "card_use")
 MAX_TOOL_CALLS = 5
 MAX_SECONDS = 60
 MAX_REPAIRS = 1
 TOKEN_TTL_SECONDS = 180
+RECURSION_LIMIT = 40  # the longest run is about 20 steps
 
 # What code fetches before the model starts, per topic. None is "whatever you hold".
 PREFLIGHT: dict[str | None, list[tuple[str, dict[str, Any]]]] = {
@@ -60,194 +73,73 @@ PREFLIGHT: dict[str | None, list[tuple[str, dict[str, Any]]]] = {
     None: [("card_utilization", {}), ("card_spend_by_cycle", {}), ("card_repayments", {"count": 3}),
            ("card_paying_account", {"count": 3})],
 }
+BUDGET_USED = {"error": "budget_exhausted", "message": f"The {MAX_TOOL_CALLS}-call budget is used up."}
 
 
-def card_service(
-    request: InvestigateRequest,
-    *,
-    model: BaseChatModel | None = None,
-    http: httpx.Client | None = None,
-) -> InvestigateResponse:
-    """Answer one question about one customer's card. Tests pass a scripted `model` and a stubbed `http`."""
-    if request.topic is not None and request.topic not in TOPICS:
-        return _cannot(f"The card side has no such topic. It has: {', '.join(TOPICS)}.")
-    try:
-        token = _service_token(request.customer_id, request.case_id)
-    except RuntimeError as error:
-        return _cannot(str(error))
-
-    tools = CardTools(customer_id=request.customer_id, token=token, http=http)
-    try:
-        return _Run(request, tools, model if model is not None else _default_model()).answer()
-    finally:
-        tools.close()
+# ---------------------------------------------------------------------------
+# state and context
+# ---------------------------------------------------------------------------
 
 
-class _Run:
-    def __init__(self, request: InvestigateRequest, tools: CardTools, model: BaseChatModel | None):
-        self.request, self.tools, self.model = request, tools, model
-        self.pool = guardrails.EvidencePool()
-        self.unknown: list[str] = []
-        self.cache: dict[str, Any] = {}
-        self.calls = 0
-        self.deadline = time.monotonic() + MAX_SECONDS
+def _first_kept(old: dict, new: dict) -> dict:
+    """Records keep the content they first came with: the same id never changes in a run."""
+    return {**new, **old}
 
-    # --- tools ------------------------------------------------------------------------------------
 
-    def run_tool(self, name: str, args: dict[str, Any], *, counted: bool = True) -> Any:
-        """One tool call, through the cache and the budget. Returns what the model may read."""
-        key = name + json.dumps(args, sort_keys=True, default=str)
-        if key in self.cache:
-            return self.cache[key]
-        if counted:
-            if self.calls >= MAX_TOOL_CALLS:
-                return {"error": "budget_exhausted", "message": f"The {MAX_TOOL_CALLS}-call budget is used up."}
-            self.calls += 1
-        raw = self.tools.call(name, **args)
-        self.pool.add(raw)
-        shown = guardrails.for_the_model(raw)
-        self.cache[key] = shown
-        return shown
+def _merged(old: dict, new: dict) -> dict:
+    return {**old, **new}
 
-    def preflight(self) -> dict[str, Any]:
-        results = {}
-        for name, args in PREFLIGHT[self.request.topic]:
-            result = self.run_tool(name, args, counted=False)
-            results[name] = result
-            if isinstance(result, dict) and "error" in result:
-                self.unknown.append(f"The Card Service did not answer {name}: {result['error']}: {result.get('message', '')}".strip())
-        return results
 
-    # --- the run ----------------------------------------------------------------------------------
+class AgentState(TypedDict, total=False):
+    request: dict[str, Any]  # the InvestigateRequest, as JSON
+    deadline: float  # time.monotonic() after which no step starts
+    preflight: dict[str, Any]  # what preflight fetched, as the model is shown it
+    records: Annotated[dict[str, dict], _first_kept]  # every record a tool returned, by id
+    cache: Annotated[dict[str, Any], _merged]  # tool call -> result as shown, so a repeat is free
+    calls: int  # tool calls the model has made that counted
+    messages: Annotated[list[AnyMessage], add_messages]
+    draft: list[dict]  # the model's findings, before the check
+    suggested: str | None
+    accepted: list[dict]  # findings that passed the check
+    problems: list[str]  # what the check found, for a repair
+    dropped: list[str]  # findings the check left out, and why
+    repairs: int
+    unknown: Annotated[list[str], operator.add]  # could_not_determine, added to by every step
+    response: dict[str, Any]
 
-    def answer(self) -> InvestigateResponse:
-        preflight = self.preflight()
-        if not self.pool.records:
-            # Nothing came back at all: no finding can rest on anything.
-            return self._response([], suggested_next=None)
-        if self.model is None:
-            self.unknown.append("No model is configured, so these findings were written by code from the card records alone.")
-            return self._response(written.from_records(self.pool), suggested_next=None)
-        draft, suggested = self._investigate(preflight)
-        checked = guardrails.check(draft, self.pool)
-        for _ in range(MAX_REPAIRS):
-            if not checked.problems or time.monotonic() > self.deadline:
-                break
-            redraft, suggested = self._repair(checked.problems)
-            if redraft is None:
-                break
-            checked = guardrails.check(redraft, self.pool)
-        self.unknown += checked.dropped
-        if suggested and guardrails.recommends_an_action(suggested):
-            self.unknown.append("A suggested next step was left out because it recommended an action.")
-            suggested = None
-        return self._response(checked.accepted, suggested_next=suggested)
 
-    def _investigate(self, preflight: dict[str, Any]) -> tuple[list[Finding], str | None]:
-        r = self.request
-        self.messages: list[AnyMessage] = [
-            SystemMessage(content=prompts.SYSTEM_PROMPT),
-            HumanMessage(content=prompts.first_message(
-                question=r.question, topic=r.topic, window_start=r.window_start.isoformat(),
-                window_end=r.window_end.isoformat(), context=r.context, account_id=r.account_id,
-                record_id=r.record_id, preflight=preflight)),
-        ]
-        bound = self.model.bind_tools(self.tools.langchain_tools(lambda name, args: self.run_tool(name, args)))
-        while True:
-            if time.monotonic() > self.deadline:
-                self.unknown.append(f"The {MAX_SECONDS}-second budget ran out before the model finished.")
-                return [], None
-            try:
-                reply = bound.invoke(self.messages)
-            except Exception as error:  # noqa: BLE001 - a provider error must not crash the case
-                log.warning("card_service model call failed: %s", error)
-                self.unknown.append(f"The model call failed: {type(error).__name__}.")
-                return [], None
-            self.messages.append(reply)
-            calls = getattr(reply, "tool_calls", None) or []
-            if not calls:
-                return self._read(reply)
-            over = False
-            for call in calls:
-                # Every call gets an answer, or the provider refuses the next turn.
-                if self.calls >= MAX_TOOL_CALLS and not self._cached(call):
-                    over = True
-                    result: Any = {"error": "budget_exhausted", "message": f"The {MAX_TOOL_CALLS}-call budget is used up."}
-                else:
-                    result = self.run_tool(call["name"], call.get("args") or {})
-                self.messages.append(ToolMessage(content=json.dumps(result, default=str),
-                                                 tool_call_id=call.get("id") or f"call_{id(call)}"))
-            if over:
-                self.unknown.append(f"The {MAX_TOOL_CALLS}-call budget ran out; the answer rests on what was fetched.")
-                self.messages.append(HumanMessage(content="The tool budget is used up. Do not call tools. "
-                                                          "Write your answer as one JSON object now."))
-                return self._final()
+class AgentContext(TypedDict):
+    """What one run brings with it. Never saved."""
 
-    def _cached(self, call: dict) -> bool:
-        return call["name"] + json.dumps(call.get("args") or {}, sort_keys=True, default=str) in self.cache
-
-    def _final(self) -> tuple[list[Finding], str | None]:
-        try:
-            return self._read(self.model.invoke(self.messages))
-        except Exception as error:  # noqa: BLE001
-            self.unknown.append(f"The model call failed: {type(error).__name__}.")
-            return [], None
-
-    def _repair(self, problems: list[str]) -> tuple[list[Finding] | None, str | None]:
-        self.messages.append(HumanMessage(content=prompts.repair_message(problems)))
-        try:
-            reply = self.model.invoke(self.messages)
-        except Exception as error:  # noqa: BLE001
-            self.unknown.append(f"The model call failed: {type(error).__name__}.")
-            return None, None
-        self.messages.append(reply)
-        return self._read(reply)
-
-    def _read(self, message: AIMessage) -> tuple[list[Finding], str | None]:
-        """The model's JSON answer. What it cannot say goes to could_not_determine."""
-        try:
-            payload = json.loads(_json_part(_text(message.content)))
-        except (TypeError, ValueError):
-            self.unknown.append("The model's answer was not the JSON asked for.")
-            return [], None
-        if not isinstance(payload, dict):
-            self.unknown.append("The model's answer was not the JSON asked for.")
-            return [], None
-        drafts = []
-        for raw in payload.get("findings") or []:
-            try:
-                drafts.append(Finding.model_validate(raw))
-            except ValueError:
-                self.unknown.append("A finding was left out because it was not in the shape asked for.")
-        for item in payload.get("could_not_determine") or []:
-            if isinstance(item, str) and item.strip():
-                self.unknown.append(" ".join(item.split())[:300])
-        suggested = payload.get("suggested_next")
-        return drafts, (" ".join(suggested.split())[:300] if isinstance(suggested, str) and suggested.strip() else None)
-
-    # --- the response -----------------------------------------------------------------------------
-
-    def _response(self, accepted: list[Finding], *, suggested_next: str | None) -> InvestigateResponse:
-        cited = {i for f in accepted for i in f.evidence_ids}
-        for record in written.hard_facts(self.pool):
-            if record.id not in cited and (finding := written.for_hard_fact(record)) is not None:
-                accepted.append(finding)
-                cited.add(record.id)
-        if any(guardrails.too_short(e) for e in self.pool.records.values()):
-            note = "The card history is too short to tell what is usual for this customer."
-            if note not in self.unknown:
-                self.unknown.append(note)
-        evidence = self.pool.pick([i for f in accepted for i in f.evidence_ids])
-        unknown = list(dict.fromkeys(self.unknown))
-        if not accepted and not unknown:
-            unknown = ["The card records fetched did not answer the question."]
-        return InvestigateResponse(agent=AGENT, findings=accepted, evidence=evidence,
-                                   could_not_determine=unknown, suggested_next=suggested_next)
+    model: BaseChatModel | None
+    tools: CardTools
 
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+
+def _key(name: str, args: dict[str, Any]) -> str:
+    return name + json.dumps(args, sort_keys=True, default=str)
+
+
+def _run_tool(tools: CardTools, name: str, args: dict[str, Any]) -> tuple[Any, dict[str, dict]]:
+    """One call to Card: the result as the model may read it, and the records it returned."""
+    raw = tools.call(name, **args)
+    pool = guardrails.EvidencePool()
+    pool.add(raw)
+    return guardrails.for_the_model(raw), {i: e.model_dump(mode="json") for i, e in pool.records.items()}
+
+
+def _pool(records: dict[str, dict]) -> guardrails.EvidencePool:
+    pool = guardrails.EvidencePool()
+    pool.records = {i: Evidence.model_validate(r) for i, r in records.items()}
+    return pool
+
+
+def _late(state: AgentState) -> bool:
+    return time.monotonic() > state["deadline"]
 
 
 def _text(content: Any) -> str:
@@ -269,6 +161,209 @@ def _json_part(text: str) -> str:
     """The outermost JSON object in the text: the model may wrap it in prose or a code fence."""
     start, end = text.find("{"), text.rfind("}")
     return text[start:end + 1] if 0 <= start < end else text
+
+
+def _read(message: AIMessage) -> dict[str, Any]:
+    """The model's JSON answer, as a state update: draft, suggested, and what it could not say."""
+    try:
+        payload = json.loads(_json_part(_text(message.content)))
+    except (TypeError, ValueError):
+        payload = None
+    if not isinstance(payload, dict):
+        return {"draft": [], "suggested": None, "unknown": ["The model's answer was not the JSON asked for."]}
+    drafts, unknown = [], []
+    for raw in payload.get("findings") or []:
+        try:
+            drafts.append(Finding.model_validate(raw).model_dump(mode="json"))
+        except ValueError:
+            unknown.append("A finding was left out because it was not in the shape asked for.")
+    for item in payload.get("could_not_determine") or []:
+        if isinstance(item, str) and item.strip():
+            unknown.append(" ".join(item.split())[:300])
+    suggested = payload.get("suggested_next")
+    suggested = " ".join(suggested.split())[:300] if isinstance(suggested, str) and suggested.strip() else None
+    return {"draft": drafts, "suggested": suggested, "unknown": unknown}
+
+
+def _model_failed(error: Exception) -> dict[str, Any]:
+    log.warning("card_service model call failed: %s", error)
+    return {"draft": [], "suggested": None, "unknown": [f"The model call failed: {type(error).__name__}."]}
+
+
+# ---------------------------------------------------------------------------
+# nodes
+# ---------------------------------------------------------------------------
+
+
+def preflight(state: AgentState, runtime: Runtime[AgentContext]
+              ) -> Command[Literal["investigate", "write_from_records", "finalize"]]:
+    tools = runtime.context["tools"]
+    shown, records, cache, unknown = {}, {}, {}, []
+    for name, args in PREFLIGHT[state["request"].get("topic")]:
+        result, returned = _run_tool(tools, name, args)
+        shown[name] = result
+        cache[_key(name, args)] = result
+        records = _first_kept(records, returned)
+        if isinstance(result, dict) and "error" in result:
+            unknown.append(f"The Card Service did not answer {name}: {result['error']}: {result.get('message', '')}".strip())
+    update = {"preflight": shown, "records": records, "cache": cache, "unknown": unknown, "calls": 0, "repairs": 0}
+    if not records:
+        goto = "finalize"  # nothing came back: no finding can rest on anything
+    elif runtime.context["model"] is None:
+        goto = "write_from_records"
+    else:
+        goto = "investigate"
+    return Command(goto=goto, update=update)
+
+
+def investigate(state: AgentState, runtime: Runtime[AgentContext]) -> Command[Literal["tools", "check"]]:
+    if _late(state):
+        return Command(goto="check", update={"draft": [], "suggested": None,
+                                             "unknown": [f"The {MAX_SECONDS}-second budget ran out before the model finished."]})
+    new: list[AnyMessage] = []
+    if not state.get("messages"):
+        r = state["request"]
+        new = [SystemMessage(content=prompts.SYSTEM_PROMPT), HumanMessage(content=prompts.first_message(
+            question=r["question"], topic=r.get("topic"), window_start=r["window_start"], window_end=r["window_end"],
+            context=r.get("context", ""), account_id=r.get("account_id"), record_id=r.get("record_id"),
+            preflight=state["preflight"]))]
+    bound = runtime.context["model"].bind_tools(runtime.context["tools"].langchain_tools())
+    try:
+        reply = bound.invoke([*state.get("messages", []), *new])
+    except Exception as error:  # noqa: BLE001 - a provider error must not crash the case
+        return Command(goto="check", update={"messages": new, **_model_failed(error)})
+    if getattr(reply, "tool_calls", None):
+        return Command(goto="tools", update={"messages": [*new, reply]})
+    return Command(goto="check", update={"messages": [*new, reply], **_read(reply)})
+
+
+def tools(state: AgentState, runtime: Runtime[AgentContext]) -> Command[Literal["investigate", "summarise"]]:
+    card = runtime.context["tools"]
+    calls, cache, records = state.get("calls", 0), dict(state.get("cache", {})), {}
+    messages: list[AnyMessage] = []
+    over = False
+    for call in state["messages"][-1].tool_calls:
+        args = call.get("args") or {}
+        key = _key(call["name"], args)
+        if key in cache:
+            result = cache[key]  # a repeat: the earlier result, not counted again
+        elif calls >= MAX_TOOL_CALLS:
+            over, result = True, BUDGET_USED
+        else:
+            calls += 1
+            result, returned = _run_tool(card, call["name"], args)
+            cache[key] = result
+            records = _first_kept(records, returned)
+        # Every call gets an answer, or the provider refuses the next turn.
+        messages.append(ToolMessage(content=json.dumps(result, default=str), tool_call_id=call.get("id") or f"call_{id(call)}"))
+    update: dict[str, Any] = {"calls": calls, "cache": cache, "records": records, "messages": messages}
+    if over:
+        messages.append(HumanMessage(content="The tool budget is used up. Do not call tools. Write your answer as one JSON object now."))
+        update["unknown"] = [f"The {MAX_TOOL_CALLS}-call budget ran out; the answer rests on what was fetched."]
+        return Command(goto="summarise", update=update)
+    return Command(goto="investigate", update=update)
+
+
+def summarise(state: AgentState, runtime: Runtime[AgentContext]) -> Command[Literal["check"]]:
+    try:
+        reply = runtime.context["model"].invoke(state["messages"])
+    except Exception as error:  # noqa: BLE001
+        return Command(goto="check", update=_model_failed(error))
+    return Command(goto="check", update={"messages": [reply], **_read(reply)})
+
+
+def check(state: AgentState) -> Command[Literal["repair", "finalize"]]:
+    drafts = [Finding.model_validate(f) for f in state.get("draft", [])]
+    checked = guardrails.check(drafts, _pool(state.get("records", {})))
+    update = {"accepted": [f.model_dump(mode="json") for f in checked.accepted],
+              "problems": checked.problems, "dropped": checked.dropped}
+    if checked.problems and state.get("repairs", 0) < MAX_REPAIRS and not _late(state):
+        return Command(goto="repair", update=update)
+    return Command(goto="finalize", update=update)
+
+
+def repair(state: AgentState, runtime: Runtime[AgentContext]) -> Command[Literal["check", "finalize"]]:
+    ask = HumanMessage(content=prompts.repair_message(state["problems"]))
+    try:
+        reply = runtime.context["model"].invoke([*state["messages"], ask])
+    except Exception as error:  # noqa: BLE001 - keep what the last check accepted
+        log.warning("card_service model call failed: %s", error)
+        return Command(goto="finalize", update={"messages": [ask], "repairs": state.get("repairs", 0) + 1,
+                                                "unknown": [f"The model call failed: {type(error).__name__}."]})
+    return Command(goto="check", update={"messages": [ask, reply], "repairs": state.get("repairs", 0) + 1, **_read(reply)})
+
+
+def write_from_records(state: AgentState) -> Command[Literal["finalize"]]:
+    accepted = written.from_records(_pool(state["records"]))
+    return Command(goto="finalize", update={
+        "accepted": [f.model_dump(mode="json") for f in accepted], "suggested": None,
+        "unknown": ["No model is configured, so these findings were written by code from the card records alone."]})
+
+
+def finalize(state: AgentState) -> dict[str, Any]:
+    pool = _pool(state.get("records", {}))
+    accepted = [Finding.model_validate(f) for f in state.get("accepted", [])]
+    unknown = list(state.get("unknown", [])) + list(state.get("dropped", []))
+    cited = {i for f in accepted for i in f.evidence_ids}
+    for record in written.hard_facts(pool):
+        if record.id not in cited and (finding := written.for_hard_fact(record)) is not None:
+            accepted.append(finding)
+            cited.add(record.id)
+    if any(guardrails.too_short(e) for e in pool.records.values()):
+        unknown.append("The card history is too short to tell what is usual for this customer.")
+    suggested = state.get("suggested")
+    if suggested and guardrails.recommends_an_action(suggested):
+        unknown.append("A suggested next step was left out because it recommended an action.")
+        suggested = None
+    unknown = list(dict.fromkeys(unknown))
+    if not accepted and not unknown:
+        unknown = ["The card records fetched did not answer the question."]
+    response = InvestigateResponse(agent=AGENT, findings=accepted, evidence=pool.pick([i for f in accepted for i in f.evidence_ids]),
+                                   could_not_determine=unknown, suggested_next=suggested)
+    return {"response": response.model_dump(mode="json")}
+
+
+def build() -> Any:
+    graph = StateGraph(AgentState, context_schema=AgentContext)
+    for node in (preflight, investigate, tools, summarise, check, repair, write_from_records, finalize):
+        graph.add_node(node.__name__, node)
+    graph.add_edge(START, "preflight")
+    graph.set_finish_point("finalize")
+    # checkpointer=False: never saved, even when run inside a graph that saves its own steps.
+    return graph.compile(checkpointer=False, name=TOKEN_SUB)
+
+
+GRAPH = build()
+
+
+# ---------------------------------------------------------------------------
+# the entry function
+# ---------------------------------------------------------------------------
+
+
+def card_service(
+    request: InvestigateRequest,
+    *,
+    model: BaseChatModel | None = None,
+    http: httpx.Client | None = None,
+) -> InvestigateResponse:
+    """Answer one question about one customer's card. Tests pass a scripted `model` and a stubbed `http`."""
+    if request.topic is not None and request.topic not in TOPICS:
+        return _cannot(f"The card side has no such topic. It has: {', '.join(TOPICS)}.")
+    try:
+        token = _service_token(request.customer_id, request.case_id)
+    except RuntimeError as error:
+        return _cannot(str(error))
+    card = CardTools(customer_id=request.customer_id, token=token, http=http)
+    try:
+        final = GRAPH.invoke(
+            {"request": request.model_dump(mode="json"), "deadline": time.monotonic() + MAX_SECONDS},
+            config={"recursion_limit": RECURSION_LIMIT},
+            context=AgentContext(model=model if model is not None else _default_model(), tools=card),
+        )
+    finally:
+        card.close()
+    return InvestigateResponse.model_validate(final["response"])
 
 
 def _service_token(customer_id: str, case_id: str) -> str:
