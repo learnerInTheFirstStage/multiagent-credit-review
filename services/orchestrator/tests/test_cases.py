@@ -1,4 +1,3 @@
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
@@ -18,23 +17,9 @@ from app.db import Base, SessionLocal, engine
 from app.db.models import Case
 from app.graph import build_graph
 from app.main import app
-from tests.conftest import needs_postgres
+from tests.conftest import bearer, needs_postgres, sender
 from tests.test_graph import GUIDELINES, INVESTIGATION, PAUSE, ask_bank, report, scripted
 from tests.test_signals import SIGNAL  # c_010
-
-SECRET = os.environ["JWT_SECRET"]
-
-
-def bearer(sub="u_analyst", role="analyst", customers=("c_010",), expires_in=300, secret=SECRET, **claims) -> dict:
-    """An Authorization header. A claim set to None is left out of the token."""
-    payload = {"sub": sub, "role": role, "customers": customers, "exp": int(time.time()) + expires_in, **claims}
-    payload = {
-        name: list(value) if isinstance(value, tuple) else value
-        for name, value in payload.items()
-        if value is not None
-    }
-    return {"Authorization": f"Bearer {jwt.encode(payload, secret, algorithm='HS256')}"}
-
 
 def analyst() -> dict:
     return bearer()
@@ -89,9 +74,12 @@ class Service:
         self.client = client
         self.card = fake_card
 
+    def send(self, signal: dict):
+        return self.client.post("/signals", json=signal, headers=sender())
+
     def open_case(self, **changes) -> str:
         """Send a signal. The investigation has run by the time this returns."""
-        return self.client.post("/signals", json={**SIGNAL, **changes}).json()["case_id"]
+        return self.send({**SIGNAL, **changes}).json()["case_id"]
 
     def case(self, case_id: str) -> dict:
         return self.client.get(f"/cases/{case_id}", headers=analyst()).json()
@@ -125,7 +113,7 @@ def status_in_table(case_id: str) -> str:
 def test_a_new_signal_is_investigated_and_then_waits_for_the_analyst(start):
     service = start([*INVESTIGATION, report()])
 
-    accepted = service.client.post("/signals", json=SIGNAL).json()
+    accepted = service.send(SIGNAL).json()
 
     assert accepted["status"] == "queued"  # the answer goes out before the investigation
     case = service.case(accepted["case_id"])
@@ -146,8 +134,8 @@ def test_a_signal_that_joins_or_repeats_starts_no_second_investigation(start, mo
     service = start([*INVESTIGATION, report()])
     case_id = service.open_case()
 
-    joined = service.client.post("/signals", json={**SIGNAL, "signal_id": "sig_552"}).json()
-    repeated = service.client.post("/signals", json=SIGNAL).json()
+    joined = service.send({**SIGNAL, "signal_id": "sig_552"}).json()
+    repeated = service.send(SIGNAL).json()
 
     assert (joined["result"], repeated["result"]) == ("joined", "duplicate")
     assert joined["case_id"] == repeated["case_id"] == case_id
@@ -166,7 +154,7 @@ def test_a_case_that_breaks_is_marked_failed_and_shows_no_unchecked_report(start
     assert case["report"] is None
     assert case["waiting_for"] is None
     # A failed case is closed, so the customer's next signal opens a new one.
-    again = service.client.post("/signals", json={**SIGNAL, "signal_id": "sig_552"}).json()
+    again = service.send({**SIGNAL, "signal_id": "sig_552"}).json()
     assert again["result"] == "opened"
     assert again["case_id"] != case_id
 
@@ -186,6 +174,7 @@ def test_with_no_model_a_signal_is_kept_and_its_case_waits(client):
     }
     decision = client.post(f"/cases/{accepted['case_id']}/decision", json=APPROVE, headers=analyst())
     assert decision.status_code == 503
+    assert decision.json()["error"] == "unavailable"
 
 
 # Deciding
@@ -376,6 +365,8 @@ def test_an_approval_card_did_not_carry_out_is_kept_and_only_its_approver_can_re
     failed = service.decide(case_id, APPROVE, analyst())
 
     assert failed.status_code == 502
+    assert set(failed.json()) == {"error", "message"}
+    assert failed.json()["error"] == "card_unavailable"
     case = service.case(case_id)
     assert case["status"] == "needs_approval"
     assert case["waiting_for"] == "retry"
@@ -420,7 +411,7 @@ def test_a_manager_can_close_a_case_card_never_confirmed_so_it_does_not_block_th
     # Closed for good: the approval cannot be sent after all.
     assert service.decide(case_id, APPROVE, analyst()).status_code == 409
     assert service.card.calls == []
-    again = service.client.post("/signals", json={**SIGNAL, "signal_id": "sig_552"}).json()
+    again = service.send({**SIGNAL, "signal_id": "sig_552"}).json()
     assert again["result"] == "opened"
 
 
@@ -481,7 +472,7 @@ def test_no_action_goes_to_card_without_an_approver_token(monkeypatch, token):
 
 def queued_case(client) -> str:
     """A case nobody has started: its signal arrived while no model was configured."""
-    return client.post("/signals", json=SIGNAL).json()["case_id"]
+    return client.post("/signals", json=SIGNAL, headers=sender()).json()["case_id"]
 
 
 def test_a_queued_case_is_run_when_it_is_picked_up(client):

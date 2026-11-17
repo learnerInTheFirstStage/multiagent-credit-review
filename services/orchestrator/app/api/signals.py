@@ -9,12 +9,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import runner
+from app.auth import User, current_user
 from app.db import get_session
 from app.db.models import OPEN_STATUSES, Case, CaseStatus, SignalRow
 from contracts import Signal
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+
+# The signal generator sends as a service. A person may only as an admin.
+MAY_SEND = ("service", "admin")
+
+
+def may_send(user: User = Depends(current_user)) -> User:
+    # A dependency, so a caller who may not send is refused before the signal is looked at.
+    if user.role not in MAY_SEND:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"The role {user.role} may not send signals")
+    return user
 
 # opened: a new case. joined: the customer already had an open case.
 # duplicate: this signal_id was received before.
@@ -85,6 +96,7 @@ def receive_signal(
     request: Request,
     response: Response,
     background: BackgroundTasks,
+    user: User = Depends(may_send),
     session: Session = Depends(get_session),
 ) -> SignalAccepted:
     """Open a case for a signal, or attach the signal to the customer's open case.
@@ -106,9 +118,10 @@ def receive_signal(
     if result != "opened":
         response.status_code = status.HTTP_200_OK
     log.info(
-        "signal %s for %s: %s, case %s",
+        "signal %s for %s from %s: %s, case %s",
         signal.signal_id,
         signal.customer_id,
+        user.sub,
         result,
         case.case_id,
     )

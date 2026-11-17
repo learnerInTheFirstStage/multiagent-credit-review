@@ -1,17 +1,18 @@
 import logging
+from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import runner
 from app.auth import User, current_user
 from app.card_client import CardError
 from app.db import get_session
-from app.db.models import Case, CaseStatus
+from app.db.models import OPEN_STATUSES, Case, CaseStatus
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -40,6 +41,57 @@ class CaseView(BaseModel):
     report: dict | None
     decisions: list[dict]
     action: dict | None
+
+
+class CaseRow(BaseModel):
+    """One line of the queue. The case page has the rest."""
+
+    case_id: str
+    customer_id: str
+    status: CaseStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class CaseList(BaseModel):
+    cases: list[CaseRow]
+    # How many cases match in all, for paging.
+    total: int
+
+
+@router.get("/cases", response_model=CaseList)
+def list_cases(
+    # Named case_status so it does not hide fastapi's status module in this file.
+    case_status: CaseStatus | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> CaseList:
+    """The queue: the open cases of the customers this token may see, the longest waiting first.
+
+    With ?status= it lists the cases in that one status instead, closed ones included.
+    """
+    mine = Case.customer_id.in_(user.customers)
+    # Open cases only unless asked: otherwise old finished cases would fill the first page.
+    wanted = (mine, Case.status == case_status if case_status else Case.status.in_(OPEN_STATUSES))
+    total = session.scalar(select(func.count()).select_from(Case).where(*wanted))
+    rows = session.scalars(
+        select(Case).where(*wanted).order_by(Case.created_at, Case.case_id).limit(limit).offset(offset)
+    )
+    return CaseList(
+        cases=[
+            CaseRow(
+                case_id=row.case_id,
+                customer_id=row.customer_id,
+                status=CaseStatus(row.status),
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+            for row in rows
+        ],
+        total=total,
+    )
 
 
 def _case(session: Session, case_id: str, user: User, *, lock: bool = False) -> Case:
@@ -114,7 +166,7 @@ def decide(
                 f"{last_approver} can approve again to retry it, or a manager can reject to close the case as failed",
             )
     elif user.role not in MAY_DECIDE[step]:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, f"A {user.role} may not decide the {step} step")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"The role {user.role} may not decide the {step} step")
     elif step == "manager" and user.sub == last_approver:
         # The manager step is a second pair of eyes.
         raise HTTPException(

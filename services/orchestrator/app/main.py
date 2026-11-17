@@ -1,8 +1,12 @@
 import asyncio
 import logging
+from http import HTTPStatus
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException
 from sqlalchemy import text
 
 from app import runner, runtime
@@ -34,6 +38,40 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Orchestrator Service", lifespan=lifespan)
 app.include_router(signals.router)
 app.include_router(cases.router)
+
+# Every error has one shape: {"error": ..., "message": ...}. API doc section 8.
+ERROR_NAMES = {
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    409: "conflict",
+    422: "invalid_request",
+    502: "card_unavailable",
+    503: "unavailable",
+}
+
+
+def _error(code: int, message: str, headers: dict | None = None) -> JSONResponse:
+    name = ERROR_NAMES.get(code) or HTTPStatus(code).phrase.lower().replace(" ", "_")
+    return JSONResponse({"error": name, "message": message}, status_code=code, headers=headers)
+
+
+@app.exception_handler(HTTPException)
+async def http_error(request: Request, error: HTTPException) -> JSONResponse:
+    return _error(error.status_code, str(error.detail), error.headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request: Request, error: RequestValidationError) -> JSONResponse:
+    # Where each problem is and what it is, as one line of text.
+    problems = [f"{'.'.join(str(part) for part in problem['loc'])}: {problem['msg']}" for problem in error.errors()]
+    return _error(422, "; ".join(problems))
+
+
+@app.exception_handler(Exception)
+async def internal_error(request: Request, error: Exception) -> JSONResponse:
+    # The details go to the server's log, never to the caller.
+    return _error(500, "The service failed to handle the request")
 
 
 @app.get("/health", response_model=Health)

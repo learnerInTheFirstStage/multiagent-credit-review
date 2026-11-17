@@ -7,11 +7,12 @@ Turns a signal into a reviewed recommendation with evidence and carries the case
 | Endpoint | What it does |
 |---|---|
 | `GET /health` | Fails if the database is unreachable |
-| `POST /signals` | Opens a case, or joins the case the customer already has open. A repeated signal is ignored. A new case is investigated after the answer is sent. No token check yet |
+| `POST /signals` | Opens a case, or joins the case the customer already has open. A repeated signal is ignored. A new case is investigated after the answer is sent. Needs a `service` or `admin` token |
+| `GET /cases` | The queue: the open cases of the customers the token may see, the longest waiting first. `?status=` lists one status instead, closed ones included. `?limit=` (50, at most 200), `?offset=`. Answers `{"cases": [...], "total": n}` |
 | `GET /cases/{id}` | The case page: status, whose move it is, the checked report, the decisions, the action |
 | `POST /cases/{id}/decision` | `{"decision": "approve" or "reject"}`. Who decides comes from the token |
 
-`GET /cases` (the queue) is not built yet.
+Every endpoint but `/health` needs a token. Every error has one shape, `{"error": "forbidden", "message": "..."}`, with the error names `unauthorized`, `forbidden`, `not_found`, `conflict`, `invalid_request`, `card_unavailable` and `unavailable`.
 
 ## Running cases
 
@@ -32,7 +33,14 @@ With `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` set, every run of the graph
 
 ## Tokens and decisions
 
-`GET /cases/{id}` and the decision endpoint need a bearer token signed with `JWT_SECRET` (HS256), with the claims `sub`, `role`, `customers`, `exp`. The token must list the case's customer.
+A token is a bearer token signed with `JWT_SECRET` (HS256), with the claims `sub`, `role`, `customers`, `exp`. To read or decide a case, the token must list the case's customer.
+
+Until the Auth Service issues tokens, make one for local use:
+
+```bash
+docker compose exec orchestrator python -m app.dev_token --role analyst --sub u_analyst --customers c_010
+docker compose exec orchestrator python -m app.dev_token --role service --sub signal-generator
+```
 
 | Step | Who may decide |
 |---|---|
