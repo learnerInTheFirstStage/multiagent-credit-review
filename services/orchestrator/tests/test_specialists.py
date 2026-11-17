@@ -116,6 +116,40 @@ def test_the_stand_ins_answer_as_the_right_agent():
     assert ask(mock.credit_behavior, "c_002", "Are repayments on time?").agent == "credit_behavior"
 
 
+def test_the_stand_in_says_what_makes_c_002_harmless():
+    # The whole point of c_002: the money went to the customer's own account at another bank.
+    answer = ask(mock.cash_flow, "c_002", "Where did the money go?")
+
+    transfer = next(evidence for evidence in answer.evidence if evidence.id == "txn_8841")
+    assert transfer.data["counterparty_kind"] == "own_account_other_bank"
+    assert "customer's own name" in answer.findings[0].claim
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What was the paying account balance on the due date?",
+        "What was the closing balance of acct_c010_a on 2026-11-05?",
+        "What was the balance of acct_c010_a on 2026-11-05?",
+        "Was there enough balance on 2026-11-05 to cover the repayment?",
+    ],
+)
+def test_a_question_about_the_balance_on_the_day_is_answered_however_it_is_put(question):
+    assert ask(mock.cash_flow, "c_010", question).evidence[0].kind == "daily_balance"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Why did the bank balance fall by $230,000?",
+        "What explains the drop in cash balances this week?",
+        "What were the largest outflows that reduced the balance?",
+    ],
+)
+def test_a_question_about_why_the_balance_fell_is_still_about_the_outflows(question):
+    assert ask(mock.cash_flow, "c_010", question).evidence[0].kind == "bank_transaction"
+
+
 def test_a_follow_up_question_gets_a_different_answer():
     first = ask(mock.cash_flow, "c_010", "Where did the money go?")
     follow_up = ask(mock.cash_flow, "c_010", "What was the paying account balance on the due date?")

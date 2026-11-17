@@ -38,7 +38,10 @@ _CANNED: dict[tuple[str, str], list[tuple[tuple[str, ...], InvestigateResponse]]
                 agent="cash_flow",
                 findings=[
                     Finding(
-                        claim="$400,000 was transferred on Nov 7 to an account that is not linked.",
+                        claim=(
+                            "$400,000 was transferred on Nov 7 to an account at another bank held in the "
+                            "customer's own name. That account is not linked."
+                        ),
                         confidence="high",
                         evidence_ids=["txn_8841"],
                     ),
@@ -57,7 +60,12 @@ _CANNED: dict[tuple[str, str], list[tuple[tuple[str, ...], InvestigateResponse]]
                     Evidence(
                         id="txn_8841",
                         kind="bank_transaction",
-                        data={"date": "2026-11-07", "amount_cents": -40000000, "type": "transfer"},
+                        data={
+                            "date": "2026-11-07",
+                            "amount_cents": -40000000,
+                            "type": "transfer",
+                            "counterparty_kind": "own_account_other_bank",
+                        },
                     ),
                     Evidence(
                         id="txn_8802",
@@ -108,7 +116,8 @@ _CANNED: dict[tuple[str, str], list[tuple[tuple[str, ...], InvestigateResponse]]
     ],
     ("cash_flow", "c_010"): [
         (
-            ("paying account", "due date"),
+            # Narrow on purpose: "why did the balance fall" is a question about the outflows, not this one.
+            ("paying account", "due date", "balance on", "balance of", "closing balance", "enough balance"),
             InvestigateResponse(
                 agent="cash_flow",
                 findings=[

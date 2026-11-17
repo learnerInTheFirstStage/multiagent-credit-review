@@ -37,6 +37,7 @@ def case_graph() -> Iterator:
             load_guidelines=guidelines.load,
             carry_out=card_client.carry_out,
             checkpointer=checkpointer,
+            structured_output=_structured_output(),
         )
         yield graph.with_config({"callbacks": callbacks})
 
@@ -70,8 +71,22 @@ def _chat_model() -> BaseChatModel | None:
     name = os.environ.get("LLM_MODEL")
     if not name:
         return None
-    api_key = os.environ.get("LLM_API_KEY")
-    return init_chat_model(name, **({"api_key": api_key} if api_key else {}))
+    # A fixed limit, enough for the model's reasoning and a full report. Left out, LangChain's Anthropic
+    # default is the model's maximum, which Anthropic's SDK refuses for a call that does not stream.
+    settings = {"max_tokens": 16000}
+    if api_key := os.environ.get("LLM_API_KEY"):
+        settings["api_key"] = api_key
+    return init_chat_model(name, **settings)
+
+
+def _structured_output() -> dict:
+    """How the model is asked for the gap review and the report.
+
+    Empty means a tool call, which every provider has. LLM_STRUCTURED_OUTPUT names a
+    provider's own method instead, where it has one: json_schema on Anthropic and OpenAI.
+    """
+    method = os.environ.get("LLM_STRUCTURED_OUTPUT")
+    return {"method": method} if method else {}
 
 
 @contextmanager
