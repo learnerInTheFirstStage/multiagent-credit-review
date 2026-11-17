@@ -703,13 +703,11 @@ def test_the_requests_the_service_has_to_refuse_are_sent_as_the_dataset_describe
     assert records["t_03"]["got"] == {"status": 401}
     assert records["t_04"]["got"] == {"status": 403}
     assert records["t_05"]["got"] == {"status": 403, "case_opened": False}
-    assert all(records[n]["passed"] for n in ("t_01", "t_03", "t_04", "t_05"))
-    # t_02 is not asserted either way: today the service opens a case for a customer nobody has
-    # heard of, and the dataset is there to show that. What its record says has to be what happened.
+    assert records["t_02"]["got"] == {"status": 422, "case_opened": False}
+    assert all(records[n]["passed"] for n in ("t_01", "t_02", "t_03", "t_04", "t_05"))
+    # What t_02's record says has to be what happened in the database.
     with SessionLocal() as session:
-        opened = session.scalar(select(Case).where(Case.customer_id == "c_099")) is not None
-    assert records["t_02"]["got"]["case_opened"] is opened
-    assert records["t_02"]["passed"] is (not opened and records["t_02"]["got"]["status"] == 422)
+        assert session.scalar(select(Case).where(Case.customer_id == "c_099")) is None
 
 
 def test_with_no_case_to_ask_for_the_two_reading_requests_are_errors_and_the_rest_still_run(start):

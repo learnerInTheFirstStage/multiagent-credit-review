@@ -60,8 +60,8 @@ def _data_files() -> tuple[Path, ...]:
 
     The evaluation names two: the team's file and its own extra customers.
     """
-    if named := os.environ.get("SHARED_CUSTOMERS_FILE"):
-        return tuple(Path(name) for name in named.split(os.pathsep))
+    if named := [name for name in os.environ.get("SHARED_CUSTOMERS_FILE", "").split(os.pathsep) if name]:
+        return tuple(Path(name) for name in named)
     # The repository root when run from a checkout, / in the image.
     for folder in Path(__file__).resolve().parents:
         if (found := folder / "data" / "shared_customers.yaml").exists():
@@ -71,6 +71,11 @@ def _data_files() -> tuple[Path, ...]:
 
 def _data() -> dict:
     return _read(_data_files())
+
+
+def customer_ids() -> frozenset[str]:
+    """The customers the data files hold: the only ones the stand-ins have records for."""
+    return frozenset(_data()["customers"])
 
 
 @cache

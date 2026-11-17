@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import runner
+from app.agents import mock
 from app.auth import User, current_user
 from app.db import get_session
 from app.db.models import OPEN_STATUSES, Case, CaseStatus, SignalRow
@@ -65,6 +66,13 @@ def _place(session: Session, signal: Signal) -> tuple[Case, Result]:
                 f"signal_id {signal.signal_id} was already received with different content",
             )
         return session.get(Case, seen.case_id), "duplicate"
+
+    # The data files the stand-in specialists answer from are the only customer list the POC has. A case for
+    # anyone else would be investigated on no records. Reached only after may_send, so only a sender learns
+    # which ids exist. KAN-36: with the real specialists, ask Bank and Card which customers they hold.
+    # A plain 422: Starlette renamed its constant, and requirements.txt allows versions from before that.
+    if signal.customer_id not in mock.customer_ids():
+        raise HTTPException(422, f"customer {signal.customer_id} is not known")
 
     case = _open_case(session, signal.customer_id)
     result: Result = "joined"
