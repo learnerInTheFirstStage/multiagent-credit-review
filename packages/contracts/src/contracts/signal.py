@@ -1,21 +1,12 @@
-from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from contracts.common import CustomerId, IsoDate
 
 # Money is an integer number of US cents. Strict: "9600000", 9600000.0 and true are refused.
 Cents = Annotated[int, Field(strict=True)]  # may be negative: an overdrawn account
 NonNegativeCents = Annotated[int, Field(strict=True, ge=0)]
-
-
-def _parse_iso_date(value: object) -> date:
-    # Left to itself Pydantic reads a number, or a string of digits, as a Unix timestamp.
-    if not isinstance(value, str):
-        raise ValueError("a date must be an ISO 8601 string such as 2026-11-10")
-    return date.fromisoformat(value)
-
-
-IsoDate = Annotated[date, BeforeValidator(_parse_iso_date)]
 
 ReviewReason = Literal["large_cut", "failed_repayment", "incomplete_data", "large_limit"]
 
@@ -71,7 +62,7 @@ class Signal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     signal_id: str = Field(min_length=1, max_length=64)
-    customer_id: str = Field(pattern=r"^c_[0-9]{3}$")
+    customer_id: CustomerId
     # The day the numbers were read.
     as_of: IsoDate
     current_limit_cents: NonNegativeCents
