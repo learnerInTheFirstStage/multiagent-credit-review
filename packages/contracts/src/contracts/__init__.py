@@ -7,5 +7,6 @@ once agreed. See KAN-13 and KAN-14.
 """
 
 from contracts.health import Health
+from contracts.signal import Signal
 
-__all__ = ["Health"]
+__all__ = ["Health", "Signal"]
