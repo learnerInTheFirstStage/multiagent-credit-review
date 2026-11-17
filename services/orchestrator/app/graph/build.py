@@ -369,4 +369,4 @@ def build_graph(
     graph.add_edge("draft_report", "check_report")
     graph.add_conditional_edges("check_report", after_check, ["draft_report", "analyst_approval"])
     graph.add_edge("act", END)
-    return graph.compile(checkpointer=checkpointer)
+    return graph.compile(checkpointer=checkpointer, name="credit-review-case")

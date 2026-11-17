@@ -7,6 +7,8 @@ from contextlib import contextmanager
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
+from langfuse import Langfuse
+from langfuse.langchain import CallbackHandler
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -27,8 +29,8 @@ def case_graph() -> Iterator:
         log.warning("LLM_MODEL is not set. Signals are stored and their cases wait as queued.")
         yield None
         return
-    with postgres_checkpointer() as checkpointer:
-        yield build_graph(
+    with postgres_checkpointer() as checkpointer, tracing() as callbacks:
+        graph = build_graph(
             model=model,
             # Stand-ins until the real specialists can be called (KAN-36).
             specialists={"cash_flow": mock.cash_flow, "credit_behavior": mock.credit_behavior},
@@ -37,6 +39,31 @@ def case_graph() -> Iterator:
             carry_out=card_client.carry_out,
             checkpointer=checkpointer,
         )
+        yield graph.with_config({"callbacks": callbacks})
+
+
+@contextmanager
+def tracing() -> Iterator[list]:
+    """LangFuse callbacks for every run of the graph, or none while its keys are not set.
+
+    Set once, here. The specialists run inside the graph, so their model calls land
+    in the same trace with no tracing code of their own, as long as they call the
+    model through LangChain. LangFuse reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+    and LANGFUSE_BASE_URL itself.
+    """
+    public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+    if not (public_key and os.environ.get("LANGFUSE_SECRET_KEY")):
+        log.warning("LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are not set. Cases run without tracing.")
+        yield []
+        return
+    # The client comes first: a handler made for a key that has no client yet is switched off.
+    client = Langfuse()  # reads the three LANGFUSE_ settings itself
+    handler = CallbackHandler(public_key=public_key)
+    try:
+        yield [handler]
+    finally:
+        # Sends what is still queued. If LangFuse does not answer, this gives up after a few seconds.
+        client.shutdown()
 
 
 def _chat_model() -> BaseChatModel | None:

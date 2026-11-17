@@ -56,10 +56,11 @@ Compose falls back to local defaults for the passwords and the signing secret, s
 | `AUTH_DB_PASSWORD`, `BANK_DB_PASSWORD`, `CARD_DB_PASSWORD`, `ORCHESTRATOR_DB_PASSWORD` | postgres and the matching service | letters, digits and hyphens only, because they go into a connection URL |
 | `JWT_SECRET` | the Orchestrator today, every service later | signs and checks tokens. One shared secret in the POC, 32 characters or more |
 | `LLM_MODEL`, `LLM_API_KEY` | Orchestrator | the model cases run on, as `provider:model`. Empty by default: signals are stored and their cases wait as `queued` |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Orchestrator | LangFuse tracing. Empty by default: cases run without tracing. Keys go in your own `.env` only |
 
 Database passwords are applied when the Postgres volume is first created. After changing one, run `docker compose down -v` and start again.
 
-Names reserved for later, so every service uses the same ones: `AS_OF_DATE`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`. The last three are used by the Orchestrator only.
+Reserved for later, so every service uses the same name: `AS_OF_DATE`.
 
 ## Layout
 

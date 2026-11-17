@@ -92,7 +92,7 @@ def decide(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "No model is configured, so no case can run")
     # Locked until this request ends, so two answers to one approval cannot both go through.
     case = _case(session, case_id, user, lock=True)
-    config = runner.thread(case_id)
+    config = runner.thread(case_id, user_id=user.sub)
     snapshot = graph.get_state(config)
     step = runner.waiting_for(snapshot)
 
