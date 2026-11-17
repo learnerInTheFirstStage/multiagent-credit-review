@@ -11,7 +11,7 @@ from typing import get_args
 
 import pytest
 import yaml
-from sqlalchemy import select
+from sqlalchemy import create_engine, select, text
 
 from app import history
 from app.db import Base, SessionLocal, engine
@@ -798,11 +798,12 @@ def test_a_seed_with_a_vector_is_still_the_same_content():
     assert seed([entry()], expect_clean=True, clock=CLOCK) == {"seeded": 0, "already_there": 1}
 
 
-def run_seed_command(*args: str, embedder: str | None = "hash:384") -> subprocess.CompletedProcess:
+def run_seed_command(*args: str, embedder: str | None = "hash:384",
+                     database_url: str | None = None) -> subprocess.CompletedProcess:
     # The child must use this process's database. Not os.environ's URL: a test module that imports
     # tests.conftest runs conftest a second time, which points DATABASE_URL at another file.
     environment = {key: value for key, value in os.environ.items() if key != "EMBEDDINGS_MODEL"}
-    environment["DATABASE_URL"] = engine.url.render_as_string(hide_password=False)
+    environment["DATABASE_URL"] = database_url or engine.url.render_as_string(hide_password=False)
     if embedder:
         environment["EMBEDDINGS_MODEL"] = embedder
     return subprocess.run(
@@ -922,3 +923,42 @@ def test_the_seed_command_refuses_a_file_that_is_not_yaml_without_a_traceback(tm
     assert "Not seeded: " in done.stderr and "broken.yaml" in done.stderr
     assert "Traceback" not in done.stderr
     assert reviews() == []
+
+
+def test_the_seed_command_on_a_database_with_no_tables_says_not_seeded_in_one_line(tmp_path):
+    # The service creates the tables at start. Run before that, the command names the driver's error only.
+    empty = tmp_path / "empty.db"
+
+    done = run_seed_command(
+        seed_file(tmp_path, "one.yaml", [entry("seed_a")]), "--expect-clean", database_url=f"sqlite:///{empty}"
+    )
+
+    assert done.returncode == 1
+    assert done.stderr.startswith("Not seeded: ")
+    assert len(done.stderr.splitlines()) == 1
+    assert "no such table" in done.stderr
+    # str(error) would carry the SQL and a link. The database URL is never shown.
+    for leak in ("Traceback", "[SQL", "sqlalche.me", "sqlite:", str(empty)):
+        assert leak not in done.stderr
+    assert done.stdout == ""
+
+
+def test_the_seed_command_commits_nothing_when_the_database_refuses_the_vectors(tmp_path):
+    # The reviews are flushed before their vectors are written. A refusal then must leave no half-seeded rows,
+    # and SQLite raises it as an IntegrityError, not an OperationalError.
+    database_url = f"sqlite:///{tmp_path / 'refusing.db'}"
+    refusing = create_engine(database_url)
+    Base.metadata.create_all(refusing)
+    with refusing.begin() as connection:
+        connection.execute(
+            text("CREATE TRIGGER no_vectors BEFORE UPDATE ON reviews BEGIN SELECT RAISE(ABORT, 'no vectors'); END")
+        )
+
+    done = run_seed_command(seed_file(tmp_path, "one.yaml", [entry("seed_a")]), database_url=database_url)
+
+    assert done.returncode == 1
+    assert done.stderr == "Not seeded: database error: no vectors\n"
+    with refusing.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM cases")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM reviews")) == 0
+    refusing.dispose()

@@ -4,15 +4,16 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from langgraph.types import Command
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import runner
+from app import history, runner
 from app.auth import User, current_user
 from app.card_client import CardError
 from app.db import get_session
 from app.db.models import OPEN_STATUSES, Case, CaseStatus
+from app.graph import facts
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -29,6 +30,10 @@ class Decision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["approve", "reject"]
+    # Why, in the person's words. Kept with the case's review, where later searches read it masked.
+    note: str | None = Field(default=None, max_length=500)
+    # What the person concluded on a report that handed the case over. Nothing is sent to Card for it.
+    decided: Literal["keep_limit", "reduce_limit", "pause_card", "request_documents"] | None = None
 
 
 class CaseView(BaseModel):
@@ -41,6 +46,26 @@ class CaseView(BaseModel):
     report: dict | None
     decisions: list[dict]
     action: dict | None
+
+
+class CasePath(BaseModel):
+    """How a case was investigated: what was asked, searched and checked, as ids and labels. For grading."""
+
+    case_id: str
+    flow: str | None
+    policy_version: str | None
+    rounds: int
+    # Calls refused before they were sent, every one of them.
+    refusals: int
+    # The questions ended because the round limit was reached.
+    out_of_rounds: bool
+    questions: list[dict]
+    searches: list[dict]
+    gaps: list[dict]
+    drafts: list[dict]
+    # The ids of the records the case was given about the customer's earlier reviews.
+    history: list[str]
+    handed_over_by: Literal["report", "low_confidence", "gave_up"] | None
 
 
 class CaseRow(BaseModel):
@@ -130,6 +155,46 @@ def read_case(
     return _view(_case(session, case_id, user), request.app.state.graph)
 
 
+@router.get("/cases/{case_id}/path", response_model=CasePath)
+def read_path(
+    case_id: str,
+    request: Request,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> CasePath:
+    """The question path of a case. Empty for a case nobody ran, and while no model is configured."""
+    case = _case(session, case_id, user)
+    graph = request.app.state.graph
+    state = graph.get_state(runner.thread(case.case_id)).values if graph is not None else {}
+    asked = state.get("asked", [])
+    drafts = state.get("draft_log", [])
+    last_draft = drafts[-1] if drafts else {}
+    handed_over_by = None
+    if state.get("status") in REPORT_IS_CHECKED and (state.get("report") or {}).get("recommendation") == "needs_human":
+        if not state.get("check", {}).get("passed"):
+            handed_over_by = "gave_up"
+        elif last_draft.get("result") == "passed_low_confidence" and last_draft.get("recommendation") != "needs_human":
+            handed_over_by = "low_confidence"  # code turned a draft that acted into a hand-over
+        else:
+            handed_over_by = "report"
+    gaps = state.get("gap_log", [])
+    return CasePath(
+        case_id=case.case_id,
+        flow=state.get("flow"),
+        policy_version=state.get("policy_version"),
+        rounds=state.get("rounds", 0),
+        # Not state["refusals"]: that one stops counting once the free refusals are used up.
+        refusals=sum(1 for entry in asked if entry.get("outcome") == "refused"),
+        out_of_rounds=any(entry.get("ended_by") == "round_limit" for entry in gaps),
+        questions=asked,
+        searches=state.get("searches", []),
+        gaps=gaps,
+        drafts=drafts,
+        history=[record["id"] for record in state.get("facts", []) if record["id"].startswith("hist_")],
+        handed_over_by=handed_over_by,
+    )
+
+
 @router.post("/cases/{case_id}/decision", response_model=CaseView)
 def decide(
     case_id: str,
@@ -152,13 +217,23 @@ def decide(
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"Case {case_id} is {case.status}. It is not waiting for a decision"
         )
+    # Before the steps below: a rejection on the retry step would otherwise close the case first.
+    if decision.decided is not None and not (
+        step == "analyst"
+        and decision.decision == "approve"
+        and snapshot.values["report"]["recommendation"] == "needs_human"
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "What the person decided is kept only when the analyst step approves a report that hands the case over",
+        )
     last_approver = snapshot.values["decisions"][-1]["by"] if snapshot.values["decisions"] else None
     if step == "retry":
         # Approved earlier, but Card has not confirmed the action.
         if decision.decision == "approve" and user.sub == last_approver:
             resume = None  # the approver sends it again, under the same approval id
         elif decision.decision == "reject" and user.role == "manager":
-            return _close_unconfirmed(session, case, graph, user)
+            return _close_unconfirmed(session, case, graph, user, decision.note)
         else:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -173,7 +248,8 @@ def decide(
             status.HTTP_403_FORBIDDEN, f"{user.sub} approved the analyst step. The manager step needs another person"
         )
     else:
-        resume = Command(resume={"decision": decision.decision, "by": user.sub})
+        # A note and what was decided travel only when given, so a decision without them looks as it always did.
+        resume = Command(resume={**decision.model_dump(exclude_none=True), "by": user.sub})
 
     try:
         state = graph.invoke(resume, config, context={"approver_token": user.token})
@@ -185,23 +261,31 @@ def decide(
         ) from error
 
     case.status = state["status"]
+    # In the transaction that writes the status, so a closed case is never left without its review.
+    history.record(session, case, state, ledger=facts.ledger)
     session.commit()
     log.info("case %s: %s by %s at the %s step, now %s", case_id, decision.decision, user.sub, step, case.status)
     return _view(case, graph)
 
 
-def _close_unconfirmed(session: Session, case: Case, graph, user: User) -> CaseView:
+def _close_unconfirmed(session: Session, case: Case, graph, user: User, note: str | None) -> CaseView:
     """Close a case whose approved action Card never confirmed, so it does not stay open for good.
 
     It ends as failed, not rejected: Card may have applied the action and lost its answer,
     so a person has to check. Nothing more is sent.
     """
+    closing = {"step": "retry", "decision": "reject", "by": user.sub}
+    # Cleaned as the graph cleans the note of any other decision.
+    if note and (note := note.replace("\x00", "").strip()):
+        closing["note"] = note
+    config = runner.thread(case.case_id)
     graph.update_state(
-        runner.thread(case.case_id),
-        {"status": "failed", "decisions": [{"step": "retry", "decision": "reject", "by": user.sub}]},
+        config,
+        {"status": "failed", "decisions": [closing]},
         as_node="act",  # as if the step had run, so the graph ends here
     )
     case.status = CaseStatus.FAILED
+    history.record(session, case, graph.get_state(config).values, ledger=facts.ledger)
     session.commit()
     log.warning("case %s: closed as failed by %s, Card never confirmed the approved action", case.case_id, user.sub)
     return _view(case, graph)

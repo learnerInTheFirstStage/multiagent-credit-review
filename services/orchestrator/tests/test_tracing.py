@@ -86,8 +86,8 @@ def service_graph(monkeypatch, script):
     return runtime.case_graph()
 
 
-# A report that recommends nothing, so that no call to Card is part of these runs.
-NOTHING_TO_DO = report(likely_cause="no_clear_cause", recommendation="needs_human", guideline_ids=[], evidence=[])
+# A report that passes the check with low confidence, so code hands it over and no call to Card is part of these runs.
+NOTHING_TO_DO = report(recommendation="pause_card", guideline_ids=["G-08b"], confidence="low")
 
 
 @pytest.mark.parametrize(

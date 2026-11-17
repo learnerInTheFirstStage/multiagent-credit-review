@@ -14,6 +14,8 @@ import json
 import os
 from pathlib import Path
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app import history, retrieval
 from app.agents import mock
 from app.db import SessionLocal
@@ -36,10 +38,15 @@ if __name__ == "__main__":
     with SessionLocal() as session:
         try:
             counts = history.seed(session, history.read_seeds(args.paths), expect_clean=args.expect_clean, clock=clock)
+            counts["embedded"] = 0
+            while embedder is not None and (filled := retrieval.fill_vectors(session, embedder)):
+                counts["embedded"] += filled
+            session.commit()
         except ValueError as error:
             parser.exit(1, f"Not seeded: {error}\n")
-        counts["embedded"] = 0
-        while embedder is not None and (filled := retrieval.fill_vectors(session, embedder)):
-            counts["embedded"] += filled
-        session.commit()
+        except SQLAlchemyError as error:
+            session.rollback()
+            # The driver's first line only. str(error) carries the SQL, its parameters and a link.
+            lines = str(getattr(error, "orig", None) or "").splitlines()
+            parser.exit(1, f"Not seeded: database error: {lines[0] if lines else type(error).__name__}\n")
     print(json.dumps(counts))

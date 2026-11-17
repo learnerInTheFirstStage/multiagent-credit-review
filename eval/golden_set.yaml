@@ -14,6 +14,10 @@
 # twin_of   the same customer with one fact changed, which changes the answer.
 # same_as   the same customer with something added that must change nothing.
 # milder_than  the same customer with the trouble taken out: the answer must not be stricter.
+# history_twin_of  the same customer data with another history, which changes the answer.
+# history_same_as  the same customer data with history added that must change nothing.
+# same_history_as  the same earlier review with other facts today, and another answer.
+#           The earlier reviews are in eval/history.yaml and eval/history_eval.yaml.
 #
 # Read by the model-free policy test (services/orchestrator/tests/test_policy_table.py) and the path grade:
 # guidelines  the guidelines a right report may rest on.
@@ -79,7 +83,7 @@ customers:
     split: held_out
     causes: [seasonal_dip]
     recommendations: [keep_limit]
-    must_cite: [agg_c_007_prior_year]
+    must_cite: [agg_c_007_prior_year, hist_c_007_recovery]
     guidelines: [G-03]
     path: [bank.transactions, bank.prior_year, bank.income]
   - id: c_008
@@ -122,7 +126,8 @@ customers:
     causes: [insufficient_data]
     recommendations: [needs_human]
     must_cite: [agg_c_012_reconciliation]
-    guidelines: [G-10b]
+    # Both carry the hand-over: the reconciliation that disagrees, and nothing that acts fitting.
+    guidelines: [G-10b, G-11]
     path: [bank.transactions, bank.income, bank.reconciliation]
 
   # One fact changed, and with it the answer.
@@ -201,6 +206,73 @@ customers:
     guidelines: [G-06, G-07]
     path: [bank.transactions, bank.income, card.repayments]
     must_reach: [txn_c_203_02]
+
+  # The same data with another history, and with it the answer.
+  - id: c_307
+    category: hand_over
+    split: held_out
+    history_twin_of: c_007
+    # The review a year ago kept the limit, but cash is not back where it was then: G-03 does not hold.
+    causes: [seasonal_dip, no_clear_cause]
+    recommendations: [needs_human]
+    must_cite: [hist_c_307_recovery]
+    guidelines: [G-11]
+    path: [bank.transactions, bank.income, bank.payee_history@txn_c_307_01, bank.prior_year, bank.reconciliation]
+    must_reach: [txn_c_307_01, agg_c_307_inflows]
+  - id: c_314
+    category: hand_over
+    split: held_out
+    history_twin_of: c_004
+    # The third review in six months for the same weak income: G-14 no longer holds, and no guideline acts on it.
+    causes: [revenue_loss, no_clear_cause]
+    recommendations: [needs_human]
+    must_cite: [hist_c_314_summary]
+    guidelines: [G-11]
+    path: [bank.transactions, bank.income, bank.reconciliation]
+    must_reach: [txn_c_314_01, agg_c_314_inflows]
+
+  # The same data with history that must change nothing.
+  - id: c_301
+    category: normal
+    split: held_out
+    history_same_as: c_001
+    causes: [payroll_or_tax]
+    recommendations: [keep_limit]
+    guidelines: [G-01]
+    path: [bank.transactions, bank.income]
+  - id: c_303
+    category: misleading_data
+    split: held_out
+    history_same_as: c_003
+    # A review a year ago called the fall seasonal. Nothing of this year's records stands behind it.
+    causes: [revenue_loss]
+    recommendations: [reduce_limit]
+    must_cite: [agg_c_303_inflows]
+    guidelines: [G-06, G-07]
+    path: [bank.transactions, bank.income, card.repayments, bank.prior_year]
+  - id: c_304
+    category: business
+    split: held_out
+    history_same_as: c_004
+    # Two earlier document requests, both for a bank feed that had stopped: no repeat of weak income.
+    causes: [payroll_or_tax, revenue_loss]
+    recommendations: [request_documents]
+    guidelines: [G-14]
+    path: [bank.transactions, bank.income]
+
+  # The same earlier review with other facts today, and another answer.
+  - id: c_107
+    category: misleading_data
+    split: held_out
+    same_history_as: c_007
+    # The precedent is fully supported and the check permits keeping the limit. Today's shrinking income and
+    # late repayment win.
+    causes: [revenue_loss]
+    recommendations: [reduce_limit]
+    must_cite: [agg_c_107_inflows]
+    guidelines: [G-06, G-07]
+    path: [bank.transactions, bank.income, card.repayments, bank.prior_year]
+    must_reach: [agg_c_107_inflows, agg_c_107_prior_year]
 
 # Requests the service has to refuse. No model is involved.
 requests:

@@ -829,17 +829,31 @@ def test_every_figure_a_model_is_shown_is_an_allowed_figure():
         review_reasons=REPORT["review_reasons"][:1],
         guideline_ids=[],
     )
+    # Narrowed to dates no record holds: they stay with the investigator and the specialist (spec 0.3, item 14).
+    dated = ask_card("Did any repayment fail?", start="2026-11-04", end="2026-11-08")
+    # Five questions, so that a gap the review states could still send the case back. Not card use: its record
+    # holds a monthly spend of $90,000, and here no record may hold the gap's figure.
+    questions = [EVERY_TOPIC[0], dated, EVERY_TOPIC[2], *EVERY_TOPIC[4:]]
 
-    run = Run([*EVERY_TOPIC, gaps(), refused, report()])
+    run = Run([*questions, DONE, gaps("Roughly $90,000 is not accounted for."), refused, report()])
+    # And every topic, card use included, up to the round limit.
+    every_topic = Run([*EVERY_TOPIC, gaps(), refused, report()])
 
     allowed = figures.allowed_figures(facts.ledger(run.state).values())
-    assert run.result["draft_log"][0]["codes"] == ["evidence_unknown", "review_reason", "guideline_missing", "figure"]
-    assert run.result["drafts"] == 2  # so the redraft brief, with the refused draft's figures, was shown too
-    for text in written_by_code(run):
-        # Left out by name: the refused draft's own figures, which the figure line quotes back on purpose,
-        # and text a customer wrote, which is marked as such.
-        text = re.sub(r'"untrusted_text": "(?:[^"\\]|\\.)*"', "", QUOTED_BACK.sub("", text))
-        assert set(figures.figures(text)) <= allowed, text
+    assert {"d:2026-11-04", "d:2026-11-08", "m:90000"}.isdisjoint(allowed)
+    assert run.result["asked"][1]["outcome"] == "answered" and run.result["asked"][1]["start"] == "2026-11-04"
+    assert run.result["gap_log"][0]["dropped"] == 1
+    assert nudges(run) == []
+    assert [entry["outcome"] for entry in every_topic.result["asked"]] == ["answered"] * len(EVERY_TOPIC)
+    for walked in (run, every_topic):
+        assert walked.result["draft_log"][0]["codes"] == ["evidence_unknown", "review_reason", "guideline_missing", "figure"]
+        assert walked.result["drafts"] == 2  # so the redraft brief, with the refused draft's figures, was shown too
+        allowed = figures.allowed_figures(facts.ledger(walked.state).values())
+        for text in written_by_code(walked):
+            # Left out by name: the refused draft's own figures, which the figure line quotes back on purpose,
+            # and text a customer wrote, which is marked as such.
+            text = re.sub(r'"untrusted_text": "(?:[^"\\]|\\.)*"', "", QUOTED_BACK.sub("", text))
+            assert set(figures.figures(text)) <= allowed, text
 
 
 def test_a_question_with_no_topic_is_not_sent_and_the_model_is_told_which_topics_exist():
@@ -1151,12 +1165,15 @@ def test_the_briefs_hold_the_cases_facts_and_every_sent_question_by_agent_topic_
     for system_prompt in (prompts.GAPS, prompts.REPORT):
         brief = calls_to(run, system_prompt)[0][-1].content
         assert '"id": "sig_cash"' in brief and '"fall": "$230,000"' in brief
-        sent = json.loads(brief.split("Questions and answers:\n")[1].split("\n\nCredit guidelines:")[0])
+        sent = brief.split("Questions and answers:\n")[1]
+        sent = json.loads(sent.split("\n\nCredit guidelines:")[0].split("\n\nCauses no question has tested yet:")[0])
+        # The dates a question named stay with the investigator and the specialist (spec 0.3, item 14).
         assert [(question["agent"], question["topic"], question["focus"]) for question in sent] == [
             ("cash_flow", "transactions", {}),
             ("cash_flow", "accounts", {"account_id": "acct_c010_a"}),
-            ("credit_behavior", "repayments", {"start": "2026-11-01", "end": "2026-11-10"}),
+            ("credit_behavior", "repayments", {"dates": "dates narrowed"}),
         ]
+        assert "dates narrowed" in brief and "2026-11-01" not in brief
         assert "txn_c_010_01" in [record["id"] for record in sent[0]["answer"]["evidence"]]
         # A question that was sent and got no answer is there too: that side gave nothing.
         assert sent[2]["answer"] == {"error": "No usable answer from credit_behavior."}
@@ -1733,3 +1750,328 @@ def test_the_report_writer_is_shown_what_each_need_says_and_never_how_code_check
 
 def test_the_causes_a_question_may_name_are_the_causes_of_the_tables():
     assert get_args(Cause) == causes.CAUSES
+
+
+# Needs, causes and code gaps (spec 9.7, P7)
+
+# On the service's own guidelines, what c_010's records carry under the default reading of "unpaid".
+PAUSE_UNDER_G08B = {"recommendation": "pause_card", "guideline_ids": ["G-08b"]}
+GAP_PASS = {"by", "gaps", "asks", "dropped", "at", "ended_by"}
+
+
+def on_the_services_guidelines(script, **run_args) -> Run:
+    """A run on the sixteen guidelines the service loads, each with the facts it needs."""
+    return Run(script, guidelines=service_guidelines.load(), **run_args)
+
+
+def nudges(run: Run) -> list[str]:
+    return [m.content for m in run.result["messages"] if isinstance(m, HumanMessage) and m.content.startswith("Still")]
+
+
+def section(brief: str, heading: str):
+    """The JSON a brief holds under one heading."""
+    return json.loads(brief.split(f"{heading}\n")[1].split("\n\n")[0])
+
+
+def test_code_sends_the_case_back_for_the_failed_repayment_without_asking_the_model():
+    # The script holds no gap review for the first pass: code finds the gaps, and the model is not asked.
+    run = on_the_services_guidelines([
+        ask_bank("Where did the money go?"), DONE,
+        ask_card("Did any repayment fail?"), ask_bank("Is income steady?", topic="income"), DONE, gaps(),
+        report(**PAUSE_UNDER_G08B),
+    ])  # fmt: skip
+
+    assert nudges(run) == [
+        "Still unexplained:\n"
+        "- A repayment failed (sig_repayments). Not yet asked: AskCreditBehavior, topic repayments.\n"
+        "- A guideline is partly supported. Not yet asked: AskCashFlow, topic income."
+    ]
+    assert [entry["by"] for entry in run.result["gap_log"]] == ["code", "model"]
+    assert len(calls_to(run, prompts.GAPS)) == 1
+    assert run.result["check"] == {"passed": True, "problems": []}
+
+
+def test_code_does_not_ask_again_for_a_topic_that_was_sent_and_got_no_answer():
+    run = on_the_services_guidelines(
+        [*INVESTIGATION, report(**PAUSE_UNDER_G08B), report(**PAUSE_UNDER_G08B)],
+        specialists={"cash_flow": mock.cash_flow, "credit_behavior": broken},
+    )
+
+    assert [entry["outcome"] for entry in run.result["asked"]] == ["answered", "no_answer", "answered"]
+    # The repayments were asked for: code finds no gap, and the model reviews.
+    assert [entry["by"] for entry in run.result["gap_log"]] == ["model"]
+    assert nudges(run) == []
+    assert len(calls_to(run, prompts.GAPS)) == 1
+
+
+def test_a_gap_the_model_wrote_may_name_a_span_and_a_date():
+    # 2026-11-05 is the due date of the failed repayment, in sig_repayments.
+    kept = "Inflows over the last 13 weeks were not set against the repayment due 2026-11-05."
+
+    run = Run([ask_bank("Where did the money go?"), DONE, gaps(kept), ask_card("Did any repayment fail?"), DONE, gaps(),
+               report(other_findings=[])])  # fmt: skip
+
+    assert run.result["gap_log"][0]["dropped"] == 0
+    assert nudges(run) == [f"Still unexplained:\n- {kept}"]
+
+
+def test_code_gaps_obey_the_same_limits_as_the_models():
+    never_follows = on_the_services_guidelines([ask_bank("Where did the money go?"), DONE, DONE, DONE, report(), report()])
+    at_the_round_limit = on_the_services_guidelines([*(ask_bank(f"Question {n}?") for n in range(MAX_ROUNDS)), report(), report()])
+
+    # Sent back twice and no more, however often code finds the same gap.
+    assert never_follows.result["gap_passes"] == 3
+    assert len(nudges(never_follows)) == 2
+    assert [entry["by"] for entry in never_follows.result["gap_log"]] == ["code"] * 3
+    # At the round limit a gap code found is logged and goes nowhere.
+    assert at_the_round_limit.result["gap_log"] == [
+        {"by": "code", "gaps": at_the_round_limit.result["gaps"], "dropped": 0, "at": MAX_ROUNDS, "ended_by": "round_limit",
+         "asks": [{"tool": "AskCreditBehavior", "topic": "repayments"}, {"tool": "AskCashFlow", "topic": "income"}]},
+    ]  # fmt: skip
+    assert nudges(at_the_round_limit) == []
+    for run in (never_follows, at_the_round_limit):
+        assert calls_to(run, prompts.GAPS) == []
+        assert run.waiting_at == ("analyst_approval",)
+
+
+def test_with_guidelines_that_declare_no_needs_the_model_reviews_gaps_as_before():
+    run = Run([
+        ask_bank("Where did the money go?"), DONE, gaps("The card side was never asked."),
+        ask_card("Did any repayment fail?"), DONE, gaps(), report(other_findings=[]),
+    ])  # fmt: skip
+
+    assert run.result["gap_log"] == [
+        {"by": "model", "gaps": ["The card side was never asked."], "asks": [], "dropped": 0, "at": 1, "ended_by": "done"},
+        {"by": "model", "gaps": [], "asks": [], "dropped": 0, "at": 2, "ended_by": "done"},
+    ]
+    assert nudges(run) == ["Still unexplained:\n- The card side was never asked."]
+    assert len(calls_to(run, prompts.GAPS)) == 2
+
+
+def test_the_investigator_is_shown_the_causes_and_what_each_guideline_needs_before_its_first_question():
+    run = on_the_services_guidelines([*INVESTIGATION, report(**PAUSE_UNDER_G08B)])
+
+    first = calls_to(run, prompts.INVESTIGATOR)[0]
+    assert len(first) == 2  # the system prompt and the opening brief, before any question
+    opening = first[1].content
+    shown_causes = section(opening, "The causes, and the record that shows each:")
+    assert [cause["cause"] for cause in shown_causes] == list(causes.CAUSES)
+    assert {
+        "cause": "insufficient_data",
+        "shown_by": ["a linked account that is not reporting",
+                     "a reconciliation that says balances and transactions do not match"],
+        "ask": ["AskCashFlow, topic accounts", "AskCashFlow, topic reconciliation"],
+    } in shown_causes  # fmt: skip
+    assert {
+        "cause": "funds_moved_out_of_view",
+        "shown_by": ["a transfer to the customer's own account elsewhere", "a change of the account that pays the card"],
+        "ask": ["AskCashFlow, topic transactions", "AskCreditBehavior, topic paying_account"],
+    } in shown_causes
+    shown_guidelines = section(opening, "The credit guidelines, and the records each one needs:")
+    assert shown_guidelines == prompts.guidelines_shown(service_guidelines.load())
+    g08b = next(guideline for guideline in shown_guidelines if guideline["id"] == "G-08b")
+    assert g08b["needs"] == [
+        {"says": "a repayment that failed and has not been paid", "from": "AskCreditBehavior, topic repayments"}
+    ]
+    for internal in ('"where"', '"share_at_least_bp"', '"gte"', '"lte"'):
+        assert internal not in opening
+    assert opening.index("Earlier reviews") < opening.index("The causes") < opening.index("The credit guidelines")
+    assert opening.endswith("Look at 2026-11-03 to 2026-11-10 unless an answer points elsewhere.")
+    assert run.result["guidelines"] == service_guidelines.load()
+
+
+def test_the_gap_reviewer_is_shown_the_causes_no_question_tested():
+    # A refused call tested nothing. A question that was sent and got no answer did.
+    refused = ask_bank("What happened last year?", topic="prior_year", start="2025-11-03")
+
+    run = Run(
+        [ask_bank("Where did the money go?"), refused, ask_card("Did any repayment fail?"), DONE, gaps(),
+         report(**BANK_ONLY)],
+        specialists={"cash_flow": mock.cash_flow, "credit_behavior": broken},
+    )  # fmt: skip
+
+    brief = calls_to(run, prompts.GAPS)[0][-1].content
+    assert section(brief, "Causes no question has tested yet:") == [
+        {"cause": "seasonal_dip", "ask": ["AskCashFlow, topic prior_year"]},
+        {"cause": "insufficient_data", "ask": ["AskCashFlow, topic accounts", "AskCashFlow, topic reconciliation"]},
+    ]
+    assert [entry["outcome"] for entry in run.result["asked"]] == ["answered", "refused", "no_answer"]
+    # The pass fell after every call the investigator made, the refused one included, not after the rounds used.
+    assert (run.result["rounds"], run.result["gap_log"][0]["at"]) == (2, 3)
+
+
+def test_the_report_writer_is_told_what_code_could_not_close_and_never_what_the_gap_reviewer_wrote():
+    at_the_round_limit = on_the_services_guidelines([*(ask_bank(f"Question {n}?") for n in range(MAX_ROUNDS)), report(), report()])
+    still = gaps("Something is still unexplained.")
+    model_had_the_last_word = Run([ask_bank("Where did the money go?"), DONE, still, DONE, still, DONE, still,
+                                   report(**BANK_ONLY)])  # fmt: skip
+    closed_after_a_nudge = on_the_services_guidelines([
+        ask_bank("Where did the money go?"), DONE,
+        ask_card("Did any repayment fail?"), ask_bank("Is income steady?", topic="income"), DONE, gaps(),
+        report(**PAUSE_UNDER_G08B),
+    ])  # fmt: skip
+
+    brief = calls_to(at_the_round_limit, prompts.REPORT)[0][-1].content
+    assert section(brief, "Still unexplained when the investigation ended:") == at_the_round_limit.result["gaps"] == [
+        "A repayment failed (sig_repayments). Not yet asked: AskCreditBehavior, topic repayments.",
+        "A guideline is partly supported. Not yet asked: AskCashFlow, topic income.",
+    ]
+    # Only the last pass counts, and only when code made it.
+    for run in (model_had_the_last_word, closed_after_a_nudge):
+        for messages in calls_to(run, prompts.REPORT):
+            assert "Still unexplained" not in messages[-1].content
+            assert "Something is still unexplained" not in messages[-1].content
+    assert model_had_the_last_word.result["gaps"] == ["Something is still unexplained."]
+
+
+def test_a_gap_pass_is_logged_with_where_it_fell_and_what_code_named():
+    payee = ask_bank("Who is this payee?", topic="payee_history", record_id="txn_c_009_01")
+
+    run = on_the_services_guidelines(
+        [ask_bank("Where did the money go?"), DONE, payee, DONE, gaps(), report(**C_009_HAND_OVER),
+         report(**C_009_HAND_OVER)],
+        signal=signal_of("c_009"),
+    )  # fmt: skip
+
+    assert run.result["gap_log"] == [
+        {
+            "by": "code",
+            "gaps": ["A guideline is partly supported. Not yet asked: AskCashFlow, topic payee_history, record_id txn_c_009_01."],
+            "asks": [{"tool": "AskCashFlow", "topic": "payee_history", "record_id": "txn_c_009_01"}],
+            "dropped": 0,
+            "at": 1,
+            "ended_by": "done",
+        },
+        {"by": "model", "gaps": [], "asks": [], "dropped": 0, "at": 2, "ended_by": "done"},
+    ]
+    # The nudge came first, and the payee's history came after it.
+    assert [entry["topic"] for entry in run.result["asked"][run.result["gap_log"][0]["at"]:]] == ["payee_history"]
+
+
+UNREADABLE_CALL = AIMessage(
+    content="", invalid_tool_calls=[{"name": "AskCreditBehavior", "args": "{not json", "id": "bad_3", "error": "not json"}]
+)
+
+
+@pytest.mark.parametrize(
+    ("questions", "ended_by"),
+    [
+        pytest.param([ask_bank("Where did the money go?"), DONE], "done", id="DONE"),
+        pytest.param([ask_bank("Where did the money go?"), AIMessage(content="That is enough for me.")], "prose",
+                     id="prose"),
+        pytest.param([ask_bank("Where did the money go?"), UNREADABLE_CALL], "unreadable_call",
+                     id="a call that could not be read"),
+        pytest.param([ask_bank("Where did the money go?"), UNREADABLE_CALL.model_copy(update={"content": "DONE"})],
+                     "unreadable_call", id="a call that could not be read, next to DONE"),
+        pytest.param([ask_bank(f"Question {n}?") for n in range(MAX_ROUNDS)], "round_limit", id="the round limit"),
+    ],
+)  # fmt: skip
+def test_how_the_questions_ended_is_logged_and_an_unreadable_call_is_not_logged_as_done(questions, ended_by):
+    run = Run([*questions, gaps(), report(**BANK_ONLY)])
+
+    [logged] = run.result["gap_log"]
+    assert set(logged) == GAP_PASS
+    assert logged["ended_by"] == ended_by
+
+
+def briefs(run: Run) -> list[str]:
+    """Every brief code wrote: the opening brief, the gap briefs and the report briefs."""
+    opening = [messages[1].content for messages in calls_to(run, prompts.INVESTIGATOR)[:1]]
+    return [*opening, *(messages[-1].content for prompt in (prompts.GAPS, prompts.REPORT) for messages in calls_to(run, prompt))]
+
+
+def test_no_brief_starts_a_line_with_a_bullet_except_the_problems_of_a_refused_draft():
+    refused = report(recommendation="keep_limit", guideline_ids=["G-01"], summary="About $310,000 went out.")
+
+    runs = [
+        on_the_services_guidelines([
+            ask_bank("Where did the money go?"), DONE,
+            ask_card("Did any repayment fail?"), ask_bank("Is income steady?", topic="income"), DONE, gaps(),
+            refused, report(**PAUSE_UNDER_G08B),
+        ]),  # fmt: skip
+        on_the_services_guidelines([*(ask_bank(f"Question {n}?") for n in range(MAX_ROUNDS)), refused, refused]),
+    ]
+
+    for run in runs:
+        assert run.result["drafts"] == 2
+        texts = briefs(run)
+        assert len(texts) == 1 + len(calls_to(run, prompts.GAPS)) + 2
+        for brief in texts:
+            head, _, problems = brief.partition("\n\nYour last draft was refused. Fix these:\n")
+            assert not [line for line in head.splitlines() if line.startswith("- ")], head
+            assert all(line.startswith("- ") for line in problems.splitlines())
+    told = briefs(runs[0])[-1].split("Fix these:\n")[1].splitlines()
+    assert len(told) == 2  # the guideline line, then the figure line
+
+
+def test_questions_out_of_step_with_their_answers_are_paired_from_the_newest_and_never_left_out_silently(caplog):
+    older = {"agent": "cash_flow", "question": "Where did the money go?", "error": "No usable answer from cash_flow."}
+    newer = {"agent": "credit_behavior", "question": "Did any repayment fail?", "error": "No usable answer."}
+    entry = {"tool": "AskCreditBehavior", "agent": "credit_behavior", "topic": "repayments", "outcome": "no_answer",
+             "returned": []}  # fmt: skip
+
+    with caplog.at_level("WARNING", logger="app.graph.prompts"):
+        in_step = prompts.questions([entry], [newer])
+    assert caplog.records == []
+
+    # A case that began before `asked` was kept has answers with no entry before the ones that have one.
+    with caplog.at_level("WARNING", logger="app.graph.prompts"):
+        out_of_step = prompts.questions([entry], [older, newer])
+        none_kept = prompts.questions([], [older, newer])
+
+    assert out_of_step == in_step == [
+        {"agent": "credit_behavior", "topic": "repayments", "focus": {}, "answer": {"error": "No usable answer."}}
+    ]
+    assert none_kept == []
+    assert [record.getMessage() for record in caplog.records] == [
+        "1 questions and 2 answers: the newest 1 are paired, 1 answers are left out of the brief",
+        "0 questions and 2 answers: the newest 0 are paired, 2 answers are left out of the brief",
+    ]
+
+
+HAND_OVER_DECIDED = {"decided": "request_documents"}
+
+
+@pytest.mark.parametrize(
+    ("draft", "decisions", "kept"),
+    [
+        pytest.param(NOTHING_TO_DO, [APPROVE], True, id="the analyst approves a hand-over"),
+        pytest.param(NOTHING_TO_DO, [REJECT], False, id="the analyst rejects a hand-over"),
+        pytest.param(report(), [APPROVE], False, id="the analyst approves an action"),
+        pytest.param(report(**PAUSE), [APPROVE, MANAGER_APPROVES], False, id="a manager approves"),
+        pytest.param(report(confidence="low"), [APPROVE], True, id="a passing report that code handed over"),
+    ],
+)
+def test_what_the_person_decided_is_kept_only_when_the_analyst_approves_a_hand_over(draft, decisions, kept):
+    run = Run([*INVESTIGATION, draft])
+
+    for decision in decisions:
+        result = run.decide({**decision, **HAND_OVER_DECIDED})
+
+    assert [("decided" in decision) for decision in result["decisions"]] == [kept] + [False] * (len(decisions) - 1)
+
+
+def test_every_figure_a_model_is_shown_is_an_allowed_figure_on_the_services_guidelines():
+    # A draft refused under rules 7 and 8, the cause rule and the figure rule, after a pass where code found
+    # the gaps, a question narrowed to dates no record holds, and a gap review that states a figure.
+    refused = report(
+        likely_cause="revenue_loss", recommendation="keep_limit", guideline_ids=["G-01"],
+        summary="Inflows of $80,000 make outflows $310,000, so $90,000 is missing.",
+    )  # fmt: skip
+    dated = ask_card("Did any repayment fail?", start="2026-11-04", end="2026-11-08")
+
+    run = on_the_services_guidelines([
+        ask_bank("Where did the money go?"), DONE,
+        dated, ask_bank("Is income steady?", topic="income"), DONE, gaps("Roughly $90,000 is not accounted for."),
+        refused, report(**PAUSE_UNDER_G08B),
+    ])  # fmt: skip
+
+    allowed = figures.allowed_figures(facts.ledger(run.state).values())
+    assert {"d:2026-11-04", "d:2026-11-08", "m:90000", "m:310000"}.isdisjoint(allowed)
+    assert [entry["by"] for entry in run.result["gap_log"]] == ["code", "model"]
+    assert run.result["gap_log"][1]["dropped"] == 1
+    assert run.result["draft_log"][0]["codes"] == ["guideline_need", "guideline_cover", "cause", "figure"]
+    assert run.result["check"] == {"passed": True, "problems": []}
+    for text in written_by_code(run):
+        text = re.sub(r'"untrusted_text": "(?:[^"\\]|\\.)*"', "", QUOTED_BACK.sub("", text))
+        assert set(figures.figures(text)) <= allowed, text

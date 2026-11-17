@@ -56,7 +56,7 @@ def test_the_gap_review_and_the_report_are_asked_for_the_way_the_service_is_set_
     monkeypatch.delenv("LLM_STRUCTURED_OUTPUT", raising=False)
     if setting is not None:
         monkeypatch.setenv("LLM_STRUCTURED_OUTPUT", setting)
-    nothing_to_do = report(likely_cause="no_clear_cause", recommendation="needs_human", guideline_ids=[], evidence=[])
+    nothing_to_do = report(recommendation="pause_card", guideline_ids=["G-08b"], confidence="low")
 
     with service_graph(monkeypatch, [*INVESTIGATION, nothing_to_do]) as graph:
         state = graph.invoke({"case_id": "case_set_up", "signal": SIGNAL}, runner.thread("case_set_up"))

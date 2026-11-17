@@ -44,10 +44,6 @@ OVERLAPS = {
     "c_303": {"request_documents", "pause_card"},
     "c_107": {"request_documents", "pause_card", "keep_limit"},
 }
-# Carries an accepted answer and is not in the case's `guidelines`. 5.2 says G-10b and G-11 both carry c_012's
-# hand-over, 8.1 lists G-10b alone, so a hand-over under G-11 passes the check and is graded wrong on `guideline`
-# (8.5). The owner decides which holds.
-UNLISTED = {"c_012": {"G-11"}}
 by_case = pytest.mark.parametrize("case", GOLDEN["customers"], ids=lambda case: case["id"])
 
 
@@ -194,6 +190,25 @@ def test_every_case_can_be_reached_in_six_questions_and_its_path_returns_what_it
     assert must_reach(case) <= returned
 
 
+def test_a_hand_over_counts_as_tested_only_once_a_question_returned_what_it_must_reach():
+    # 8.1, 8.5: a run that asked nothing can end in a hand-over too, and a case with no must_reach is never "not
+    # reached". c_307's and c_314's only must_cite is a record code gives at open, so their must_reach is written out.
+    hand_overs = {cid for cid, case in CASES.items() if "needs_human" in case["recommendations"]}
+
+    assert {"c_307", "c_314"} <= hand_overs
+    assert {cid for cid in hand_overs if not must_reach(CASES[cid])} == set()
+
+
+@by_case
+def test_every_accepted_cause_rests_on_a_record_the_cases_path_returns(case):
+    # The cause rule refuses a cause no cited record shows (2.D.4). On a path without that record the accepted cause
+    # cannot be given: c_307's path asks prior_year for seasonal_dip (8.1). no_clear_cause claims nothing.
+    records, _ = walk(case["id"], steps(case["path"]))
+    for cause in case["causes"]:
+        alternatives = causes.CAUSE_NEEDS.get(cause, [])
+        assert not alternatives or any(needs.meets(need, records) for need in alternatives), cause
+
+
 @by_case
 def test_a_memo_and_a_payee_history_the_case_rests_on_are_records_it_must_reach(case):
     # 8.1: c_009 and c_203 do not count as tested unless the payment with the memo was returned, and c_009's answer
@@ -222,14 +237,13 @@ def test_the_guidelines_a_case_lists_are_the_ones_that_carry_an_accepted_answer(
     # is listed (8.5). So every listed guideline carries an accepted answer on the path, alone or cited with the
     # other listed ones that carry it: c_111's G-01 passes only beside G-08a, which covers the failed repayment. And
     # a guideline that carries one, on the path or with every topic asked, is listed, or a report that passes the
-    # check is graded wrong.
-    listed, unlisted = set(case["guidelines"]), UNLISTED.get(case["id"], set())
+    # check is graded wrong: c_012's hand-over is carried by G-10b and by G-11, so both are listed (0.3, item 13).
+    listed = set(case["guidelines"])
     path = carriers(case, *walk(case["id"], steps(case["path"])))
     every = carriers(case, *every_topic(case["id"]))
 
     assert listed <= path
-    assert (path | every) - listed <= unlisted
-    assert not listed & unlisted, "listed now: take it out of UNLISTED"
+    assert (path | every) - listed == set()
 
 
 def test_the_accepted_answers_no_guideline_can_carry_are_the_two_known_ones():
@@ -306,8 +320,9 @@ def test_the_fixed_plan_reaches_every_case_but_the_ones_that_need_a_payees_histo
     }
     not_reached = {case["id"] for case in GOLDEN["customers"] if not reached(case, *walk(case["id"], PLAN))}
 
-    # c_009, c_011, and c_307 once P9 adds it.
-    assert not_reached == need_history == {"c_009", "c_011"} | ({"c_307"} & CASES.keys())
+    # Only a question about c_009's payment shows that it is in line with its payee's history. For c_011 and c_307
+    # "none fits" is not settled until that history was asked for (2.A, rule 7b).
+    assert not_reached == need_history == {"c_009", "c_011", "c_307"}
 
 
 def test_after_the_fixed_plan_one_question_the_code_gaps_name_reaches_each_case_the_plan_did_not():
@@ -370,6 +385,84 @@ def test_a_dev_lookalike_carries_what_its_dev_case_carries_and_only_by_the_defau
     # c_110 looks like c_010 only while "not_recorded" counts as unpaid (decision 1).
     monkeypatch.setattr(policy, "UNPAID_MEANS", ("no",))
     assert lookalikes() == {}
+
+
+def anonymous(customer_id: str, records: list[dict]) -> dict[str, dict]:
+    """Records by id, with the ids that say whose they are taken out: c_304's "acct_c304_a" reads as c_314's."""
+    text = json.dumps(records).replace(customer_id, "X").replace(customer_id.replace("_", ""), "X")
+    return {record["id"]: record for record in json.loads(text)}
+
+
+def opened_with(customer_id: str) -> dict[str, dict]:
+    """The data of the history records a case opens with, by id, without the ids that say whose."""
+    opened = anonymous(customer_id, walk(customer_id, [])[0])
+    return {record_id: record["data"] for record_id, record in opened.items() if record_id.startswith("hist_")}
+
+
+def test_the_seeds_give_each_case_the_history_the_spec_lists():
+    # The check for the implementer in 8.2. A slip in a seed's date, amount or customer moves one of these, and an
+    # answer with it.
+    opened = {case_id: opened_with(case_id) for case_id in CASES}
+    seeded = {case_id for case_id, found in opened.items() if found["hist_X_summary"]["earlier_reviews"]}
+    recovery = {case_id: found["hist_X_recovery"]["now_vs_then_bp"] for case_id, found in opened.items()
+                if "hist_X_recovery" in found}  # fmt: skip
+    counts = {
+        case_id: tuple(opened[case_id]["hist_X_summary"][key] for key in (
+            "reviews_in_window", "document_requests_in_window", "document_requests_for_income_in_window",
+        ))  # fmt: skip
+        for case_id in ("c_301", "c_304", "c_314")
+    }
+
+    assert seeded == {"c_007", "c_107", "c_307", "c_303", "c_301", "c_304", "c_314"}
+    # Cash before this fall against cash before the fall a year ago: back for c_007, c_107 and c_303, not for c_307.
+    assert recovery == {"c_007": 10294, "c_107": 10294, "c_307": 7778, "c_303": 10345}
+    assert counts == {"c_301": (2, 0, 0), "c_304": (2, 2, 0), "c_314": (2, 2, 2)}
+    assert [opened["c_314"][f"hist_seed_X_{n}"]["days_before"] for n in "ab"] == [147, 77]
+    # A case with no seed opens with a summary of zeros and nothing else.
+    for case_id in CASES.keys() - seeded:
+        assert list(opened[case_id]) == ["hist_X_summary"], case_id
+
+
+def test_the_control_for_a_repeat_differs_from_the_repeat_only_in_the_cause_of_its_earlier_requests():
+    # 8.3, point 8. c_304 was asked twice since June to reconnect a feed, c_314 twice for weak income, on the same
+    # dates and with the same decisions. Every other record is the same. The count G-14 reads is not.
+    loaded = guidelines.load()
+    control, repeat = (anonymous(cid, every_topic(cid)[0]) for cid in ("c_304", "c_314"))
+    assert control.keys() == repeat.keys()
+    assert all(control[record_id]["data"].keys() == repeat[record_id]["data"].keys() for record_id in control)
+    differ = {
+        record_id: sorted(key for key, value in record["data"].items() if repeat[record_id]["data"][key] != value)
+        for record_id, record in control.items()
+        if record != repeat[record_id]
+    }
+    assert differ == {
+        "hist_X_summary": ["document_requests_for_income_in_window"],
+        # The cause of each earlier request, and with it the guideline and the review reason it was filed under.
+        "hist_seed_X_a": ["guideline_ids", "likely_cause", "review_reasons"],
+        "hist_seed_X_b": ["guideline_ids", "likely_cause", "review_reasons"],
+    }
+    assert control["hist_X_summary"]["data"]["document_requests_for_income_in_window"] == 0
+    assert repeat["hist_X_summary"]["data"]["document_requests_for_income_in_window"] == 2
+    for walked in (lambda cid: walk(cid, steps(CASES[cid]["path"])), every_topic):
+        assert needs.permitted(loaded, walked("c_304")[0]) == {"request_documents": ["G-14"]}
+        assert needs.permitted(loaded, walked("c_314")[0]) == {}
+
+
+def test_a_supported_precedent_and_todays_facts_are_both_permitted_for_c_107():
+    # 8.1: c_007's review a year ago, c_007's stocking payment and last year's record, so G-03 is fully met. Shrinking
+    # inflows and a late repayment meet G-06 and G-07 as well. The check permits keeping the limit and cutting it: only
+    # the model, or a precedence rule the owner writes (decision 7), makes today's facts win.
+    loaded, path = guidelines.load(), steps(CASES["c_107"]["path"])
+    for records, asked in (walk("c_107", path), every_topic("c_107")):
+        found = needs.permitted(loaded, records)
+
+        assert found["keep_limit"] == ["G-03"]
+        assert found["reduce_limit"] == ["G-06", "G-07"]
+        assert {"G-03", "G-06", "G-07"} <= met(records, asked)
+    # Last year's record is what makes the precedent a live option, which is why the case must reach it.
+    assert path[-1] == ("AskCashFlow", "prior_year", None)
+    assert "keep_limit" not in needs.permitted(loaded, walk("c_107", path[:-1])[0])
+    assert "agg_c_107_prior_year" in must_reach(CASES["c_107"])
 
 
 def test_the_words_that_say_a_need_hold_no_figure():

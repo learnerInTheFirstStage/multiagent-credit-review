@@ -1,5 +1,6 @@
 """What the running service builds its case graph from. Settings are read here and nowhere else."""
 
+import functools
 import logging
 import os
 from collections.abc import Iterator
@@ -13,12 +14,15 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from app import card_client, guidelines
+from app import card_client, guidelines, history
 from app.agents import mock
 from app.db import engine
 from app.graph import build_graph
 
 log = logging.getLogger(__name__)
+
+# Where the image keeps the seeded reviews. The evaluation mounts its own files and names both.
+HISTORY_SEED_DEFAULT = "/eval/history.yaml"
 
 
 @contextmanager
@@ -38,8 +42,20 @@ def case_graph() -> Iterator:
             carry_out=card_client.carry_out,
             checkpointer=checkpointer,
             structured_output=_structured_output(),
+            # Every earlier review, not the ten newest: the counts of the history summary cover them all.
+            earlier_reviews=functools.partial(history.earlier_reviews, limit=None),
         )
         yield graph.with_config({"callbacks": callbacks})
+
+
+def history_seed_files() -> list[str]:
+    """The files the service seeds closed reviews from at start.
+
+    HISTORY_SEED_FILE lists one path or several separated by ":", as SHARED_CUSTOMERS_FILE does. Empty
+    names are ignored. Unset, or naming no file at all, it is the file the image holds.
+    """
+    named = [path for path in os.environ.get("HISTORY_SEED_FILE", "").split(":") if path]
+    return named or [HISTORY_SEED_DEFAULT]
 
 
 @contextmanager

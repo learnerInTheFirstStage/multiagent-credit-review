@@ -10,7 +10,8 @@ Turns a signal into a reviewed recommendation with evidence and carries the case
 | `POST /signals` | Opens a case, or joins the case the customer already has open. A repeated signal is ignored. A new case is investigated after the answer is sent. Needs a `service` or `admin` token |
 | `GET /cases` | The queue: the open cases of the customers the token may see, the longest waiting first. `?status=` lists one status instead, closed ones included. `?limit=` (50, at most 200), `?offset=`. Answers `{"cases": [...], "total": n}` |
 | `GET /cases/{id}` | The case page: status, whose move it is, the checked report, the decisions, the action |
-| `POST /cases/{id}/decision` | `{"decision": "approve" or "reject"}`. Who decides comes from the token |
+| `GET /cases/{id}/path` | How the case was investigated, as ids and labels: the questions with their topic, focus and outcome, the searches, the gap passes, the checked drafts, the earlier reviews it was given, and how it was handed over. Same access rule as the case page. Empty for a case nobody ran |
+| `POST /cases/{id}/decision` | `{"decision": "approve" or "reject"}`, with an optional `note` (at most 500 characters) and, only when the analyst step approves a report that hands the case over, `decided`: what the person concluded (`keep_limit`, `reduce_limit`, `pause_card` or `request_documents`). Nothing goes to Card for `decided`; anywhere else it is a 409. Who decides comes from the token |
 
 Every endpoint but `/health` needs a token. Every error has one shape, `{"error": "forbidden", "message": "..."}`, with the error names `unauthorized`, `forbidden`, `not_found`, `conflict`, `invalid_request`, `card_unavailable` and `unavailable`.
 
@@ -55,10 +56,22 @@ An approved reduction or pause goes to `POST {CARD_URL}/customers/{id}/actions` 
 
 If Card does not confirm the action, the answer is 502 and the approval is kept. Then two things can happen:
 
-- The person who approved sends the approval again, and the action is retried. Nobody else can retry it.
+- The person who approved sends the approval again, and the action is retried. Nobody else can retry it. A retry records no new decision, so the note kept is the one the approval first carried.
 - A manager sends a rejection, and the case closes as `failed` with nothing more sent. It is `failed` and not `rejected` because Card may have applied the action and lost its answer, so a person has to check.
 
-Tables are created at startup. There are no migrations: all data is generated, so after a schema change run `docker compose down -v` and start again.
+Tables are created at startup. There are no migrations: all data is generated, so after a schema change run `docker compose down -v` and start again. An old volume needs no reset for the `reviews` table: a start adds a missing table.
+
+## History
+
+When a case closes (approved, rejected, or closed as failed after Card never confirmed), a review is written in the same transaction as the status: the labels of the checked report, the records it cites, the decisions with their notes, what was asked. A case that broke before its report was checked leaves none. A report the service gave up on is kept, but is not a precedent.
+
+- When a case opens, the customer's reviews dated strictly before the signal's day become citable records: `hist_{customer}_summary` counts every earlier review whose report passed the check, and the three newest of them get a record of their own. A missing `reviews` table fails the case: a broken lookup must not read as a first review.
+- Every start with a model configured writes the review of any closed case that has none, from the state the graph saved, and logs how many it wrote.
+- Every start also seeds the reviews in `HISTORY_SEED_FILE`: one path or several separated by `:`, by default `/eval/history.yaml`, the copy of `eval/history.yaml` in the image. It needs no model, inserts only what is not there yet, and a missing or broken file is logged and does not stop the start.
+- The main stack seeds one review, `seed_c_007_2025`, the past review c_007's story names. Search over past cases therefore has one precedent to find there. The evaluation names its own second file with the other seeds.
+- A seeded case is closed, so it is not in the queue. `GET /cases?status=done` lists it to a token with its customer, and its case page has no report: a seed has no graph state.
+
+To seed by hand, or to seed several files: `docker compose exec orchestrator python -m app.seed_history /eval/history.yaml`.
 
 Database: `orchestrator`. Local port: 8004. Behind the gateway: `/api/orchestrator/...`.
 Inside the compose network the Bank and Card services are at `http://bank:8000` and `http://card:8000`.

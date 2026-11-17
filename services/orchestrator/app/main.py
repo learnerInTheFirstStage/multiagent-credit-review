@@ -9,24 +9,35 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 from sqlalchemy import text
 
-from app import runner, runtime
+from app import history, runner, runtime
 from app.api import cases, signals
-from app.db import Base, engine
+from app.db import Base, SessionLocal, engine
 from app.db import models  # noqa: F401  registers the tables on Base
 from contracts import Health
 
 # uvicorn only sets up its own loggers. Without this the app's INFO lines are dropped.
 logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # No migrations in the POC: all data is generated, so a schema change means drop and reseed.
     Base.metadata.create_all(engine)
+    # The closed reviews customers' histories start from. Needs no model, and inserts nothing it already has.
+    try:
+        with SessionLocal() as session:
+            counts = history.seed(session, history.read_seeds(runtime.history_seed_files()), expect_clean=False)
+            session.commit()
+        log.info("Seeded reviews: %d new, %d already there", counts["seeded"], counts["already_there"])
+    except Exception:  # a broken seed file must not keep the service from starting
+        log.exception("The seeded reviews could not be loaded. The service starts without them.")
     with runtime.case_graph() as graph:
         app.state.graph = graph
         picked_up = []
         if graph is not None:
+            # A closed case must not read as "no earlier review" for want of its review.
+            runner.keep_missing_reviews(graph)
             # A restart must not leave a case queued, half investigated, or with a stale status.
             loop = asyncio.get_running_loop()
             picked_up = [loop.run_in_executor(None, runner.run_case, graph, case_id) for case_id in runner.unfinished()]

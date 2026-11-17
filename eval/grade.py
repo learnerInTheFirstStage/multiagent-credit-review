@@ -12,7 +12,14 @@ CHECKS = ("recommendation", "cause", "hand_over", "cites")
 # What each baseline would recommend for every case, without looking at it.
 BASELINES = {"The engine alone (always cuts)": "reduce_limit", "Always hand over": "needs_human"}
 # The golden set's words for how one case is set against another.
-LINKS = {"twin_of": "twin of", "same_as": "same as", "milder_than": "milder than"}
+LINKS = {
+    "twin_of": "twin of",
+    "same_as": "same as",
+    "milder_than": "milder than",
+    "history_twin_of": "history twin of",
+    "history_same_as": "history copy of",
+    "same_history_as": "same history as",
+}
 # How the summary of a report starts when two drafts failed the service's own check. The service
 # then hands the case to a person with no cause and no evidence: no answer was reached.
 GAVE_UP = "The report could not be completed."
@@ -53,9 +60,13 @@ def compare(link: str, mine: dict, other: dict) -> bool | None:
     """One run of a case against the same-numbered run of the case it is set against."""
     if "grades" not in mine or "grades" not in other:
         return None
-    if link == "twin_of":  # one fact apart: the agent has to get both right
-        return mine["grades"]["recommendation"] and other["grades"]["recommendation"]
+    both_right = mine["grades"]["recommendation"] and other["grades"]["recommendation"]
+    # One fact apart, another history, or the same history with other facts today: the agent has to get both right.
+    if link in ("twin_of", "history_twin_of", "same_history_as"):
+        return both_right
     got, base = mine["report"]["recommendation"], other["report"]["recommendation"]
+    if link == "history_same_as":  # history that must change nothing: both right, and the same answer
+        return both_right and got == base
     if link == "same_as":  # something irrelevant was added: nothing may change
         return got == base and not gave_up(mine["report"]) and not gave_up(other["report"])
     if got not in STRICTNESS or base not in STRICTNESS:
