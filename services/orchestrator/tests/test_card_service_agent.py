@@ -1,4 +1,4 @@
-"""The Credit Behavior agent (KAN-26), on recorded Card responses and a scripted model.
+"""The Card Service agent (KAN-26), on recorded Card responses and a scripted model.
 
 No network and no real model: Card answers from tests/fixtures/card_tools.json (recorded from
 the seeded Card Service), and the model follows a script.
@@ -14,11 +14,11 @@ import pytest
 from langchain_core.messages import ToolMessage
 
 from app.agents import mock
-from app.agents.credit_behavior import credit_behavior
-from app.agents.credit_behavior.agent import MAX_TOOL_CALLS
+from app.agents.card_service import card_service
+from app.agents.card_service.agent import MAX_TOOL_CALLS
 from app.graph import build
 from contracts import InvestigateRequest, InvestigateResponse
-from tests._credit_behavior_helpers import CardStub, ScriptedChatModel, answer, recorded, request
+from tests._card_service_helpers import CardStub, ScriptedChatModel, answer, recorded, request
 
 FAILED = "rep_c_010_202611"
 BALANCE = "bal_card_c_010_20261110"
@@ -27,7 +27,7 @@ BALANCE = "bal_card_c_010_20261110"
 def run(customer_id: str, script: list | None, topic: str | None = None, stub: CardStub | None = None, **extra):
     stub = stub or CardStub(customer_id)
     model = ScriptedChatModel(script=script) if script is not None else None
-    response = credit_behavior(InvestigateRequest(**request(customer_id, topic, **extra)), model=model, http=stub.client())
+    response = card_service(InvestigateRequest(**request(customer_id, topic, **extra)), model=model, http=stub.client())
     # What the graph does with every answer: validate it again, and refuse forged or changed records.
     InvestigateResponse.model_validate(response.model_dump(mode="json"))
     build._usable(response, known={})
@@ -262,7 +262,7 @@ def test_the_token_names_only_this_customer():
     token = stub.requests[0].headers["Authorization"].removeprefix("Bearer ")
     claims = jwt.decode(token, options={"verify_signature": False})
     assert claims["customers"] == ["c_010"] and claims["role"] == "service"
-    assert claims["sub"] == "credit_behavior:case_test" and "scope" not in claims
+    assert claims["sub"] == "card_service:case_test" and "scope" not in claims
 
 
 def test_same_signature_and_kinds_as_the_stand_in():
