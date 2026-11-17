@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from app.api.snapshots import router as snapshots_router
+from app.api.tools import router as tools_router
 from app.db import Base, SessionLocal, engine
 from app.db.seed import seed_if_empty
 from contracts import Health
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Card Service", lifespan=lifespan)
 app.include_router(snapshots_router)
+app.include_router(tools_router)
 
 
 @app.get("/health", response_model=Health)
