@@ -41,6 +41,7 @@ services:
       dockerfile: services/bank/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://bank:${BANK_DB_PASSWORD:-local-bank}@postgres:5432/bank
+      JWT_SECRET: ${JWT_SECRET:-local-jwt-secret-for-development-only}
     depends_on:
       postgres:
         condition: service_healthy
