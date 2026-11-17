@@ -11,6 +11,9 @@ _db_dir = tempfile.mkdtemp(prefix="orchestrator-tests-")
 os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", f"sqlite:///{_db_dir}/test.db")
 os.environ["JWT_SECRET"] = "a-secret-for-tests-that-is-long-enough"
 os.environ.pop("LLM_MODEL", None)  # no test may reach a real model
+# The service reads these at start. A test that wants another flow or the search tool sets its own.
+os.environ.pop("INVESTIGATION_FLOW", None)
+os.environ.pop("EMBEDDINGS_MODEL", None)
 # Every start seeds reviews from this setting, and unset it names the image's file. A test that wants
 # seeds sets its own; the rest must not pick up an exported setting or a /eval/history.yaml on the host.
 os.environ["HISTORY_SEED_FILE"] = f"{_db_dir}/no-seeds.yaml"

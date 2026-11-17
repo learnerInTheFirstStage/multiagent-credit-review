@@ -1,14 +1,21 @@
 """Run the golden dataset against a running stack, over HTTP, and grade it.
 
-    docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres card orchestrator
-    python eval/run.py --container "docker compose -p goldenset exec -T orchestrator"
+One arm per fresh stack, on a fresh volume. INVESTIGATION_FLOW names the stack's arm (spec 8.4):
+
+    INVESTIGATION_FLOW=fixed_rules docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres card orchestrator
+    python eval/run.py --arm fixed_rules --container "docker compose -p goldenset exec -T orchestrator"
+
+Before the first signal the runner stops unless the stack runs the arm asked for,
+no case is open, and the database is clean: both seed files are seeded again with
+--expect-clean, and the seeded cases are read back through the service.
 
 Every customer case is one signal sent to POST /signals, waited for, read from
-GET /cases/{id} and graded. The case is then rejected, which closes it: a
-customer has one open case at a time, so the next run of that customer needs it
-closed. Runs of one customer go one after another, customers side by side.
+GET /cases/{id} and GET /cases/{id}/path, and graded on its answer and on its path.
+The case is then rejected, which closes it: a customer has one open case at a time,
+so the next run of that customer needs it closed. Runs of one customer go one after
+another, customers side by side.
 
-This spends money on the model the stack is set to: about 60 runs for the whole set.
+This spends money on the model the stack is set to: about 80 runs for the whole set.
 Results go to eval/results/<run id>/: runs.jsonl as each run ends, summary.md at the end.
 """
 
@@ -30,10 +37,31 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "eval"))
 
-from grade import grade, summary  # noqa: E402
+from grade import grade, grade_path, summary  # noqa: E402
 from signals import customers, signal_for  # noqa: E402
 
 WORKING = ("queued", "investigating")
+ARMS = ("agent", "fixed", "fixed_rules")
+# The seed files where the overlay mounts them in the container, and where they are in this checkout.
+SEED_FILES = {
+    "/eval/history.yaml": ROOT / "eval" / "history.yaml",
+    "/eval/history_eval.yaml": ROOT / "eval" / "history_eval.yaml",
+}
+# Run inside the container: what the stack runs with, as one JSON object on the last line of its output.
+STACK = """
+import hashlib, json, os
+from pathlib import Path
+from app import policy, retrieval
+embedder = retrieval.load(os.environ.get("EMBEDDINGS_MODEL"))
+print(json.dumps({
+    "model": os.environ.get("LLM_MODEL") or "none set",
+    "structured_output": os.environ.get("LLM_STRUCTURED_OUTPUT") or "default",
+    "flow": os.environ.get("INVESTIGATION_FLOW", ""),
+    "embedder": embedder.name if embedder else None,
+    "policy": {name: value for name, value in vars(policy).items() if name.isupper()},
+    "prompts": hashlib.sha256((Path(policy.__file__).parent / "graph" / "prompts.py").read_bytes()).hexdigest()[:12],
+}))
+"""
 
 
 def inside(container: str, *command: str) -> str:
@@ -44,6 +72,63 @@ def inside(container: str, *command: str) -> str:
 
 def bearer(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+def stack(container: str, arm: str) -> dict:
+    """What the stack runs with, read inside its container, for the run's `about`. Stops when it runs another arm."""
+    found = json.loads(inside(container, "python", "-c", STACK).splitlines()[-1])
+    flow = found["flow"] or "agent"  # unset or empty is the agent, as in the service
+    if flow not in ARMS:
+        sys.exit(
+            f"The stack runs INVESTIGATION_FLOW={found['flow']}, which names no arm ({', '.join(ARMS)}, or empty for "
+            "agent). The service runs such a value as the agent, but a misspelt arm is not counted as one. "
+            "Start a fresh stack with one of them."
+        )
+    if flow != arm:
+        sys.exit(
+            f"The stack runs INVESTIGATION_FLOW={found['flow'] or '(unset)'}, not the {arm} arm. "
+            "Start a fresh stack for each arm."
+        )
+    if arm != "agent":
+        search = "off: this arm asks a fixed list and never searches"
+    else:
+        search = f"on, {found['embedder']}" if found["embedder"] else "off: no embedder could be loaded"
+    return {
+        "Arm": arm,
+        "Model": f"{found['model']} | structured output: {found['structured_output']}",
+        "Search": search,
+        # Every value: POLICY_VERSION alone would not change when a share line or a switch does.
+        "Policy": json.dumps(found["policy"], sort_keys=True),
+        "Prompts": f"sha256 {found['prompts']} of app/graph/prompts.py",
+    }
+
+
+def seed_history(client: httpx.Client, container: str) -> str:
+    """Before the first signal: the seeded reviews are there, and no review that is not a seed is history.
+
+    The service seeds HISTORY_SEED_FILE at start, so this is called once it answers. The command runs again with
+    --expect-clean: it adds a seed that is missing and refuses a database that holds somebody's earlier runs as
+    history. The seeded cases are then read back through the service the signals go to.
+    """
+    try:
+        output = inside(container, "python", "-m", "app.seed_history", *SEED_FILES, "--expect-clean")
+    except subprocess.CalledProcessError as error:
+        sys.exit(f"{(error.stderr or '').strip() or error}. Run on a fresh stack.")
+    counts = json.loads(output.splitlines()[-1])
+    seeds = [entry for path in SEED_FILES.values() for entry in yaml.safe_load(path.read_text())["reviews"]]
+    customer_ids = sorted({seed["customer_id"] for seed in seeds})
+    token = inside(container, "python", "-m", "app.dev_token", "--role", "analyst", "--sub", "u_eval_seeds",
+                   "--customers", *customer_ids)  # fmt: skip
+    listed = set()
+    for outcome in sorted({seed["outcome"] for seed in seeds}):
+        page = client.get("/cases", params={"status": outcome, "limit": 200}, headers=bearer(token)).json()
+        listed |= {row["case_id"] for row in page.get("cases", [])}
+    if missing := [seed["case_id"] for seed in seeds if seed["case_id"] not in listed]:
+        sys.exit(f"The service does not list these seeded reviews: {', '.join(missing)}. Is --api the stack of --container?")
+    return (
+        f"{len(seeds)}: {counts['already_there']} there at start, {counts['seeded']} added by the runner, "
+        f"{counts['embedded']} embedded"
+    )
 
 
 def one_run(client: httpx.Client, tokens: dict, case: dict, signal: dict, rep: int, timeout: int) -> dict:
@@ -69,6 +154,16 @@ def one_run(client: httpx.Client, tokens: dict, case: dict, signal: dict, rep: i
         # failed: the model or a specialist raised. The service log has the reason.
         return {**record, "closed": page.get("status") == "failed", "error": f"the case ended as {page.get('status', page)}"}
     record |= {"report": page["report"], "grades": grade(case, page["report"])}
+    # Whatever goes wrong with the path, the answer is graded all the same, and the case still closed.
+    try:
+        answer = client.get(f"/cases/{case_id}/path", headers=bearer(tokens["analyst"]))
+        if answer.status_code == 200:
+            path = answer.json()
+            record |= {"path": path, "path_grades": grade_path(case, page["report"], path)}
+        else:
+            record["path_error"] = f"http {answer.status_code} {answer.text[:200]}"
+    except Exception as error:
+        record["path_error"] = f"{type(error).__name__}: {error}"
 
     closed = client.post(f"/cases/{case_id}/decision", json={"decision": "reject"}, headers=bearer(tokens["analyst"]))
     if closed.status_code != 200 or closed.json()["status"] != "rejected":
@@ -135,44 +230,50 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=5, help="customers run side by side (default 5)")
     parser.add_argument("--timeout", type=int, default=420, help="seconds to wait for one investigation")
     parser.add_argument("--out", type=Path, default=ROOT / "eval" / "results")
+    parser.add_argument("--arm", required=True, choices=ARMS, help="the flow the stack runs: one arm per fresh stack")
     args = parser.parse_args()
 
     golden = yaml.safe_load((ROOT / "eval" / "golden_set.yaml").read_text())
     today, data = customers()
     cases = [case for case in golden["customers"] if not args.only or case["id"] in args.only]
     ids = [case["id"] for case in cases]
+    run_id = f"{datetime.now():%Y%m%d-%H%M%S}-{args.arm}"
+    about = {
+        "run_id": run_id,
+        **stack(args.container, args.arm),
+        "Code": subprocess.run(["git", "describe", "--always", "--dirty"], cwd=ROOT, capture_output=True, text=True).stdout.strip(),
+    }
     tokens = {
         "service": inside(args.container, "python", "-m", "app.dev_token", "--role", "service", "--sub", "eval-signals"),
         "analyst": inside(args.container, "python", "-m", "app.dev_token", "--role", "analyst", "--sub", "u_eval_analyst", "--customers", *ids),
         "other_analyst": inside(args.container, "python", "-m", "app.dev_token", "--role", "analyst", "--sub", "u_eval_other", "--customers", "c_none"),
     }
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     folder = args.out / run_id
-    folder.mkdir(parents=True)
-    about = {
-        "run_id": run_id,
-        "Model": inside(args.container, "python", "-c", "import os; print(os.environ.get('LLM_MODEL') or 'none set', '| structured output:', os.environ.get('LLM_STRUCTURED_OUTPUT') or 'default')"),
-        "Code": subprocess.run(["git", "describe", "--always", "--dirty"], cwd=ROOT, capture_output=True, text=True).stdout.strip(),
-    }
     runs, lock = [], threading.Lock()
 
-    with httpx.Client(base_url=args.api, timeout=60) as client, (folder / "runs.jsonl").open("w") as log:
+    with httpx.Client(base_url=args.api, timeout=60) as client:
         waiting = client.get("/cases", params={"limit": 1}, headers=bearer(tokens["analyst"])).json()
         if waiting.get("total") != 0:
             # A signal for a customer with an open case joins that case, so no run could be told from an old one.
             sys.exit(f"These customers already have open cases here, or the list could not be read: {waiting}. Run on a fresh stack.")
+        # The service has answered, so it has made its tables and seeded at start.
+        about["Seeded reviews"] = seed_history(client, args.container)
+        folder.mkdir(parents=True)
 
-        def one_customer(case: dict) -> None:
-            for record in runs_of(client, tokens, case, signal_for(data[case["id"]], today), run_id, args.reps, args.timeout):
-                with lock:
-                    runs.append(record)
-                    log.write(json.dumps(record) + "\n")
-                    log.flush()
-                    got = record["report"]["recommendation"] if "grades" in record else record["error"]
-                    print(f"{case['id']} run {record['rep']}: {got}", flush=True)
+        with (folder / "runs.jsonl").open("w") as log:
 
-        with ThreadPoolExecutor(args.workers) as pool:
-            list(pool.map(one_customer, cases))
+            def one_customer(case: dict) -> None:
+                for record in runs_of(client, tokens, case, signal_for(data[case["id"]], today), run_id, args.reps, args.timeout):
+                    record = {"arm": args.arm, **record}
+                    with lock:
+                        runs.append(record)
+                        log.write(json.dumps(record) + "\n")
+                        log.flush()
+                        got = record["report"]["recommendation"] if "grades" in record else record["error"]
+                        print(f"{case['id']} run {record['rep']}: {got}", flush=True)
+
+            with ThreadPoolExecutor(args.workers) as pool:
+                list(pool.map(one_customer, cases))
 
         case_id = next((run["case_id"] for run in runs if "case_id" in run), None)
         valid = signal_for(data[ids[0]], today)

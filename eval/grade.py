@@ -23,6 +23,10 @@ LINKS = {
 # How the summary of a report starts when two drafts failed the service's own check. The service
 # then hands the case to a person with no cause and no evidence: no answer was reached.
 GAVE_UP = "The report could not be completed."
+# Records code gives a case itself. No question has to reach them.
+OWN_RECORDS = ("hist_", "sig_", "xs_")
+# The outcomes of a question that was sent. A refused call never reached a specialist.
+SENT = ("answered", "no_answer")
 
 
 def gave_up(report: dict) -> bool:
@@ -46,6 +50,88 @@ def grade(case: dict, report: dict) -> dict:
         "hand_over": (report["recommendation"] == "needs_human") == ("needs_human" in case["recommendations"]),
         "cites": set(case["must_cite"]) <= cited(report) if "must_cite" in case else None,
     }
+
+
+def grade_path(case: dict, report: dict, path: dict) -> dict:
+    """How a run reached its answer, from the case's path page (spec 8.5). Every key of the path is read with .get."""
+    questions, drafts, gaps = path.get("questions", []), path.get("drafts", []), path.get("gaps", [])
+    must_reach = case.get("must_reach", [cid for cid in case.get("must_cite", []) if not cid.startswith(OWN_RECORDS)])
+    returned = {cid for question in questions for cid in question.get("returned", [])}
+    reached = set(must_reach) <= returned if must_reach else None
+    final, given_up = grade(case, report), gave_up(report)
+    # The listed guidelines are a joint set (c_111 rests on G-08a and G-01): citing any of them, and no other, is right.
+    rests_on, listed = set(report.get("guideline_ids") or []), set(case.get("guidelines", []))
+    guideline = None if "guidelines" not in case or given_up else bool(rests_on) and rests_on <= listed
+
+    first = drafts[0] if drafts else {}
+    first_draft = None
+    if first.get("recommendation"):  # a draft that was not a report has no labels
+        issued = {
+            "summary": "",
+            "likely_cause": first.get("likely_cause"),
+            # A report that passes with confidence low reaches the analyst as a hand-over.
+            "recommendation": "needs_human" if first.get("confidence") == "low" else first["recommendation"],
+            "evidence": [{"evidence_ids": first.get("cited", [])}],
+        }
+        first_draft = grade(case, issued)
+
+    def nudged_to(index: int) -> bool:
+        """Whether a gap pass before question `index` named its topic, and its record when the gap named one."""
+        question = questions[index]
+        return any(
+            gap.get("at") is not None and gap["at"] <= index
+            and ask.get("tool") == question.get("tool") and ask.get("topic") == question.get("topic")
+            and ask.get("record_id") in (None, question.get("record_id"))
+            for gap in gaps
+            for ask in gap.get("asks", [])
+        )  # fmt: skip
+
+    nudged = []
+    for cid in must_reach:
+        index = next((i for i, question in enumerate(questions) if cid in question.get("returned", [])), None)
+        if index is not None and nudged_to(index):
+            nudged.append(cid)
+
+    codes = (drafts[-1].get("codes", []) if drafts else []) if given_up else None
+    if given_up:
+        why = "gave up: " + ", ".join(dict.fromkeys(codes)) if codes else "gave up"
+    elif reached is False:
+        why = "path"
+    elif final["cites"] is False:
+        why = "evidence"
+    elif not final["cause"]:
+        why = "cause"
+    elif guideline is False:
+        why = "guideline"
+    elif not final["recommendation"]:
+        why = "action"
+    else:
+        why = "right"
+    return {
+        "reached": reached,
+        "guideline": guideline,
+        "questions": sum(1 for question in questions if question.get("outcome") in SENT),
+        # Every call refused before it was sent. The graph's own counter stops at MAX_REFUSALS (spec 0.3, item 15).
+        "refused": sum(1 for question in questions if question.get("outcome") == "refused"),
+        "searches": sum(1 for search in path.get("searches", []) if not search.get("refused")),
+        "first_draft": first_draft,
+        "first_draft_passed": first.get("result") in ("passed", "passed_low_confidence") if drafts else None,
+        "nudged": nudged,
+        "out_of_rounds": bool(path.get("out_of_rounds")),
+        "gave_up_codes": codes,
+        "handed_over_by": path.get("handed_over_by"),
+        "why": why,
+    }
+
+
+def at_first_draft(run: dict) -> dict:
+    """A run as its first checked draft would have been graded. A first draft that was not a report is wrong on every
+    check the case has. Without a path, or with no draft logged, the run has no grades."""
+    graded = run.get("path_grades") or {}
+    if graded.get("first_draft_passed") is None:
+        return {}
+    first = graded["first_draft"] or {check: None if run["grades"][check] is None else False for check in CHECKS}
+    return {"grades": first}
 
 
 def right_every_run(runs: list[dict], check: str, reps: int) -> bool | None:
@@ -167,4 +253,134 @@ def summary(golden: dict, runs: list[dict], requests: list[dict], reps: int, abo
     if errors:
         out += ["", "## Runs that ended in an error", ""]
         out += [f"- {run['case']} run {run['rep']}: {run['error']}" for run in errors]
+    if any("path_grades" in run for run in runs):  # only then, so a summary of runs without a path is as it was
+        out += _path_sections(ran, by_case, reps)
     return "\n".join(out) + "\n"
+
+
+def _path_sections(ran: list[dict], by_case: dict[str, list[dict]], reps: int) -> list[str]:
+    """What the summary adds when the runs carry their question path (spec 8.5)."""
+    pathed = [(case, run) for case in ran for run in by_case[case["id"]] if "path_grades" in run]
+
+    def name(case: dict, run: dict) -> str:
+        return f"{case['id']} run {run['rep']}"
+
+    def listed(names: list[str]) -> str:
+        return f"{len(names)} runs" + (f" ({', '.join(names)})." if names else ".")
+
+    out = [
+        "",
+        "## Right on the first draft",
+        "",
+        "The checks of the first table on the first draft the check saw, as the service would have issued it, and "
+        "beside each the share for the final report on the same cases. The first draft is what the model did. The "
+        "final report is what the model and the check did together: a draft the check corrected is not the model "
+        "being right.",
+        "",
+        "| | Recommendation | Cause | Handed over when it should, and only then | Cited the evidence the answer turns on |",
+        "|---|---|---|---|---|",
+    ]
+    held_out = [case for case in ran if case["split"] == "held_out"]
+    rows = (
+        ("All cases", ran),
+        ("Held out only", held_out),
+        # A dev case whose records and accepted answer this case shares: tuning on that case is tuning on this one.
+        ("Held out, without the look-alikes of a dev case", [case for case in held_out if "dev_lookalike" not in case]),
+    )
+    for title, chosen in rows:
+        cells = []
+        for check in CHECKS:
+            both = [
+                (right_every_run([at_first_draft(run) for run in by_case[case["id"]]], check, reps),
+                 right_every_run(by_case[case["id"]], check, reps))
+                for case in chosen
+            ]  # fmt: skip
+            counted = [(first, final) for first, final in both if first is not None and final is not None]
+            first, final = sum(first for first, _ in counted), sum(final for _, final in counted)
+            cells.append(f"{_share(first, len(counted))}; final report {_share(final, len(counted))}")
+        out.append(f"| {title} | " + " | ".join(cells) + " |")
+    right = [(case, run) for case, run in pathed if run["grades"]["recommendation"]]
+    at_once = [name(case, run) for case, run in right if run["path_grades"]["first_draft_passed"] is True]
+    after = [name(case, run) for case, run in right if run["path_grades"]["first_draft_passed"] is False]
+    # Split on what the check did. Whether the first draft already had the recommendation is the table's to say.
+    out += [
+        "",
+        f"- Right on the recommendation in the final report, with a first draft the check passed: {listed(at_once)}",
+        "- Right on the recommendation in the final report, with a first draft the check refused (on any rule, so that "
+        f"draft may have had the recommendation right already): {listed(after)}",
+    ]
+
+    out += [
+        "",
+        "## The questions asked",
+        "",
+        "| Case | Questions, run by run | Refused calls, run by run | Reached in every run "
+        "| Reached only after a code nudge, run by run | Why, run by run |",
+        "|---|---|---|---|---|---|",
+    ]
+    for case in ran:
+        grades = [run.get("path_grades") for run in by_case[case["id"]]]
+        if not any(grades):
+            continue
+        asked = [
+            "-" if g is None else f"{g['questions']} at the round limit" if g["out_of_rounds"] else str(g["questions"])
+            for g in grades
+        ]
+        refused = ["-" if g is None else str(g["refused"]) for g in grades]
+        reached = right_every_run([{"grades": {"reached": g["reached"]}} for g in grades if g], "reached", reps)
+        nudged = [
+            "-" if g is None or g["reached"] is None else "not reached" if not g["reached"] else "yes" if g["nudged"] else "no"
+            for g in grades
+        ]  # fmt: skip
+        why = ["-" if g is None else g["why"] for g in grades]
+        out.append(
+            f"| {case['id']} | {', '.join(asked)} | {', '.join(refused)} | {_mark(reached)} "
+            f"| {', '.join(nudged)} | {'; '.join(why)} |"
+        )
+
+    given_up = [(case, run) for case, run in pathed if run["path_grades"]["gave_up_codes"] is not None]
+    out += ["", "## Reports the service could not complete", ""]
+    if given_up:
+        out += [
+            f"{len(given_up)} runs ended with a report the service gave up on. The rules that refused the last draft, "
+            "by code (one draft can break several). not_settled: a hand-over because nothing fits, while a guideline "
+            "that allows an action still needed a record nobody asked for.",
+            "",
+            "| Code | Runs | Cases |",
+            "|---|---|---|",
+        ]
+        by_code = {}
+        for case, run in given_up:
+            for code in dict.fromkeys(run["path_grades"]["gave_up_codes"]):  # a code twice in one draft is one run
+                by_code.setdefault(code, []).append(case["id"])
+        for code, cases in sorted(by_code.items(), key=lambda item: (-len(item[1]), item[0])):
+            out.append(f"| {code} | {len(cases)} | {', '.join(sorted(set(cases)))} |")
+    else:
+        out.append("None.")
+
+    lowered = [
+        name(case, run)
+        for case, run in pathed
+        if run["path_grades"]["handed_over_by"] == "low_confidence" and "needs_human" not in case["recommendations"]
+    ]
+    untested = [
+        name(case, run) for case, run in pathed if run["grades"]["recommendation"] and run["path_grades"]["reached"] is False
+    ]
+    out += [
+        "",
+        "## Handed over by lowering confidence",
+        "",
+        "Runs on cases whose accepted answers hold no hand-over, where a report passed the check with confidence low and "
+        "code turned it into a hand-over. That is the shape of the pilot incident, so it is counted apart from other "
+        "wrong answers.",
+        "",
+        listed(lowered),
+        "",
+        "## Passed without being tested",
+        "",
+        "Runs right on the recommendation whose questions never returned a record the case must reach: the answer did "
+        "not rest on what it had to be tested on.",
+        "",
+        listed(untested),
+    ]
+    return out

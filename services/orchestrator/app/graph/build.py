@@ -2,14 +2,15 @@
 
 Code fixes the order of the steps. The model decides three things: which
 question to ask next, whether anything is still unexplained, and what the
-report says. A person decides whether anything changes.
+report says. A person decides whether anything changes. In the two fixed
+flows, which exist to be compared with this one, code asks the questions.
 """
 
 import json
 import logging
 from collections.abc import Callable
 from datetime import date, timedelta
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
@@ -17,19 +18,23 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app import policy
-from app.graph import facts, figures, needs, prompts
+from app.graph import facts, figures, needs, plans, prompts
 from app.graph.causes import CAUSE_NEEDS, CAUSES, OWN_KINDS, TOPIC_TESTS, TOPICS
 from app.graph.report import ReportDraft
 from app.graph.state import CaseState, RunContext
 from contracts import InvestigateRequest, InvestigateResponse
 
+if TYPE_CHECKING:
+    from app.retrieval import Found
+
 log = logging.getLogger(__name__)
 
 MAX_ROUNDS = 6  # questions to specialists per case
 MAX_REFUSALS = 3  # calls refused before they were sent that use no round
+MAX_SEARCHES = 2  # searches of past cases per case that use no round
 MAX_GAP_RETURNS = 2  # times step 3 may send the case back to step 2
 MAX_DRAFTS = 2  # the report is redrafted once if the check fails
 WINDOW_DAYS = 7
@@ -72,6 +77,19 @@ class AskCreditBehavior(BaseModel):
     separates: list[Cause] = Field(min_length=1, description="The causes this answer will tell apart.")
     start: str | None = None
     end: str | None = None
+
+
+class SearchPastCases(BaseModel):
+    """Look up closed reviews that resemble this one, with what a person decided.
+    Background only: it is not evidence and cannot be cited."""
+
+    query: str = Field(min_length=10, description="What was found so far, in one or two sentences.")
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def _kept(cls, query):
+        # Free text: NUL removed where it enters the state (1.3). The length is counted on what is kept.
+        return query.replace("\x00", "").strip() if isinstance(query, str) else query
 
 
 TOOLS = {"AskCashFlow": AskCashFlow, "AskCreditBehavior": AskCreditBehavior}
@@ -510,6 +528,13 @@ def _unread(message) -> list[ToolMessage]:
     ]
 
 
+def _other_calls(message: AIMessage) -> list[ToolMessage]:
+    """An answer to every call of a turn but the first, which is the one served: one question per turn."""
+    _, *extra_calls = message.tool_calls
+    not_asked = "Not asked. Ask one question per turn."
+    return [ToolMessage(not_asked, tool_call_id=extra["id"]) for extra in extra_calls] + _unread(message)
+
+
 def _ended_by(last) -> str:
     """How the questions ended, from the last message before the gap pass."""
     if not isinstance(last, AIMessage):
@@ -517,6 +542,11 @@ def _ended_by(last) -> str:
     if last.invalid_tool_calls:
         return "unreadable_call"
     return "done" if last.text.strip() == "DONE" else "prose"
+
+
+def _names(step: dict) -> tuple:
+    """The question a planned step or a code gap's ask names: its tool, its topic and the record it is about."""
+    return step["tool"], step["args"]["topic"], step["args"].get("record_id")
 
 
 def _own_facts(state: CaseState) -> list[dict]:
@@ -533,6 +563,9 @@ def build_graph(
     checkpointer=None,
     structured_output: dict | None = None,
     earlier_reviews: Callable[[str, str], list[dict]] = lambda customer_id, as_of: [],
+    search_reviews: "Callable[[dict], Found] | None" = None,
+    plan: list[dict] | None = None,
+    follow_gaps: bool = False,
 ):
     """Build the graph.
 
@@ -548,13 +581,26 @@ def build_graph(
     which become the hist_ records of the case. Left out, every case is a first
     review. It is not caught here: a lookup that fails must not read as "no history".
 
+    search_reviews({"customer_id", "as_of", "query"}) gives what retrieval.search
+    found. Given, the investigator is offered SearchPastCases. Left out, it is not,
+    and a call to it is a call to a tool that does not exist.
+
+    plan and follow_gaps choose who asks the questions (8.4). With neither, the
+    model does: the agent flow. With a plan, code asks its steps in order and no
+    model is called before the report: the fixed flow. With follow_gaps as well,
+    code then asks what its gap list names: the fixed_rules flow.
+
     Start a case once per thread, then resume it with Command(resume=...). The
     caller must not invoke a thread with a signal twice: the answers add up.
     """
-    investigator = model.bind_tools([AskCashFlow, AskCreditBehavior], parallel_tool_calls=False)
+    can_search = search_reviews is not None
+    tools = [AskCashFlow, AskCreditBehavior, *([SearchPastCases] if can_search else [])]
+    investigator = model.bind_tools(tools, parallel_tool_calls=False)
     how = structured_output or {}
     gap_reviewer = model.with_structured_output(GapReview, include_raw=True, **how)
     report_writer = model.with_structured_output(ReportDraft, include_raw=True, **how)
+    flow = "agent" if plan is None else "fixed_rules" if follow_gaps else "fixed"
+    round_limit = MAX_ROUNDS if plan is None else len(plan) + plans.MAX_FOLLOW_UPS
 
     def open_case(state: CaseState) -> dict:
         signal = state["signal"]
@@ -569,19 +615,31 @@ def build_graph(
             "window": window,
             "guidelines": guidelines,
             "facts": case_facts,
-            "flow": "agent",
+            "flow": flow,
             "policy_version": policy.POLICY_VERSION,
             "rounds": 0,
             "refusals": 0,
             "gap_passes": 0,
             "drafts": 0,
             "messages": [
-                SystemMessage(prompts.INVESTIGATOR),
+                SystemMessage(prompts.investigator(can_search)),
                 HumanMessage(prompts.opening_brief(case_facts, guidelines, window)),
             ],
         }
 
     def investigate(state: CaseState) -> dict:
+        if plan is not None:
+            # Code asks: the next step of the plan and its follow-ups, and DONE after the last. No model call.
+            # The round limit is checked first, as in the agent flow, so a run that used every round ended there.
+            if state["rounds"] >= round_limit:
+                return {}
+            # Counted by the calls made, not by rounds, so a step that was refused is not made again.
+            queue, made = [*plan, *state.get("plan_extra", [])], len(state.get("asked", []))
+            if made >= len(queue):
+                return {"messages": [AIMessage(content="DONE")]}
+            step = queue[made]
+            asks = {"name": step["tool"], "args": step["args"], "id": f"plan_{made}"}
+            return {"messages": [AIMessage(content="", id=f"plan_{made}", tool_calls=[asks])]}
         if state["rounds"] >= MAX_ROUNDS:
             return {}
         reply = investigator.invoke(state["messages"])
@@ -598,9 +656,44 @@ def build_graph(
         asked = isinstance(last, AIMessage) and bool(last.tool_calls)
         return "ask_specialist" if asked else "look_for_gaps"
 
+    def search_past_cases(state: CaseState, call: dict) -> dict:
+        """Served apart from the specialists (7.5). What a search found goes into one tool message, under a
+        header code wrote, and nowhere else: not into answers, so no other model sees it, and not into the
+        ledger, so a report cannot cite it. Its case ids stay in the state, for the path page.
+
+        A search served uses no round, up to MAX_SEARCHES. A search beyond them, one with bad arguments and
+        one that raised each use a round, so a model that only searches cannot keep a case going.
+        """
+
+        def refused(error: str) -> dict:
+            told = ToolMessage(json.dumps({"error": error}), tool_call_id=call["id"], status="error")
+            return {"searches": [{"refused": True}], "rounds": state["rounds"] + 1, "messages": [told]}
+
+        if sum("returned" in entry for entry in state.get("searches", [])) >= MAX_SEARCHES:
+            return refused("Not searched: this case has used its searches.")
+        try:
+            query = SearchPastCases.model_validate(call["args"]).query
+        except ValidationError:
+            return refused("Not searched: query must say in words what was found so far.")
+        signal = state["signal"]
+        try:
+            found = search_reviews({"customer_id": signal["customer_id"], "as_of": signal["as_of"], "query": query})
+        except Exception as failure:
+            log.warning("case %s: the search gave no usable answer: %s", state["case_id"], failure)
+            return refused("No usable answer from SearchPastCases.")
+        results = json.dumps({"untrusted": prompts.SEARCH_HEADER, "results": found.results})
+        return {
+            "searches": [{"query": query, "returned": list(found.case_ids)}],
+            "messages": [ToolMessage(results, tool_call_id=call["id"])],
+        }
+
     def ask_specialist(state: CaseState) -> dict:
         last = state["messages"][-1]
-        call, *extra_calls = last.tool_calls
+        call = last.tool_calls[0]
+        if call["name"] == SearchPastCases.__name__ and can_search:
+            update = search_past_cases(state, call)
+            update["messages"] += _other_calls(last)
+            return update
         agent = AGENT_FOR_TOOL.get(call["name"])
         asked = agent or call["name"]
         answer = {"agent": agent, "question": call["args"].get("question")}
@@ -662,12 +755,7 @@ def build_graph(
             if match := facts.ledger({**state, "answers": [*state.get("answers", []), answer]}).get("xs_account_match"):
                 told["worked_out_by_code"] = facts.shown(match)
         status = "error" if "error" in answer else "success"
-        messages = [ToolMessage(json.dumps(told), tool_call_id=call["id"], status=status)]
-        messages += [
-            ToolMessage("Not asked. Ask one question per turn.", tool_call_id=extra["id"])
-            for extra in extra_calls
-        ]
-        messages += _unread(last)
+        messages = [ToolMessage(json.dumps(told), tool_call_id=call["id"], status=status), *_other_calls(last)]
         update = {"answers": [answer], "asked": [entry], "messages": messages}
         # A slip in the form of a call does not use up the questions. Bounded all the same: after
         # MAX_REFUSALS such slips, each one uses a round. A tool that does not exist always does.
@@ -678,16 +766,24 @@ def build_graph(
             update["rounds"] = state["rounds"] + 1
         return update
 
-    def _goes_back(gaps: list[str], rounds: int, gap_passes: int) -> bool:
-        return bool(gaps) and rounds < MAX_ROUNDS and gap_passes <= MAX_GAP_RETURNS
+    def _goes_back(state: CaseState) -> bool:
+        """Whether a gap pass sends the case back for more questions, read on the state the pass leaves."""
+        if state["rounds"] >= round_limit or state["gap_passes"] > MAX_GAP_RETURNS:
+            return False
+        if plan is None:
+            return bool(state["gaps"])
+        # A plan goes back only for a follow-up it queued and has not asked yet.
+        return len(plan) + len(state.get("plan_extra", [])) > len(state.get("asked", []))
 
     def look_for_gaps(state: CaseState) -> dict:
         asked = state.get("asked", [])
-        # Code looks first. What it finds goes back as it is, and the model's gap review is not called.
+        # Code looks first, in every flow. What it finds goes back as it is, and the model's gap review is not called.
         found = needs.code_gaps(state.get("guidelines", []), list(facts.ledger(state).values()), asked)
         dropped = 0
         if found:
             gaps, by = [gap["text"] for gap in found], "code"
+        elif plan is not None:
+            gaps, by = [], "none"  # no model is called while a plan runs
         else:
             tested = {cause for entry in asked if entry["outcome"] != "refused" for cause in entry.get("tests", [])}
             brief = prompts.investigation_brief(
@@ -712,25 +808,29 @@ def build_graph(
             dropped, by = len(written) - len(gaps), "model"
             if dropped:
                 log.warning("case %s: %d gaps that state a figure were dropped", state["case_id"], dropped)
-        gap_passes = state["gap_passes"] + 1
+        last = state["messages"][-1]
         logged = {
             "by": by,
             "gaps": gaps,
             "asks": [{"tool": gap["ask"]["tool"], **gap["ask"]["args"]} for gap in found],
             "dropped": dropped,
             "at": len(asked),
-            "ended_by": _ended_by(state["messages"][-1]),
+            # With a plan, a last message from investigate is the DONE it gives after the last step.
+            "ended_by": "plan" if plan is not None and isinstance(last, AIMessage) else _ended_by(last),
         }
-        update = {"gaps": gaps, "gap_passes": gap_passes, "gap_log": [logged]}
-        if _goes_back(gaps, state["rounds"], gap_passes):
+        update = {"gaps": gaps, "gap_passes": state["gap_passes"] + 1, "gap_log": [logged]}
+        if flow == "fixed_rules":
+            # Code follows its own gap list: each question it names that is not in the queue yet.
+            queued = {_names(step) for step in [*plan, *state.get("plan_extra", [])]}
+            update["plan_extra"] = [plans.follow_up(gap["ask"]) for gap in found if _names(gap["ask"]) not in queued]
+        elif plan is None and _goes_back({**state, **update}):
             # A reply whose tool call could not be read ended the questions. It is answered before the nudge.
             nudge = HumanMessage("Still unexplained:\n" + "\n".join(f"- {gap}" for gap in gaps))
-            update["messages"] = [*_unread(state["messages"][-1]), nudge]
+            update["messages"] = [*_unread(last), nudge]
         return update
 
     def after_gaps(state: CaseState) -> str:
-        goes_back = _goes_back(state["gaps"], state["rounds"], state["gap_passes"])
-        return "investigate" if goes_back else "fetch_guidelines"
+        return "investigate" if _goes_back(state) else "fetch_guidelines"
 
     def fetch_guidelines(state: CaseState) -> dict:
         return {"guidelines": load_guidelines()}
