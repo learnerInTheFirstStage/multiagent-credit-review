@@ -1,12 +1,23 @@
-import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
+from app.db import Base, SessionLocal, engine
+from app.db.seed import seed_if_empty
 from contracts import Health
 
-engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
-app = FastAPI(title="Card Service")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create any missing tables; seed only when the database is empty.
+    Base.metadata.create_all(engine)
+    with SessionLocal() as session:
+        seed_if_empty(session)
+    yield
+
+
+app = FastAPI(title="Card Service", lifespan=lifespan)
 
 
 @app.get("/health", response_model=Health)
