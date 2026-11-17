@@ -1,0 +1,9 @@
+# Adds the evaluation's own customers to what the specialists' stand-ins read.
+# Used on top of the main file:
+#   docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres card orchestrator
+services:
+  orchestrator:
+    environment:
+      SHARED_CUSTOMERS_FILE: /data/shared_customers.yaml:/eval/extra_customers.yaml
+    volumes:
+      - ./eval/extra_customers.yaml:/eval/extra_customers.yaml:ro

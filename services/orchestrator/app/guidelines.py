@@ -1,8 +1,16 @@
 """The credit guidelines a report has to follow.
 
 Our own written rules for the POC: Ramp's real credit policy is not public. The
-text is tab 3 of "3. Scenario table", where the team can read it. The
-Orchestrator owner decides the final wording.
+text starts from tab 3 of "3. Scenario table". The Orchestrator owner decides
+the final wording.
+
+Two of the sheet's guidelines are split in two here, because one fact decides
+between different actions and issuers act on that fact:
+
+- G-08, a failed repayment. Issuers stop spend until it is paid, and restore it
+  once it is. So "since paid" and "still unpaid" are separate guidelines.
+- G-10, missing or conflicting data. A feed that stopped is the customer's to
+  fix, and issuers give time to reconnect. Records that disagree are for a person.
 """
 
 from pydantic import BaseModel, Field
@@ -66,10 +74,17 @@ GUIDELINES = [
         allows=["reduce_limit", "pause_card"],
     ),
     Guideline(
-        id="G-08",
-        title="Failed repayment with high utilization",
-        when="A repayment failed and most of the limit is used",
-        allows=["pause_card", "reduce_limit"],
+        id="G-08a",
+        title="Failed repayment, since paid",
+        when="A repayment failed and was paid within days, and income is steady",
+        allows=["keep_limit"],
+    ),
+    Guideline(
+        id="G-08b",
+        title="Failed repayment, still unpaid",
+        when="A repayment failed and has not been paid",
+        allows=["pause_card"],
+        note="Spend stops until the repayment is made.",
     ),
     Guideline(
         id="G-09",
@@ -78,10 +93,17 @@ GUIDELINES = [
         allows=["request_documents"],
     ),
     Guideline(
-        id="G-10",
-        title="Missing or conflicting data",
-        when="A linked account is not reporting, or balances and transactions disagree",
-        allows=["needs_human", "request_documents"],
+        id="G-10a",
+        title="Data gap the customer can fix",
+        when="A linked account is not reporting",
+        allows=["request_documents"],
+        note="Ask the customer to reconnect the account or to upload its statements.",
+    ),
+    Guideline(
+        id="G-10b",
+        title="Records disagree",
+        when="Balances and transactions do not match",
+        allows=["needs_human"],
     ),
     Guideline(
         id="G-11",
@@ -115,7 +137,7 @@ GUIDELINES = [
 def load() -> list[dict]:
     """Every guideline, as the graph keeps them. A new copy each time.
 
-    With 14 guidelines all of them go into the prompt. If the list grows, a search
+    With 16 guidelines all of them go into the prompt. If the list grows, a search
     for the ones that apply goes behind this same function.
     """
     return [guideline.model_dump() for guideline in GUIDELINES]
