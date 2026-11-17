@@ -80,6 +80,16 @@ def _person_decides(state: CaseState, step: str) -> dict:
         shown = {**shown, "problem": DECISION_SHAPE}
 
 
+def _cut_off(reply) -> bool:
+    """Whether the model ran out of room before it finished.
+
+    It has to be asked: a provider's own structured output parses what did arrive,
+    so a report cut short can still come back looking complete.
+    """
+    metadata = getattr(reply, "response_metadata", None) or {}
+    return metadata.get("stop_reason") == "max_tokens" or metadata.get("finish_reason") == "length"
+
+
 def _needs_manager(state: CaseState) -> bool:
     recommendation = state["report"]["recommendation"]
     if recommendation == "pause_card":
@@ -146,6 +156,7 @@ def build_graph(
     load_guidelines: Callable[[], list[dict]],
     carry_out: Callable[[dict, str | None], dict],
     checkpointer=None,
+    structured_output: dict | None = None,
 ):
     """Build the graph.
 
@@ -154,12 +165,16 @@ def build_graph(
     carry_out sends one approved action to the Card Service, with the approver's
     token from the call's context, and returns Card's answer.
 
+    structured_output goes to the model's with_structured_output, for a provider's
+    own way of returning a schema, such as {"method": "json_schema"}.
+
     Start a case once per thread, then resume it with Command(resume=...). The
     caller must not invoke a thread with a signal twice: the answers add up.
     """
     investigator = model.bind_tools([AskCashFlow, AskCreditBehavior])
-    gap_reviewer = model.with_structured_output(GapReview, include_raw=True)
-    report_writer = model.with_structured_output(ReportDraft, include_raw=True)
+    how = structured_output or {}
+    gap_reviewer = model.with_structured_output(GapReview, include_raw=True, **how)
+    report_writer = model.with_structured_output(ReportDraft, include_raw=True, **how)
 
     def open_case(state: CaseState) -> dict:
         signal = state["signal"]
@@ -181,6 +196,8 @@ def build_graph(
         if state["rounds"] >= MAX_ROUNDS:
             return {}
         reply = investigator.invoke(state["messages"])
+        if _cut_off(reply):
+            log.warning("case %s: the investigator's answer was cut off", state["case_id"])
         if reply.invalid_tool_calls and not reply.tool_calls:
             # Read as "enough" for now. To settle on the first run with a real model.
             log.warning("case %s: the investigator's tool call could not be read", state["case_id"])
@@ -234,10 +251,11 @@ def build_graph(
     def look_for_gaps(state: CaseState) -> dict:
         brief = prompts.investigation_brief(state["signal"], state.get("answers", []))
         reply = gap_reviewer.invoke([SystemMessage(prompts.GAPS), HumanMessage(brief)])
-        review = reply["parsed"]
+        review = None if _cut_off(reply["raw"]) else reply["parsed"]
         if review is None:
             # The case goes on: step 6 still checks that the report addresses every review reason.
-            log.warning("case %s: the gap review gave no usable answer: %s", state["case_id"], reply["parsing_error"])
+            why = "it was cut off" if _cut_off(reply["raw"]) else reply["parsing_error"]
+            log.warning("case %s: the gap review gave no usable answer: %s", state["case_id"], why)
         gaps = review.gaps if review else []
         gap_passes = state["gap_passes"] + 1
         update = {"gaps": gaps, "gap_passes": gap_passes}
@@ -261,9 +279,11 @@ def build_graph(
             state.get("check", {}).get("problems", []),
         )
         reply = report_writer.invoke([SystemMessage(prompts.REPORT), HumanMessage(brief)])
-        draft = reply["parsed"]
+        cut_off = _cut_off(reply["raw"])
+        draft = None if cut_off else reply["parsed"]
         if draft is None:
-            error = str(reply["parsing_error"] or "No report was returned.")
+            error = "It was cut off before it was complete. Write a shorter report." if cut_off else None
+            error = error or str(reply["parsing_error"] or "No report was returned.")
             log.warning("case %s: draft %d is not a report: %s", state["case_id"], state["drafts"] + 1, error)
             # The redraft is told what did not fit.
             return {"report": None, "draft_error": error[:1000], "drafts": state["drafts"] + 1}

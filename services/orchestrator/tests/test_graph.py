@@ -586,6 +586,11 @@ def test_a_specialist_with_no_usable_answer_does_not_stop_the_case(cash_flow):
             "The output did not fit the report shape. No report was returned.",
             id="prose with no report",
         ),
+        pytest.param(
+            report().model_copy(update={"response_metadata": {"finish_reason": "length"}}),
+            "It was cut off before it was complete. Write a shorter report.",
+            id="cut off, as another provider reports it",
+        ),
     ],
 )
 def test_a_report_that_fails_the_check_is_redrafted_once(bad_draft, problem):
@@ -628,6 +633,31 @@ def test_two_failed_drafts_hand_the_case_to_a_person():
 
     assert run.sent == []
     assert result["status"] == "done"
+
+
+def cut_off(message: AIMessage) -> AIMessage:
+    """The same answer, but the model ran out of room while writing it."""
+    return message.model_copy(update={"response_metadata": {"stop_reason": "max_tokens"}})
+
+
+def test_a_report_that_was_cut_off_is_not_taken_even_though_it_reads_as_complete():
+    # What arrived parses as a full report. It may be missing whatever came after the cut.
+    run = Run([*INVESTIGATION, cut_off(report(other_findings=[])), report()])
+
+    assert run.result["drafts"] == 2
+    assert run.result["check"] == {"passed": True, "problems": []}
+    assert run.shown["report"]["other_findings"] == REPORT["other_findings"]
+
+
+def test_a_gap_review_that_was_cut_off_is_not_taken_as_nothing_missing_or_as_a_full_list():
+    partial = cut_off(gaps("The card side was never asked."))
+
+    run = Run([ask_bank("Where did the money go?"), DONE, partial, report(**BANK_ONLY)])
+
+    # Not sent back on half a list, and the case still reaches a person.
+    assert run.result["gaps"] == []
+    assert len(run.result["answers"]) == 1
+    assert run.waiting_at == ("analyst_approval",)
 
 
 def test_two_outputs_that_are_not_reports_hand_the_case_to_a_person():

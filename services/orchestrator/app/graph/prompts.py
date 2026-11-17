@@ -12,7 +12,9 @@ Two specialists can look things up for you:
 - AskCreditBehavior reads the customer's card records: limit, spend, balance, repayments.
 
 How to work:
-- Ask one question per turn. Choose each question from what the last answer showed.
+- Ask one question per turn, about one thing. Choose each question from what the last answer showed.
+- If an answer does not address your question, ask it once more in other words. If that fails too, \
+treat it as not determined and move on.
 - A specialist remembers nothing. Put what it needs from earlier answers in `context`.
 - Specialists report facts. Do not ask them what to do about the limit.
 - Ask both specialists at least once.
@@ -28,7 +30,8 @@ List what is still unexplained:
 - a review reason that no finding explains,
 - a specialist that was never asked.
 
-Something a specialist said cannot be determined is not a gap. Return an empty list when \
+Something a specialist said cannot be determined is not a gap. Neither is a question that was \
+asked twice without a useful answer: it could not be determined. Return an empty list when \
 nothing is missing."""
 
 REPORT = """\
@@ -36,6 +39,7 @@ Write the review report for a credit analyst.
 
 Rules:
 - Use only facts from the specialists' answers. Every claim cites evidence ids that appear in them.
+- Write amounts in dollars, such as $400,000. The records hold cents.
 - Say what the report finds about each review reason. If it could not be determined, say so.
 - Choose the likely cause the evidence supports. If it supports none, use no_clear_cause or \
 insufficient_data and recommend needs_human.
