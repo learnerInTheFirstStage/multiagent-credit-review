@@ -1,14 +1,14 @@
-"""Run the Credit Behavior test set: every case through the agent, graded by checks.py.
+"""Run the Card Service agent's test set: every case through the agent, graded by checks.py.
 
 From the repo root, with the Orchestrator's Python environment (the runner imports the agent):
 
     # A live Card Service (docker compose up -d postgres card), no model: free and deterministic.
-    services/orchestrator/.venv/bin/python eval/credit_behavior/run.py --no-model
+    services/orchestrator/.venv/bin/python eval/card_service/run.py --no-model
     # The same with the model in LLM_MODEL / LLM_API_KEY. Spends money; the owner starts it.
-    services/orchestrator/.venv/bin/python eval/credit_behavior/run.py
+    services/orchestrator/.venv/bin/python eval/card_service/run.py
     # Record Card's answers for the offline test, or replay them instead of calling Card.
-    services/orchestrator/.venv/bin/python eval/credit_behavior/run.py --no-model --record
-    services/orchestrator/.venv/bin/python eval/credit_behavior/run.py --no-model --replay
+    services/orchestrator/.venv/bin/python eval/card_service/run.py --no-model --record
+    services/orchestrator/.venv/bin/python eval/card_service/run.py --no-model --replay
 
 Results: results/<stamp>-<mode>.json and results/latest.md (git-ignored). Exit code 1 if a case failed.
 """
@@ -44,7 +44,7 @@ def _load(name: str, path: Path):
     return module
 
 
-checks = _load("credit_behavior_checks", HERE / "checks.py")
+checks = _load("card_service_checks", HERE / "checks.py")
 
 
 def load_cases(path: Path = HERE / "cases.yaml") -> tuple[list[dict], dict]:
@@ -86,14 +86,14 @@ class Recording(httpx.BaseTransport):
 
 
 def run_case(case: dict, window: dict, *, store: dict, replay: bool, model=None) -> tuple[dict, dict]:
-    from app.agents.credit_behavior import credit_behavior
+    from app.agents.card_service import card_service
     from contracts import InvestigateRequest
 
     transport = Recording(store=store, replay=replay, down=case.get("card") == "down")
     request = InvestigateRequest(case_id=f"case_{case['id']}", customer_id=case["customer"], question=case["question"],
                                  window_start=window["start"], window_end=window["end"], topic=case.get("topic"))
     with httpx.Client(transport=transport) as http:
-        response = credit_behavior(request, http=http, model=model)
+        response = card_service(request, http=http, model=model)
     return response.model_dump(mode="json"), transport.returned
 
 
@@ -111,7 +111,7 @@ def run(*, replay: bool = False, record: bool = False, cases: list[dict] | None 
 
 def summary(results: list[dict], mode: str) -> str:
     passed = sum(r["passed"] for r in results)
-    lines = [f"# Credit Behavior test set, {mode}", "",
+    lines = [f"# Card Service agent test set, {mode}", "",
              f"{passed} of {len(results)} cases passed.", "", "| Case | Result | Failed checks |", "|---|---|---|"]
     for r in results:
         failed = "; ".join(f"{name}: {why}" for name, why in r["checks"].items() if why)

@@ -1,7 +1,7 @@
-"""The Credit Behavior test set (KAN-29) holds, offline, and its grader catches what it must.
+"""The Card Service agent's test set (KAN-29) holds, offline, and its grader catches what it must.
 
-The set lives in eval/credit_behavior, outside this service, like the golden set. It is tested
-here because it runs this service's agent. Card's answers come from eval/credit_behavior/recorded.json,
+The set lives in eval/card_service, outside this service, like the golden set. It is tested
+here because it runs this service's agent. Card's answers come from eval/card_service/recorded.json,
 recorded from the seeded stack with `run.py --no-model --record`.
 """
 
@@ -13,7 +13,7 @@ import pytest
 
 from tests._cash_flow_helpers import ScriptedChatModel
 
-SET = Path(__file__).resolve().parents[3] / "eval" / "credit_behavior"
+SET = Path(__file__).resolve().parents[3] / "eval" / "card_service"
 
 
 def _load(name: str, path: Path):
@@ -23,7 +23,7 @@ def _load(name: str, path: Path):
     return module
 
 
-runner = _load("credit_behavior_run", SET / "run.py")
+runner = _load("card_service_run", SET / "run.py")
 checks = runner.checks
 CASES, WINDOW = runner.load_cases()
 BY_ID = {case["id"]: case for case in CASES}

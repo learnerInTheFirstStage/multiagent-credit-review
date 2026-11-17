@@ -1,6 +1,6 @@
-"""Grading for the Credit Behavior test set: the checks every answer must pass, and each case's own.
+"""Grading for the Card Service agent's test set: the checks every answer must pass, and each case's own.
 
-Imported by run.py and by services/orchestrator/tests/test_credit_behavior_set.py, both with the
+Imported by run.py and by services/orchestrator/tests/test_card_service_set.py, both with the
 Orchestrator's code importable (it uses the graph's own acceptance check and the agent's figure
 check, so the set grades by the same rules the service runs on).
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.agents.credit_behavior.guardrails import recommends_an_action, unsupported_figures
+from app.agents.card_service.guardrails import recommends_an_action, unsupported_figures
 from app.graph import build
 from contracts import Evidence, InvestigateResponse
 

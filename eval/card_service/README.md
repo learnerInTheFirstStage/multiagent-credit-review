@@ -1,6 +1,6 @@
-# Credit Behavior test set
+# Card Service agent test set
 
-KAN-29. The Credit Behavior Agent tested on its own: one question at a time, straight to the agent (`services/orchestrator/app/agents/credit_behavior`) and the Card Service, without the Orchestrator's graph. The golden set in `eval/` tests the whole case; this set tests the specialist's answers.
+KAN-29. The Credit Behavior Agent tested on its own: one question at a time, straight to the agent (`services/orchestrator/app/agents/card_service`, the Credit Behavior specialist) and the Card Service, without the Orchestrator's graph. The golden set in `eval/` tests the whole case; this set tests the specialist's answers.
 
 ## Files
 
@@ -12,7 +12,7 @@ KAN-29. The Credit Behavior Agent tested on its own: one question at a time, str
   - `counts_from_records`: every "N paid / late / failed" is the count the cited records give;
   - `no_action`: no limit or card action is recommended.
 - `run.py`: the runner. `recorded.json`: Card's answers to every case, recorded from the seeded stack, for the offline test.
-- `services/orchestrator/tests/test_credit_behavior_set.py` replays the set offline and checks that the grader catches what it must:
+- `services/orchestrator/tests/test_card_service_set.py` replays the set offline and checks that the grader catches what it must:
   - a record no tool returned, or one changed after it was returned;
   - a made-up figure or count;
   - a recommendation;
@@ -25,10 +25,10 @@ KAN-29. The Credit Behavior Agent tested on its own: one question at a time, str
 From the repo root, with the Orchestrator's Python environment, and Card up (`docker compose up -d postgres card`):
 
 ```bash
-services/orchestrator/.venv/bin/python eval/credit_behavior/run.py --no-model            # code only: free, deterministic
-services/orchestrator/.venv/bin/python eval/credit_behavior/run.py                       # the model in LLM_MODEL: costs money
-services/orchestrator/.venv/bin/python eval/credit_behavior/run.py --no-model --record   # after a Card or seed change
-services/orchestrator/.venv/bin/python eval/credit_behavior/run.py --no-model --replay   # no Card needed
+services/orchestrator/.venv/bin/python eval/card_service/run.py --no-model            # code only: free, deterministic
+services/orchestrator/.venv/bin/python eval/card_service/run.py                       # the model in LLM_MODEL: costs money
+services/orchestrator/.venv/bin/python eval/card_service/run.py --no-model --record   # after a Card or seed change
+services/orchestrator/.venv/bin/python eval/card_service/run.py --no-model --replay   # no Card needed
 ```
 
 `results/latest.md` has the table and every finding; `results/<stamp>-<mode>.json` the full answers (both git-ignored). The exit code is 1 if a case failed. The runner signs the agent's token with `JWT_SECRET`, defaulting to compose's local fallback.

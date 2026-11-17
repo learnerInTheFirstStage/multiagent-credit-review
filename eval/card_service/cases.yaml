@@ -1,4 +1,4 @@
-# The Credit Behavior Agent's standalone test set (KAN-29). See README.md.
+# The Card Service agent's standalone test set (KAN-29): the Credit Behavior specialist. See README.md.
 #
 # Every case also gets the checks every answer must pass (checks.py, GENERAL):
 #   valid               the response is an InvestigateResponse the graph accepts (build._usable)
