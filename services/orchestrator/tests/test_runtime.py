@@ -1,5 +1,7 @@
 """How the running service sets up its model."""
 
+import os
+
 import pytest
 
 from app import runner, runtime
@@ -56,10 +58,16 @@ def test_the_gap_review_and_the_report_are_asked_for_the_way_the_service_is_set_
     monkeypatch.delenv("LLM_STRUCTURED_OUTPUT", raising=False)
     if setting is not None:
         monkeypatch.setenv("LLM_STRUCTURED_OUTPUT", setting)
-    nothing_to_do = report(likely_cause="no_clear_cause", recommendation="needs_human", guideline_ids=[], evidence=[])
+    nothing_to_do = report(recommendation="pause_card", guideline_ids=["G-08b"], confidence="low")
 
     with service_graph(monkeypatch, [*INVESTIGATION, nothing_to_do]) as graph:
         state = graph.invoke({"case_id": "case_set_up", "signal": SIGNAL}, runner.thread("case_set_up"))
 
     assert asked == [("GapReview", method), ("ReportDraft", method)]
     assert state["status"] == "needs_approval"
+
+
+def test_the_suite_starts_with_no_flow_or_embedder_from_the_shell():
+    # conftest drops both, so a shell that exports INVESTIGATION_FLOW=fixed cannot turn service tests into the fixed arm.
+    assert "INVESTIGATION_FLOW" not in os.environ
+    assert "EMBEDDINGS_MODEL" not in os.environ

@@ -1,9 +1,22 @@
-# Adds the evaluation's own customers to what the specialists' stand-ins read.
-# Used on top of the main file:
-#   docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres card orchestrator
+# The evaluation's stack: its own customers for the specialists' stand-ins, the seeded reviews of both
+# seed files, the fastembed model for search, and the arm the stack runs (INVESTIGATION_FLOW).
+# Used on top of the main file, one fresh stack per arm:
+#   INVESTIGATION_FLOW=fixed_rules docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres card orchestrator
+# Compose fills the ${...} values from the shell that starts it, then from the repo-root .env.
+# A line in .env for EMBEDDINGS_MODEL changes the embedder here; check "Search:" in summary.md.
 services:
   orchestrator:
+    build:
+      args:
+        WITH_EMBEDDINGS: "1"
     environment:
       SHARED_CUSTOMERS_FILE: /data/shared_customers.yaml:/eval/extra_customers.yaml
+      # The service seeds both at start. The image holds the first, and the mount below shadows it with the same file.
+      HISTORY_SEED_FILE: /eval/history.yaml:/eval/history_eval.yaml
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-fastembed:BAAI/bge-small-en-v1.5}
+      # Empty is the agent. eval/run.py --arm stops when this names another arm.
+      INVESTIGATION_FLOW: ${INVESTIGATION_FLOW:-}
     volumes:
       - ./eval/extra_customers.yaml:/eval/extra_customers.yaml:ro
+      - ./eval/history.yaml:/eval/history.yaml:ro
+      - ./eval/history_eval.yaml:/eval/history_eval.yaml:ro

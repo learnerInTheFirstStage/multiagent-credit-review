@@ -23,6 +23,12 @@ class InvestigateRequest(BaseModel):
     window_end: IsoDate
     # What the graph already knows, in a sentence or two. A specialist keeps nothing between calls.
     context: str = ""
+    # What is asked about. None means "whatever you hold", as before these fields existed.
+    topic: str | None = Field(default=None, min_length=1)
+    # One account to look at, by id. It may be an account the other side named.
+    account_id: str | None = Field(default=None, min_length=1)
+    # One record from an earlier answer to look closer at: an evidence id.
+    record_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _window_runs_forward(self) -> Self:

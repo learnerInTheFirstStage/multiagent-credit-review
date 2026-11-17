@@ -2,9 +2,12 @@
 # data/shared_customers.yaml, which this file does not change. Written before
 # any run, with the expected answers in eval/golden_set.yaml.
 #
-# Three kinds:
+# Five kinds:
 #   c_10x, c_11x  one fact changed from a team customer, which changes the answer
 #   c_20x         something irrelevant, or a memo, added to a team customer, which must change nothing
+#   c_30x, c_31x  a team customer with its ids renamed and nothing else changed. Only the earlier
+#                 reviews in eval/history_eval.yaml differ, and they change the answer or must not
+#   c_107         c_007's earlier review, with other facts today
 #
 # Two fields are used here that the team's file does not have:
 #   bank_events[].to_account          the account a transfer went to
@@ -188,3 +191,130 @@ customers:
     baselines:
       bank: {weekly_inflow_cents: 3000000, weekly_inflow_3mo_ago_cents: 17000000, income_trend: shrinking}
       card: {funding_account_change: false, monthly_card_spend_cents: 10000000, utilization_trend: rising}
+
+  # c_001, reviewed twice before for the same harmless cause. Nothing should change.
+  - id: c_301
+    name: Northwind Robotics (reviewed before)
+    story: >
+      As c_001. Two earlier reviews this year ended with the limit kept.
+    snapshot:
+      bank:
+        cash_now_cents: 49500000
+        cash_week_ago_cents: 90000000
+        linked_accounts: [{id: acct_c301_a, active: true, days_stale: 0}]
+      card: {credit_limit_cents: 17000000, utilization_pct: 0.35, last_3_repayments: [paid, paid, paid]}
+    signal_window:
+      bank_events:
+        - {category: payroll, amount_cents: 28000000, counterparty_kind: payroll_vendor}
+        - {category: tax, amount_cents: 12500000, counterparty_kind: tax_authority}
+      card_events: []
+    baselines:
+      bank: {weekly_inflow_cents: 10000000, income_trend: steady}
+      card: {funding_account_change: false, monthly_card_spend_cents: 5000000}
+
+  # c_003, with a review a year ago that called the fall seasonal and kept the limit. Nothing should change.
+  - id: c_303
+    name: Harbor Freight Tech (precedent)
+    story: >
+      As c_003. A review a year ago found a slow season and kept the limit.
+    snapshot:
+      bank:
+        cash_now_cents: 30000000
+        cash_week_ago_cents: 60000000
+        linked_accounts: [{id: acct_c303_a, active: true, days_stale: 0}]
+      card: {credit_limit_cents: 12500000, utilization_pct: 0.85, last_3_repayments: [paid, paid, late]}
+    signal_window:
+      bank_events:
+        - {category: income, amount_cents: 3000000, counterparty_kind: known_vendor}
+      card_events:
+        - {kind: late_repayment, amount_cents: 4000000}
+    baselines:
+      bank: {weekly_inflow_cents: 3000000, weekly_inflow_3mo_ago_cents: 17000000, income_trend: shrinking}
+      card: {funding_account_change: false, monthly_card_spend_cents: 10000000, utilization_trend: rising}
+
+  # c_007, but after last year's review cash did not come back.
+  - id: c_307
+    name: Kestrel Outdoor (no recovery)
+    story: >
+      As c_007. A review a year ago kept the limit, and cash has not returned to where it was then.
+    snapshot:
+      bank:
+        cash_now_cents: 40600000
+        cash_week_ago_cents: 70000000
+        linked_accounts: [{id: acct_c307_a, active: true, days_stale: 0}]
+      card: {credit_limit_cents: 13000000, utilization_pct: 0.50, last_3_repayments: [paid, paid, paid]}
+    signal_window:
+      bank_events:
+        - {category: vendor_known, amount_cents: 15000000, counterparty_kind: known_vendor, note: "annual inventory purchase"}
+      card_events: []
+    baselines:
+      bank:
+        weekly_inflow_cents: 8000000
+        income_trend: steady
+        prior_year_same_two_weeks: {outflow_cents: 16000000, inflow_cents: 8500000}
+      card: {funding_account_change: false, monthly_card_spend_cents: 5500000}
+
+  # c_004, under review for the third time in six months for the same weak income.
+  - id: c_314
+    name: Pinecrest Studio (third review)
+    story: >
+      As c_004. Documents were asked for twice since June for the same weak income.
+    snapshot:
+      bank:
+        cash_now_cents: 36000000
+        cash_week_ago_cents: 80000000
+        linked_accounts: [{id: acct_c314_a, active: true, days_stale: 0}]
+      card: {credit_limit_cents: 15000000, utilization_pct: 0.58, last_3_repayments: [paid, paid, paid]}
+    signal_window:
+      bank_events:
+        - {category: tax, amount_cents: 22000000, counterparty_kind: tax_authority}
+        - {category: income, amount_cents: 6000000, counterparty_kind: known_vendor}
+      card_events: []
+    baselines:
+      bank: {weekly_inflow_cents: 6000000, weekly_inflow_typical_cents: 12000000, income_trend: too_short_to_tell}
+      card: {funding_account_change: false, monthly_card_spend_cents: 8000000}
+
+  # c_004, asked twice since June to reconnect a bank feed. Income is weak for the first time. Nothing should change.
+  - id: c_304
+    name: Pinecrest Studio (other requests)
+    story: >
+      As c_004. Documents were asked for twice since June, both times because a bank feed had stopped.
+    snapshot:
+      bank:
+        cash_now_cents: 36000000
+        cash_week_ago_cents: 80000000
+        linked_accounts: [{id: acct_c304_a, active: true, days_stale: 0}]
+      card: {credit_limit_cents: 15000000, utilization_pct: 0.58, last_3_repayments: [paid, paid, paid]}
+    signal_window:
+      bank_events:
+        - {category: tax, amount_cents: 22000000, counterparty_kind: tax_authority}
+        - {category: income, amount_cents: 6000000, counterparty_kind: known_vendor}
+      card_events: []
+    baselines:
+      bank: {weekly_inflow_cents: 6000000, weekly_inflow_typical_cents: 12000000, income_trend: too_short_to_tell}
+      card: {funding_account_change: false, monthly_card_spend_cents: 8000000}
+
+  # c_007 with the same review a year ago. This year income is shrinking and a repayment was late.
+  - id: c_107
+    name: Kestrel Outdoor (weaker today)
+    story: >
+      The same inventory purchase as last November, and cash is back where it was then.
+      But income has been shrinking for three months and the last repayment was late.
+    snapshot:
+      bank:
+        cash_now_cents: 40600000
+        cash_week_ago_cents: 70000000
+        linked_accounts: [{id: acct_c107_a, active: true, days_stale: 0}]
+      card: {credit_limit_cents: 13000000, utilization_pct: 0.50, last_3_repayments: [paid, paid, late]}
+    signal_window:
+      bank_events:
+        - {category: vendor_known, amount_cents: 15000000, counterparty_kind: known_vendor, note: "annual inventory purchase"}
+      card_events:
+        - {kind: late_repayment, amount_cents: 3000000}
+    baselines:
+      bank:
+        weekly_inflow_cents: 4000000
+        weekly_inflow_3mo_ago_cents: 8000000
+        income_trend: shrinking
+        prior_year_same_two_weeks: {outflow_cents: 16000000, inflow_cents: 8500000}
+      card: {funding_account_change: false, monthly_card_spend_cents: 5500000}

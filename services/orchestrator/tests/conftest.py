@@ -11,6 +11,12 @@ _db_dir = tempfile.mkdtemp(prefix="orchestrator-tests-")
 os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", f"sqlite:///{_db_dir}/test.db")
 os.environ["JWT_SECRET"] = "a-secret-for-tests-that-is-long-enough"
 os.environ.pop("LLM_MODEL", None)  # no test may reach a real model
+# The service reads these at start. A test that wants another flow or the search tool sets its own.
+os.environ.pop("INVESTIGATION_FLOW", None)
+os.environ.pop("EMBEDDINGS_MODEL", None)
+# Every start seeds reviews from this setting, and unset it names the image's file. A test that wants
+# seeds sets its own; the rest must not pick up an exported setting or a /eval/history.yaml on the host.
+os.environ["HISTORY_SEED_FILE"] = f"{_db_dir}/no-seeds.yaml"
 
 import jwt  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -29,6 +35,16 @@ if not ON_POSTGRES:
     def _enforce_foreign_keys(dbapi_connection, _record):
         # SQLite ignores foreign keys unless told otherwise. Postgres never does.
         dbapi_connection.execute("PRAGMA foreign_keys=ON")
+        # Keep SQLite inside a transaction, as Postgres is, so a released savepoint never commits on its own.
+        # Without it, a missing commit after history.record in runner.keep_missing_reviews goes unseen.
+        dbapi_connection.autocommit = False
+
+
+@pytest.fixture(autouse=True)
+def tables_exist():
+    # The service's graph reads earlier reviews from the database when a case opens. A test that builds
+    # it without starting the app, which creates the tables, must find them there too.
+    Base.metadata.create_all(engine)
 
 
 def bearer(sub="u_analyst", role="analyst", customers=("c_010",), expires_in=3600, secret=None, **claims) -> dict:

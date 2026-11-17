@@ -49,6 +49,14 @@ def test_every_action_a_report_can_recommend_is_allowed_by_some_guideline():
         pytest.param({"allows": []}, id="no action at all"),
         pytest.param({"id": "G-1"}, id="an id in another form"),
         pytest.param({"when": ""}, id="no condition"),
+        pytest.param({"needs": []}, id="no need at all"),
+        pytest.param(
+            {"needs": [{"kind": "crystal_ball", "says": "a record nobody makes"}]}, id="a need of a kind nobody makes"
+        ),
+        pytest.param(
+            {"needs": [{"kind": "weekly_inflow_series", "where": {"income_trend": {"like": "steady"}}, "says": "x"}]},
+            id="a test with an operator code does not know",
+        ),
     ],
 )
 def test_a_guideline_that_code_could_not_check_cannot_be_written(broken):
@@ -67,7 +75,7 @@ def test_loading_gives_a_copy_that_a_caller_cannot_spoil():
 
     assert len(again) == 16
     assert again[0]["allows"] == ["keep_limit"]
-    assert set(again[0]) == {"id", "title", "when", "allows", "note"}
+    assert set(again[0]) == {"id", "title", "when", "allows", "note", "needs"}
 
 
 @pytest.fixture
@@ -100,7 +108,7 @@ def shown(monkeypatch) -> list[str]:
     ],
 )
 def test_the_running_service_checks_a_report_against_these_guidelines(monkeypatch, shown, first_draft, told):
-    allowed = report(recommendation="keep_limit", guideline_ids=["G-04"])
+    allowed = report(recommendation="pause_card", guideline_ids=["G-08b"])
 
     with service_graph(monkeypatch, [*INVESTIGATION, first_draft, allowed]) as graph:
         state = graph.invoke({"case_id": "case_guided", "signal": SIGNAL}, runner.thread("case_guided"))
@@ -109,12 +117,12 @@ def test_the_running_service_checks_a_report_against_these_guidelines(monkeypatc
     assert told in shown[-1]  # the redraft was refused for this reason and no other
     assert shown[-1].count("\n- ") == 1
     assert state["check"] == {"passed": True, "problems": []}
-    assert state["report"]["recommendation"] == "keep_limit"
+    assert state["report"]["recommendation"] == "pause_card"
     assert [guideline["id"] for guideline in state["guidelines"]] == [guideline.id for guideline in GUIDELINES]
 
 
 def test_the_report_writer_is_shown_when_each_guideline_applies_and_what_it_allows(monkeypatch, shown):
-    nothing_to_do = report(likely_cause="no_clear_cause", recommendation="needs_human", guideline_ids=[], evidence=[])
+    nothing_to_do = report(recommendation="pause_card", guideline_ids=["G-08b"], confidence="low")
 
     with service_graph(monkeypatch, [*INVESTIGATION, nothing_to_do]) as graph:
         graph.invoke({"case_id": "case_shown", "signal": SIGNAL}, runner.thread("case_shown"))

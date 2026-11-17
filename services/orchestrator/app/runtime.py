@@ -1,5 +1,6 @@
 """What the running service builds its case graph from. Settings are read here and nowhere else."""
 
+import functools
 import logging
 import os
 from collections.abc import Iterator
@@ -13,12 +14,17 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from app import card_client, guidelines
+from app import card_client, guidelines, history, retrieval
 from app.agents import mock
 from app.db import engine
-from app.graph import build_graph
+from app.graph import build_graph, plans
 
 log = logging.getLogger(__name__)
+
+# Where the image keeps the seeded reviews. The evaluation mounts its own files and names both.
+HISTORY_SEED_DEFAULT = "/eval/history.yaml"
+# Who chooses the questions (8.4): the model, a written plan, or the plan and then code's own gap list.
+FLOWS = ("agent", "fixed", "fixed_rules")
 
 
 @contextmanager
@@ -29,6 +35,9 @@ def case_graph() -> Iterator:
         log.warning("LLM_MODEL is not set. Signals are stored and their cases wait as queued.")
         yield None
         return
+    flow = _flow()
+    # Only the agent flow searches: in the other two, code asks every question and no model investigates.
+    embedder = retrieval.load(os.environ.get("EMBEDDINGS_MODEL")) if flow == "agent" else None
     with postgres_checkpointer() as checkpointer, tracing() as callbacks:
         graph = build_graph(
             model=model,
@@ -38,8 +47,35 @@ def case_graph() -> Iterator:
             carry_out=card_client.carry_out,
             checkpointer=checkpointer,
             structured_output=_structured_output(),
+            # Every earlier review, not the ten newest: the counts of the history summary cover them all.
+            earlier_reviews=functools.partial(history.earlier_reviews, limit=None),
+            search_reviews=retrieval.searcher(embedder) if embedder is not None else None,
+            plan=None if flow == "agent" else plans.FIXED_PLAN,
+            follow_gaps=flow == "fixed_rules",
         )
         yield graph.with_config({"callbacks": callbacks})
+
+
+def _flow() -> str:
+    """INVESTIGATION_FLOW, one of FLOWS. Unset, empty or a name it does not know: the agent flow, with one warning."""
+    flow = os.environ.get("INVESTIGATION_FLOW")
+    if flow in FLOWS:
+        return flow
+    if flow:
+        log.warning("INVESTIGATION_FLOW %s is not a flow this service knows. Cases run on the agent flow.", flow)
+    else:
+        log.warning("INVESTIGATION_FLOW is not set. Cases run on the agent flow.")
+    return "agent"
+
+
+def history_seed_files() -> list[str]:
+    """The files the service seeds closed reviews from at start.
+
+    HISTORY_SEED_FILE lists one path or several separated by ":", as SHARED_CUSTOMERS_FILE does. Empty
+    names are ignored. Unset, or naming no file at all, it is the file the image holds.
+    """
+    named = [path for path in os.environ.get("HISTORY_SEED_FILE", "").split(":") if path]
+    return named or [HISTORY_SEED_DEFAULT]
 
 
 @contextmanager

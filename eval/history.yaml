@@ -1,0 +1,17 @@
+schema_version: 1
+reviews:
+  - case_id: seed_c_007_2025
+    customer_id: c_007
+    as_of: "2025-11-10"
+    outcome: done
+    current_limit_cents: 13000000
+    engine_limit_cents: 8000000
+    cash_7d_ago_cents: 68000000
+    cash_now_cents: 40000000
+    review_reasons: [large_cut]
+    likely_cause: seasonal_dip
+    recommendation: keep_limit
+    confidence: medium
+    guideline_ids: [G-03]
+    claims: ["The yearly stocking payment to a long-standing supplier went out, as in the same weeks of the year before."]
+    decisions: [{step: analyst, decision: approve, by: u_seed_analyst, note: "Same stocking payment as every November. Keep, and look again in January."}]
