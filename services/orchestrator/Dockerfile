@@ -5,6 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY packages/contracts /packages/contracts
+# The stand-in specialists answer from the shared customer data.
+COPY data /data
 COPY services/orchestrator/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt /packages/contracts
 

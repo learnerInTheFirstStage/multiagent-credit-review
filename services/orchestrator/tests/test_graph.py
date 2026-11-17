@@ -66,23 +66,23 @@ REPORT = {
     "evidence": [
         {
             "claim": "Payroll and a tax payment account for $220,000 of the fall.",
-            "evidence_ids": ["txn_9120", "txn_9134"],
+            "evidence_ids": ["txn_c_010_01", "txn_c_010_02"],
         }
     ],
     "ruled_out": [],
     "other_findings": [
-        {"claim": "The account held $310,000 on the due date.", "evidence_ids": ["bal_c010_1105"]}
+        {"claim": "The account held $310,000 on the due date.", "evidence_ids": ["bal_c_010"]}
     ],
     "review_reasons": [
         {
             "reason": "large_cut",
             "finding": "The fall is payroll and tax.",
-            "evidence_ids": ["txn_9120", "txn_9134"],
+            "evidence_ids": ["txn_c_010_01", "txn_c_010_02"],
         },
         {
             "reason": "failed_repayment",
             "finding": "The Nov 5 repayment failed. Why is not determined.",
-            "evidence_ids": ["rep_3103"],
+            "evidence_ids": ["rep_c_010_3"],
         },
     ],
     "confidence": "medium",
@@ -101,10 +101,10 @@ PAUSE = {"recommendation": "pause_card", "guideline_ids": ["G-11"]}
 
 # A report that rests only on what the bank side returned.
 BANK_ONLY = {
-    "evidence": [{"claim": "Payroll and tax.", "evidence_ids": ["txn_9120", "txn_9134"]}],
+    "evidence": [{"claim": "Payroll and tax.", "evidence_ids": ["txn_c_010_01", "txn_c_010_02"]}],
     "other_findings": [],
     "review_reasons": [
-        {"reason": "large_cut", "finding": "Payroll and tax.", "evidence_ids": ["txn_9120"]},
+        {"reason": "large_cut", "finding": "Payroll and tax.", "evidence_ids": ["txn_c_010_01"]},
         {"reason": "failed_repayment", "finding": "Not determined.", "evidence_ids": []},
     ],
 }
@@ -514,7 +514,7 @@ def test_a_specialist_with_no_usable_answer_does_not_stop_the_case(cash_flow):
                 other_findings=[],
                 review_reasons=[
                     {"reason": "large_cut", "finding": "The bank side gave no answer.", "evidence_ids": []},
-                    {"reason": "failed_repayment", "finding": "The Nov 5 repayment failed.", "evidence_ids": ["rep_3103"]},
+                    {"reason": "failed_repayment", "finding": "The Nov 5 repayment failed.", "evidence_ids": ["rep_c_010_3"]},
                 ],
                 recommendation="needs_human",
             ),
