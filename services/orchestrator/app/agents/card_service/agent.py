@@ -1,6 +1,6 @@
-"""The Credit Behavior agent's run (KAN-26).
+"""The Card Service agent's run (KAN-26): the Credit Behavior specialist.
 
-    credit_behavior(request) -> InvestigateResponse
+    card_service(request) -> InvestigateResponse
 
 Same shape as mock.credit_behavior, so the graph can swap one for the other (KAN-36). Each call
 is self-contained: the agent keeps nothing between calls.
@@ -35,14 +35,17 @@ import jwt
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
 
-from app.agents.credit_behavior import findings as written
-from app.agents.credit_behavior import guardrails, prompts
-from app.agents.credit_behavior.tools import CardTools
+from app.agents.card_service import findings as written
+from app.agents.card_service import guardrails, prompts
+from app.agents.card_service.tools import CardTools
 from contracts import Finding, InvestigateRequest, InvestigateResponse
 
 log = logging.getLogger(__name__)
 
+# The specialist's name in the shared contract (contracts.investigate.AgentName) and in the graph.
 AGENT = "credit_behavior"
+# Who the agent is in the tokens it signs for the Card Service.
+TOKEN_SUB = "card_service"
 TOPICS = ("repayments", "paying_account", "card_use")
 MAX_TOOL_CALLS = 5
 MAX_SECONDS = 60
@@ -59,7 +62,7 @@ PREFLIGHT: dict[str | None, list[tuple[str, dict[str, Any]]]] = {
 }
 
 
-def credit_behavior(
+def card_service(
     request: InvestigateRequest,
     *,
     model: BaseChatModel | None = None,
@@ -157,7 +160,7 @@ class _Run:
             try:
                 reply = bound.invoke(self.messages)
             except Exception as error:  # noqa: BLE001 - a provider error must not crash the case
-                log.warning("credit_behavior model call failed: %s", error)
+                log.warning("card_service model call failed: %s", error)
                 self.unknown.append(f"The model call failed: {type(error).__name__}.")
                 return [], None
             self.messages.append(reply)
@@ -273,7 +276,7 @@ def _service_token(customer_id: str, case_id: str) -> str:
     secret = os.environ.get("JWT_SECRET")
     if not secret:
         raise RuntimeError("JWT_SECRET is not set, so the agent cannot call the Card Service.")
-    claims = {"sub": f"{AGENT}:{case_id}", "role": "service", "customers": [customer_id],
+    claims = {"sub": f"{TOKEN_SUB}:{case_id}", "role": "service", "customers": [customer_id],
               "exp": int(time.time()) + TOKEN_TTL_SECONDS}
     return jwt.encode(claims, secret, algorithm="HS256")
 
@@ -285,7 +288,7 @@ def _default_model() -> BaseChatModel | None:
 
         return _chat_model()
     except Exception as error:  # noqa: BLE001 - no model is a supported state, not a crash
-        log.warning("credit_behavior has no model: %s", error)
+        log.warning("card_service has no model: %s", error)
         return None
 
 

@@ -1,4 +1,4 @@
-"""Test helpers for the Credit Behavior agent: a Card HTTP stub that answers from recorded responses.
+"""Test helpers for the Card Service agent: a Card HTTP stub that answers from recorded responses.
 
 tests/fixtures/card_tools.json holds real Card Service responses (KAN-25), recorded from the
 seeded stack, keyed "<customer>/<tool>". The scripted chat model is the Cash Flow tests' one.

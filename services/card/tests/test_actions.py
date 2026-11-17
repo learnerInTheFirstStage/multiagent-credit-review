@@ -145,8 +145,8 @@ def test_an_admin_is_not_an_approver_here(card):
 
 def test_a_service_token_is_refused(card):
     # An agent, or any service, never carries out an action.
-    headers = bearer(mint_token(sub="credit_behavior:case_s1", role="service", customers=["c_010"]))
-    assert card(reduce(8_000_000, "case_s1", by="credit_behavior:case_s1"), headers).status_code == 403
+    headers = bearer(mint_token(sub="card_service:case_s1", role="service", customers=["c_010"]))
+    assert card(reduce(8_000_000, "case_s1", by="card_service:case_s1"), headers).status_code == 403
 
 
 def test_approved_by_must_be_the_tokens_owner(card):

@@ -1,4 +1,4 @@
-"""The Credit Behavior agent's system prompt and its first user message."""
+"""The Card Service agent's system prompt and its first user message."""
 
 from __future__ import annotations
 
