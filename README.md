@@ -8,7 +8,7 @@ All customers and data are simulated. This project is not affiliated with Ramp.
 
 - **Orchestrator**: takes a review signal at `POST /signals`, investigates the case on a LangGraph graph, writes a report that code checks, pauses for the analyst and, where needed, the manager, and sends an approved action to Card. It keeps closed reviews as history, traces to LangFuse, and has a golden-set evaluation in `eval/`. It has run on Claude Sonnet 5.5 from a signal to the analyst's decision; the paid evaluation has not been run yet. The two specialists are still in-process stand-ins that read `data/shared_customers.yaml`. See `services/orchestrator/README.md`.
 - **Bank**: creates its six tables and seeds the 12 customers at start. No endpoint besides `/health` yet.
-- **Card**: creates its four tables (customers, credit_limits, card_transactions, repayments) and seeds the 12 customers at start, with about 14 months of card history. No endpoint besides `/health` yet. Its action endpoint is not built, so an approved `reduce_limit` or `pause_card` gets a 502 from the Orchestrator and the case waits to be retried.
+- **Card**: creates its four tables (customers, credit_limits, card_transactions, repayments) and seeds the 12 customers at start, with about 14 months of card history. `GET /snapshots` gives each customer's limit, balance and last three repayments (KAN-27). Its action endpoint is not built, so an approved `reduce_limit` or `pause_card` gets a 502 from the Orchestrator and the case waits to be retried.
 - **Auth, frontend**: skeletons. Auth answers `/health`; tokens come from `python -m app.dev_token` in the Orchestrator container. The frontend is a placeholder page.
 
 ## Architecture
@@ -56,7 +56,7 @@ Compose falls back to local defaults for the passwords and the signing secret, s
 |---|---|---|
 | `POSTGRES_PASSWORD` | postgres | superuser password |
 | `AUTH_DB_PASSWORD`, `BANK_DB_PASSWORD`, `CARD_DB_PASSWORD`, `ORCHESTRATOR_DB_PASSWORD` | postgres and the matching service | letters, digits and hyphens only, because they go into a connection URL |
-| `JWT_SECRET` | the Orchestrator today, every service later | signs and checks tokens. One shared secret in the POC, 32 characters or more. The compose fallback is public, so anyone can sign tokens on a stack that runs without `.env`: set a real one on any shared or deployed stack |
+| `JWT_SECRET` | the Orchestrator, Bank and Card | signs and checks tokens. One shared secret in the POC, 32 characters or more. The compose fallback is public, so anyone can sign tokens on a stack that runs without `.env`: set a real one on any shared or deployed stack |
 | `LLM_MODEL`, `LLM_API_KEY`, `LLM_STRUCTURED_OUTPUT` | Orchestrator | the model cases run on, as `provider:model`, for example `anthropic:claude-sonnet-5-5` or `openai:<model>` (both packages are installed; only Anthropic has been run). Empty by default: signals are stored and their cases wait as `queued`. `LLM_STRUCTURED_OUTPUT=json_schema` is recommended with Anthropic |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Orchestrator | LangFuse tracing. Empty by default: cases run without tracing. Keys go in your own `.env` only. Set the base URL your LangFuse project shows, or keys from another region are refused |
 
