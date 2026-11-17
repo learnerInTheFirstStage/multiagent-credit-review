@@ -20,7 +20,7 @@ def tools(seeded_client):
     _add_new_customer()
 
     def call(customer_id: str, tool: str, token_for: str | None = None, **params):
-        headers = bearer(mint_token(sub="credit_behavior:case_t", customers=[token_for or customer_id]))
+        headers = bearer(mint_token(sub="card_service:case_t", customers=[token_for or customer_id]))
         return seeded_client.get(f"/customers/{customer_id}/tools/{tool}", params=params, headers=headers)
 
     return call
