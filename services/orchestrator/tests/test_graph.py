@@ -218,6 +218,9 @@ def test_the_specialist_is_asked_about_the_week_before_the_signal():
         "window_start": "2026-11-03",
         "window_end": "2026-11-10",
         "context": "Cash fell by $230,000.",
+        "topic": None,
+        "account_id": None,
+        "record_id": None,
     }
 
 

@@ -66,7 +66,7 @@ for case in golden["customers"]:
                 window_start="2026-11-03", window_end=today.isoformat(),
             )
         )
-        print(f"What the {title.lower()} stand-in reports, whatever it is asked:\n")
+        print(f"What the {title.lower()} stand-in reports when it is asked with no topic:\n")
         for finding in answer.findings:
             print(f"- {finding.claim}")
         for unknown in answer.could_not_determine:
