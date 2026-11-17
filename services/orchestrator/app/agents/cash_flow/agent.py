@@ -120,23 +120,36 @@ def cash_flow(
                 )
 
             for call in tool_calls:
+                # Every call in the batch must get a ToolMessage, even past the
+                # budget: Anthropic and OpenAI both reject a follow-up invoke
+                # if any tool_use/tool_call in the previous AIMessage was left
+                # unanswered. Over-budget calls get an error stub instead of
+                # running the tool, and do not count against the budget again.
                 if tool_calls_made >= MAX_TOOL_CALLS:
                     budget_exhausted = True
-                    break
-
-                name = call["name"]
-                args = call.get("args") or {}
-                tool = tools_by_name.get(name)
-                if tool is None:
-                    observation = {"error": "unknown_tool", "message": f"No such tool: {name}"}
+                    observation = {
+                        "error": "budget_exhausted",
+                        "message": "The 5-call budget was reached before this call.",
+                    }
                 else:
-                    try:
-                        raw = tool.invoke(args)
-                        observation = guardrails.sanitize_tool_result(raw)
-                        pool.add(observation)
-                    except Exception as error:  # noqa: BLE001 — surface any tool-level problem
-                        log.warning("tool %s raised: %s", name, error)
-                        observation = {"error": "tool_raised", "message": str(error)}
+                    name = call["name"]
+                    args = call.get("args") or {}
+                    tool = tools_by_name.get(name)
+                    if tool is None:
+                        observation = {"error": "unknown_tool", "message": f"No such tool: {name}"}
+                    else:
+                        try:
+                            raw = tool.invoke(args)
+                            # Pool keeps Bank's raw result; the model sees a
+                            # sanitised copy. Response evidence[].data is
+                            # therefore Bank's text, not the <memo>-wrapped
+                            # form, so downstream (report) renders faithfully.
+                            pool.add(raw)
+                            observation = guardrails.sanitize_tool_result(raw)
+                        except Exception as error:  # noqa: BLE001 — surface any tool-level problem
+                            log.warning("tool %s raised: %s", name, error)
+                            observation = {"error": "tool_raised", "message": str(error)}
+                    tool_calls_made += 1
 
                 messages.append(
                     ToolMessage(
@@ -144,7 +157,6 @@ def cash_flow(
                         tool_call_id=call["id"],
                     )
                 )
-                tool_calls_made += 1
 
             if budget_exhausted:
                 could_not_determine.append("Reached the 5-tool-call budget; summarising from what is known.")

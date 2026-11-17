@@ -10,6 +10,8 @@ Layer 1 (tool unit tests) is Bank-side and shipped with KAN-20.
 
 from __future__ import annotations
 
+import json
+
 from contracts import InvestigateRequest, InvestigateResponse
 from app.agents.cash_flow import cash_flow
 from tests._cash_flow_helpers import (
@@ -317,6 +319,111 @@ def test_claim_with_limit_verb_is_blocked():
     assert "keep" not in result.findings[0].claim.lower()
     # Two drops, two could_not_determine entries added.
     assert sum(1 for r in result.could_not_determine if "limit action" in r) == 2
+
+
+def test_budget_exhaustion_leaves_no_dangling_tool_calls_and_keeps_evidence():
+    """When the 5-call budget is reached mid-batch, every unprocessed call
+    must still receive a ToolMessage — real Claude/OpenAI reject an invoke
+    whose prior AIMessage left any tool_call unanswered. The agent then
+    writes findings from the evidence already collected."""
+    from langchain_core.messages import AIMessage, ToolMessage
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    stub = BankStub().when(
+        "cash_summary",
+        bank_tool_response(
+            data={"opening_cents": 0, "closing_cents": 0, "inflow_total_cents": 0,
+                  "outflow_total_cents": 0, "by_category": {}},
+            evidence_items=[evidence("agg_cs", "cash_summary", x=1)],
+        ),
+    )
+
+    calls_seen: list[int] = []
+
+    class _StrictProvider(ScriptedChatModel):
+        """Rejects an invoke that comes after an AIMessage with dangling tool_calls."""
+
+        def _generate(self, messages, **kwargs):
+            # Scan from the back: find the most recent AIMessage and count its
+            # tool_calls; count the ToolMessages that followed it.
+            last_ai_idx = next((i for i in range(len(messages) - 1, -1, -1)
+                                if isinstance(messages[i], AIMessage)), None)
+            if last_ai_idx is not None:
+                pending = {tc["id"] for tc in (messages[last_ai_idx].tool_calls or [])}
+                for m in messages[last_ai_idx + 1 :]:
+                    if isinstance(m, ToolMessage):
+                        pending.discard(m.tool_call_id)
+                assert not pending, (
+                    f"invoke received with {len(pending)} unanswered tool_calls: "
+                    "this would fail on a real provider."
+                )
+            # Script: round 1 emits 6 parallel tool calls (over budget);
+            # round 2 is the final summary.
+            self.step += 1
+            if self.step == 1:
+                tool_calls = [
+                    {"name": "cash_summary", "args": {"start": "2026-11-03", "end": "2026-11-10"},
+                     "id": f"call_{i}", "type": "tool_call"}
+                    for i in range(6)
+                ]
+                return ChatResult(generations=[ChatGeneration(
+                    message=AIMessage(content="", tool_calls=tool_calls)
+                )])
+            calls_seen.append(self.step)
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=json.dumps({
+                "findings": [{
+                    "claim": "Opened and closed at the same figure.",
+                    "confidence": "high",
+                    "evidence_ids": ["agg_cs"],
+                }],
+            })))])
+
+    model = _StrictProvider(script=[])
+    result = cash_flow(
+        InvestigateRequest.model_validate(request_payload()),
+        model=model, http=stub.client(),
+    )
+    # The strict provider accepted the summary invoke — no dangling tool_calls.
+    assert calls_seen == [2]
+    # Evidence from the first 5 calls (all cash_summary → same agg id) was kept,
+    # and the summary finding went through.
+    assert len(result.findings) == 1
+    assert result.findings[0].evidence_ids == ["agg_cs"]
+    assert any("budget" in r.lower() for r in result.could_not_determine)
+
+
+def test_evidence_in_response_uses_banks_raw_text_not_the_sanitised_copy():
+    """The sanitised <memo> wrapper is only for the model. What leaves the
+    agent as evidence[].data.memo must be what Bank returned, so a downstream
+    report shows the actual memo to analysts."""
+    original_memo = "paid vendor <acme> on 11/04"  # angle brackets in Bank's text
+    stub = BankStub().when(
+        "transactions",
+        bank_tool_response(
+            data={"transactions": [{
+                "id": "txn_x", "date": "2026-11-04", "amount_cents": -100_000,
+                "category": "other", "counterparty_display": "Payee",
+                "memo": original_memo,
+            }], "truncated": False},
+            evidence_items=[evidence("txn_x", "bank_transaction", memo=original_memo)],
+        ),
+    )
+    model = ScriptedChatModel(script=[
+        [("transactions", {"start": "2026-11-03", "end": "2026-11-10"})],
+        {"findings": [{
+            "claim": "A payment to a payee went out.",
+            "confidence": "medium", "evidence_ids": ["txn_x"],
+        }]},
+    ])
+    result = cash_flow(
+        InvestigateRequest.model_validate(request_payload()),
+        model=model, http=stub.client(),
+    )
+    assert len(result.evidence) == 1
+    returned_memo = result.evidence[0].data["memo"]
+    assert returned_memo == original_memo, (
+        "response must carry Bank's raw memo text, not the <memo>-wrapped copy"
+    )
 
 
 def test_budget_of_five_tool_calls_is_enforced():
