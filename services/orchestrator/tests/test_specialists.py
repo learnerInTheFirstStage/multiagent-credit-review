@@ -1,7 +1,9 @@
 import copy
+import os
 from typing import get_args
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from app.agents import mock
@@ -226,7 +228,7 @@ def test_c_004_a_tax_payment_and_one_weak_week():
 
     assert "$220,000 was paid to a tax authority" in claims(answer)
     assert "$60,000 against a usual $120,000. One week is too short to call a trend." in claims(answer)
-    assert "1 large payment went out in the window, $220,000 in all." in claims(answer)
+    assert "Payments listed for the window: 1, $220,000 in all. No other large payment went out." in claims(answer)
 
 
 def test_c_005_an_account_stopped_reporting_and_what_it_holds_is_not_known():
@@ -262,7 +264,7 @@ def test_c_008_three_payments_to_payees_never_paid_before():
     answer = ask(mock.cash_flow, "c_008")
 
     assert claims(answer).count("was paid to a payee the customer has never paid before") == 3
-    assert "3 large payments went out in the window, $380,000 in all." in claims(answer)
+    assert "Payments listed for the window: 3, $380,000 in all." in claims(answer)
 
 
 def test_c_009_the_memo_goes_out_as_data_and_nothing_points_at_it():
@@ -302,7 +304,20 @@ def test_only_c_012_has_books_that_do_not_balance():
     assert unreconciled == ["c_012"]
     answer = ask(mock.cash_flow, "c_012")
     assert "The other $195,000 matches no transaction" in claims(answer)
+    assert "Balances and transactions reconcile" not in claims(answer)
     assert answer.could_not_determine == ["Where the other $195,000 went"]
+
+
+def test_books_that_balance_are_said_to_balance_so_a_short_list_of_payments_is_not_read_as_a_hole():
+    # The file lists only the payments that matter: c_010's add up to $220,000 of a $230,000 fall.
+    # With a real model, saying nothing had the case handed over for records that disagree.
+    said = "Balances and transactions reconcile: the transactions on record add up to the whole change."
+    balanced = [cid for cid in CUSTOMERS if said in claims(ask(mock.cash_flow, cid))]
+
+    # c_005 has an account that stopped reporting, so nothing can be said of its books. c_012's do not balance.
+    assert balanced == [cid for cid in CUSTOMERS if cid not in ("c_005", "c_012")]
+    books = next(e for e in ask(mock.cash_flow, "c_010").evidence if e.id == "agg_c_010_reconciliation")
+    assert books.data == {"balance_change_cents": -23000000, "transactions_total_cents": -23000000, "reconciled": True}
 
 
 # Data the file does not hold today, but could tomorrow.
@@ -322,7 +337,7 @@ customers:
           - {id: acct_c050_b, active: false, days_stale: 0}
       card: {credit_limit_cents: 10000000, utilization_pct: 0.5, last_3_repayments: [late, failed, paid]}
     signal_window:
-      bank_events: []
+      bank_events: %s
       card_events: %s
     baselines:
       bank:
@@ -335,10 +350,18 @@ customers:
 
 @pytest.fixture
 def odd_data(tmp_path, monkeypatch):
-    def use(card_events: str = "[{kind: late_repayment, amount_cents: 1}, {kind: failed_repayment, amount_cents: 2}]"):
+    def use(
+        card_events: str = "[{kind: late_repayment, amount_cents: 1}, {kind: failed_repayment, amount_cents: 2}]",
+        bank_events: str = "[]",
+        also: str | None = None,
+    ):
         path = tmp_path / "odd.yaml"
-        path.write_text(ODD % card_events)
-        monkeypatch.setenv("SHARED_CUSTOMERS_FILE", str(path))
+        path.write_text(ODD % (bank_events, card_events))
+        files = [str(path)]
+        if also is not None:  # a second file, read after the first
+            (tmp_path / "also.yaml").write_text(also)
+            files.append(str(tmp_path / "also.yaml"))
+        monkeypatch.setenv("SHARED_CUSTOMERS_FILE", os.pathsep.join(files))
 
     return use
 
@@ -380,3 +403,68 @@ def test_a_card_event_the_stand_in_does_not_know_is_an_error_not_a_silence(odd_d
 
     with pytest.raises(ValueError, match="chargeback"):
         ask(mock.credit_behavior, "c_050")
+
+
+# What the evaluation adds: customers of its own in a second file, and three facts the team's file does not hold.
+
+
+def test_customers_from_a_second_file_are_read_next_to_the_first(odd_data):
+    second = (ODD % ("[]", "[]")).replace("c_050", "c_051").replace("c050", "c051").replace('"2026-11-10"', '"2020-01-01"')
+    odd_data(also=second)
+
+    assert ask(mock.cash_flow, "c_050").findings
+    assert ask(mock.cash_flow, "c_051").findings
+    # The first file sets the day every customer is seen on.
+    assert mock._data()["today"].isoformat() == "2026-11-10"
+
+
+def test_a_customer_in_two_files_is_refused_and_neither_copy_is_used(odd_data):
+    odd_data(also=ODD % ("[]", "[]"))
+
+    with pytest.raises(ValueError, match="c_050 is in more than one data file"):
+        ask(mock.cash_flow, "c_050")
+
+
+def test_a_transfer_says_which_account_it_went_to_when_the_data_holds_that(odd_data):
+    odd_data(
+        bank_events="[{category: transfer_own_account, amount_cents: 3000000, counterparty_kind: own_account_other_bank,"
+        " to_account: acct_elsewhere},"
+        " {category: transfer_own_account, amount_cents: 500000, counterparty_kind: own_account_other_bank}]"
+    )
+
+    answer = ask(mock.cash_flow, "c_050")
+
+    named, unnamed = [finding.claim for finding in answer.findings if "was transferred" in finding.claim]
+    assert named.endswith("That account is not linked. It went to acct_elsewhere.")
+    assert unnamed.endswith("That account is not linked.")
+    assert [e.data.get("to_account") for e in answer.evidence if e.kind == "bank_transaction"] == ["acct_elsewhere", None]
+
+
+@pytest.mark.parametrize(
+    ("fact", "said"),
+    [
+        ("repaid_after_days: 3", "The failed repayment was paid in full 3 days later."),
+        ("repaid_after_days: 1", "The failed repayment was paid in full 1 day later."),
+        ("still_unpaid: true", "The failed repayment has not been paid since."),
+    ],
+)
+def test_whether_a_failed_repayment_was_paid_afterwards_is_said_and_rests_on_that_repayment(odd_data, fact, said):
+    odd_data(card_events="[{kind: failed_repayment, amount_cents: 2, %s}]" % fact)
+
+    answer = ask(mock.credit_behavior, "c_050")
+
+    finding = next(finding for finding in answer.findings if finding.claim == said)
+    assert finding.evidence_ids == ["rep_c_050_2"]  # the failed one of late, failed, paid
+    # The evidence holds the fact too, so a report that cites it can be checked against it.
+    name, value = fact.split(": ")
+    assert next(e for e in answer.evidence if e.id == "rep_c_050_2").data[name] == yaml.safe_load(value)
+
+
+@pytest.mark.parametrize("fact", ["", ", still_unpaid: false"])
+def test_nothing_is_said_about_paying_afterwards_when_the_data_does_not_say(odd_data, fact):
+    # The team's c_010 is such a customer. Saying "not paid" there would be a guess.
+    odd_data(card_events="[{kind: failed_repayment, amount_cents: 2%s}]" % fact)
+
+    said = claims(ask(mock.credit_behavior, "c_050"))
+
+    assert "paid in full" not in said and "has not been paid" not in said

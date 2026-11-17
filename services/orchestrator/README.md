@@ -22,7 +22,7 @@ Until the real specialists exist, the running service uses the stand-ins in `app
 
 ## Guidelines
 
-`app/guidelines.py` holds the 14 credit guidelines, G-01 to G-14, with the text from tab 3 of "3. Scenario table". Each says when it applies and which recommendations it allows. All 14 go into the report prompt. A report that recommends an action has to cite a guideline that allows it, and code checks that.
+`app/guidelines.py` holds the credit guidelines. They start from the 14 in tab 3 of "3. Scenario table", with G-08 and G-10 each split in two, so there are 16. Each says when it applies and which recommendations it allows. All 16 go into the report prompt. A report that recommends an action has to cite a guideline that allows it, and code checks that.
 
 ## Tracing
 

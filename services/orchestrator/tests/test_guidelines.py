@@ -12,8 +12,27 @@ from tests.test_signals import SIGNAL  # c_010
 from tests.test_tracing import service_graph
 
 
-def test_there_are_fourteen_guidelines_numbered_in_order():
-    assert [guideline.id for guideline in GUIDELINES] == [f"G-{n:02d}" for n in range(1, 15)]
+def test_the_guidelines_are_the_sheets_fourteen_with_two_of_them_split():
+    numbered = [f"G-{n:02d}" for n in range(1, 15)]
+    split = {"G-08": ["G-08a", "G-08b"], "G-10": ["G-10a", "G-10b"]}
+
+    assert [guideline.id for guideline in GUIDELINES] == [part for n in numbered for part in split.get(n, [n])]
+
+
+@pytest.mark.parametrize(
+    ("guideline_id", "only_allows"),
+    [
+        ("G-08a", ["keep_limit"]),
+        ("G-08b", ["pause_card"]),
+        ("G-10a", ["request_documents"]),
+        ("G-10b", ["needs_human"]),
+    ],
+)
+def test_each_half_of_a_split_guideline_allows_one_thing(guideline_id, only_allows):
+    # The point of the split: the fact that separates the halves decides the action.
+    guideline = next(g for g in GUIDELINES if g.id == guideline_id)
+
+    assert guideline.allows == only_allows
 
 
 def test_every_action_a_report_can_recommend_is_allowed_by_some_guideline():
@@ -46,7 +65,7 @@ def test_loading_gives_a_copy_that_a_caller_cannot_spoil():
 
     again = guidelines.load()
 
-    assert len(again) == 14
+    assert len(again) == 16
     assert again[0]["allows"] == ["keep_limit"]
     assert set(again[0]) == {"id", "title", "when", "allows", "note"}
 
@@ -74,9 +93,9 @@ def shown(monkeypatch) -> list[str]:
             id="G-04 allows keeping the limit only",
         ),
         pytest.param(
-            report(recommendation="pause_card", guideline_ids=["G-12", "G-08"]),
+            report(recommendation="pause_card", guideline_ids=["G-12", "G-08b"]),
             "It cites G-12, under which a person decides, so it may only recommend needs_human.",
-            id="G-12 leaves the decision to a person, whatever G-08 allows",
+            id="G-12 leaves the decision to a person, whatever G-08b allows",
         ),
     ],
 )

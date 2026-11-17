@@ -6,8 +6,10 @@ story. A stand-in does not read the question: it returns every fact its side
 holds about the customer. It reads the snapshot, the events of the week and the
 baselines, never the customer's story or the expected answer.
 
-The file sums a week up in a few lines. What it does not list is taken to hold
-no other large payment, unless the file says the records do not reconcile.
+The file sums a week up in a few lines. What it does not list is taken to be
+everyday business with no large payment in it, unless the file says the records
+do not reconcile. The stand-in says so in words, as a specialist with the whole
+ledger would: left to work it out, a model takes the difference for a hole in the books.
 
 Left out on purpose, because each would hand the model the answer: the notes the
 file's authors wrote on a record, the payee's name, and anything one side could
@@ -37,31 +39,43 @@ _OUTFLOWS = {
 }
 
 
-def _data_file() -> Path:
+def _data_files() -> tuple[Path, ...]:
+    """The team's file, or the files named in SHARED_CUSTOMERS_FILE, separated like a PATH.
+
+    The evaluation names two: the team's file and its own extra customers.
+    """
     if named := os.environ.get("SHARED_CUSTOMERS_FILE"):
-        return Path(named)
+        return tuple(Path(name) for name in named.split(os.pathsep))
     # The repository root when run from a checkout, / in the image.
     for folder in Path(__file__).resolve().parents:
         if (found := folder / "data" / "shared_customers.yaml").exists():
-            return found
+            return (found,)
     raise FileNotFoundError("data/shared_customers.yaml was not found above app/agents")
 
 
 def _data() -> dict:
-    return _read(_data_file())
+    return _read(_data_files())
 
 
 @cache
-def _read(path: Path) -> dict:
-    data = yaml.safe_load(path.read_text())
-    notes = data.get("data_integrity") or {}
-    return {
-        "today": date.fromisoformat(data["clock"]["signal_date"]),
-        "weeks": data["clock"]["trailing_window_weeks"],
-        "customers": {customer["id"]: customer for customer in data["customers"]},
-        # The customers whose balances and transactions are made to disagree. The file says so
+def _read(paths: tuple[Path, ...]) -> dict:
+    files = [yaml.safe_load(path.read_text()) for path in paths]
+    clock = files[0]["clock"]  # the first file sets the date every customer is seen on
+    customers, unreconciled = {}, set()
+    for data in files:
+        for customer in data["customers"]:
+            if customer["id"] in customers:
+                raise ValueError(f"{customer['id']} is in more than one data file")
+            customers[customer["id"]] = customer
+        # The customers whose balances and transactions are made to disagree. A file says so
         # only in a note, in these words.
-        "unreconciled": {cid for cid, entry in notes.items() if "reconciled = false" in entry.get("note", "")},
+        notes = data.get("data_integrity") or {}
+        unreconciled |= {cid for cid, entry in notes.items() if "reconciled = false" in entry.get("note", "")}
+    return {
+        "today": date.fromisoformat(clock["signal_date"]),
+        "weeks": clock["trailing_window_weeks"],
+        "customers": customers,
+        "unreconciled": unreconciled,
     }
 
 
@@ -154,6 +168,8 @@ def cash_flow(request: InvestigateRequest) -> InvestigateResponse:
             "category": event["category"],
             "counterparty_kind": event["counterparty_kind"],
         }
+        if "to_account" in event:
+            details["to_account"] = event["to_account"]
         if "memo" in event:
             # The memo is data: it goes out as evidence, word for word. Nothing here reads it,
             # and no finding points at it, so the agent that reads the evidence is on its own.
@@ -165,7 +181,8 @@ def cash_flow(request: InvestigateRequest) -> InvestigateResponse:
         else:
             listed += event["amount_cents"]
             outflow_ids.append(txn)
-            answer.find(_OUTFLOWS.get(event["category"], _OUTFLOWS["other"]).format(amount=amount), txn)
+            claim = _OUTFLOWS.get(event["category"], _OUTFLOWS["other"]).format(amount=amount)
+            answer.find(claim + (f" It went to {event['to_account']}." if "to_account" in event else ""), txn)
 
     if not stale and fall > 0:
         if cid in data["unreconciled"]:
@@ -181,15 +198,27 @@ def cash_flow(request: InvestigateRequest) -> InvestigateResponse:
                 balance,
             )
             answer.unknown.append(f"Where the other {_usd(fall - listed)} went")
-        elif outflow_ids:
-            answer.find(
-                f"{_count(len(outflow_ids), 'large payment')} went out in the window, {_usd(listed)} in all. "
-                "There was no other large payment.",
-                *outflow_ids,
-                confidence="medium",
-            )
         else:
-            answer.find("No large payment went out in the window.", balance, confidence="medium")
+            if outflow_ids:
+                answer.find(
+                    f"Payments listed for the window: {len(outflow_ids)}, {_usd(listed)} in all. "
+                    "No other large payment went out.",
+                    *outflow_ids,
+                    confidence="medium",
+                )
+            else:
+                answer.find("No large payment went out in the window.", balance, confidence="medium")
+            reconciliation = answer.record(
+                f"agg_{cid}_reconciliation",
+                "balance_reconciliation",
+                {"balance_change_cents": -fall, "transactions_total_cents": -fall, "reconciled": True},
+            )
+            answer.find(
+                "Balances and transactions reconcile: the transactions on record add up to the whole change. "
+                "Apart from any payment listed here, they are everyday payments and receipts, none of them large.",
+                reconciliation,
+                balance,
+            )
 
     weekly = baseline["weekly_inflow_cents"]
     inflows = answer.record(
@@ -272,10 +301,21 @@ def credit_behavior(request: InvestigateRequest) -> InvestigateResponse:
         details = {"sequence": number, "of": len(statuses), "status": status}
         if latest_with[status] == number and (trouble := events.get(f"{status}_repayment")):
             details["amount_cents"] = trouble["amount_cents"]
+            # Whether a failed one was paid afterwards, where the file says.
+            details |= {key: trouble[key] for key in ("repaid_after_days", "still_unpaid") if key in trouble}
         repayments.append(answer.record(f"rep_{cid}_{number}", "card_repayment", details))
     answer.find(f"The last {_count(len(statuses), 'repayment')}, oldest first: {', '.join(statuses)}.", *repayments)
     if "failed" in statuses:
         answer.unknown.append("Why the repayment failed")
+        # Whether it was paid afterwards. The team's file does not say, so nothing is said for its customers.
+        failed = events.get("failed_repayment", {})
+        if "repaid_after_days" in failed:
+            answer.find(
+                f"The failed repayment was paid in full {_count(failed['repaid_after_days'], 'day')} later.",
+                repayments[latest_with["failed"] - 1],
+            )
+        elif failed.get("still_unpaid"):
+            answer.find("The failed repayment has not been paid since.", repayments[latest_with["failed"] - 1])
 
     if change := events.get("funding_account_change"):
         # Whether the new account is one the bank side can see is for the bank side to say.
