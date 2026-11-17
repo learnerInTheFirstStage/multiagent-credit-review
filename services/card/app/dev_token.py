@@ -1,7 +1,7 @@
 """Make a token for the Card Service, for local use until the Auth Service issues them.
 
     python -m app.dev_token --sub detection-job --scope snapshots:read
-    python -m app.dev_token --sub credit_behavior:case_dev --customers c_010
+    python -m app.dev_token --sub card_service:case_dev --customers c_010
 
 The same claims as the Orchestrator's dev tokens (sub, role, customers), plus Card's
 optional scope. Signed with JWT_SECRET. Inside the stack:

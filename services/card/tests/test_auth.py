@@ -21,7 +21,7 @@ def test_expired_token_is_401(seeded_client):
 
 def test_service_token_without_the_scope_is_403(seeded_client):
     # An agent's token names one customer and has no scope: it may not read every customer.
-    token = mint_token(sub="credit_behavior:case_1", customers=["c_010"])
+    token = mint_token(sub="card_service:case_1", customers=["c_010"])
     response = seeded_client.get("/snapshots", headers=bearer(token))
     assert response.status_code == 403
     assert response.json()["detail"]["error"] == "forbidden"
