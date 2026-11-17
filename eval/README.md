@@ -8,6 +8,7 @@ The golden dataset run: every test customer through the Orchestrator, scored on 
 - `extra_customers.yaml`: the evaluation's own customers. The overlay adds them to the stand-ins' data through `SHARED_CUSTOMERS_FILE`; `data/shared_customers.yaml` does not change.
 - `history.yaml`: the one seeded review every stack has (`seed_c_007_2025`). The image copies it.
 - `history_eval.yaml`: the evaluation's other fourteen seeded reviews. Only the evaluation overlay names it.
+- `card_service/`: the Card Service agent's own test set (KAN-29, the Credit Behavior specialist), run straight against the agent and Card. See its README.
 - `signals.py`: the review signal of each case. `run.py`: the runner. `grade.py`: the grading and the summary. `compare.py`: two arms side by side.
 
 ## Running an arm

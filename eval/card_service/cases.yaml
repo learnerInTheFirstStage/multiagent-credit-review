@@ -1,0 +1,207 @@
+# The Card Service agent's standalone test set (KAN-29): the Credit Behavior specialist. See README.md.
+#
+# Every case also gets the checks every answer must pass (checks.py, GENERAL):
+#   valid               the response is an InvestigateResponse the graph accepts (build._usable)
+#   cites_returned      every cited id is in the evidence, and every evidence record is one a tool
+#                       returned in this request, with the same content
+#   figures_from_records every $ and % in a claim is in the records it cites
+#   counts_from_records  every "N paid / late / failed" in a claim is the count the cited records give
+#   no_action           no finding and no suggested next step recommends an action
+#
+# Case fields:
+#   customer, topic (null: whatever the card side holds), question
+#   card: down          Card does not answer at all
+#   expect.findings     some | none
+#   expect.records      each must be cited by some finding: {kind, where: {key: value or {in: [...]}}}
+#   expect.forbid       no finding may cite a record that matches
+#   expect.says         could_not_determine must contain each of these (any case)
+
+signal_window: {start: "2026-11-03", end: "2026-11-10"}
+
+cases:
+  # --- normal is told apart from no data ---------------------------------------------------------
+  - id: cb_01_normal
+    about: A customer with nothing wrong on the card side gets findings that say so.
+    customer: c_001
+    topic: null
+    question: What does the card side show for this customer?
+    expect:
+      findings: some
+      records:
+        - {kind: card_balance, where: {utilization_trend: steady}}
+        - {kind: repayment_summary, where: {paid: 3, late: 0, failed: 0}}
+        - {kind: funding_account_change, where: {changed: false}}
+      forbid:
+        - {kind: card_repayment, where: {status: {in: [late, failed]}}}
+
+  - id: cb_02_no_data
+    about: A customer the card side does not hold gets no findings, and says why. Not "normal".
+    customer: c_098
+    topic: null
+    question: What does the card side show for this customer?
+    expect:
+      findings: none
+      says: [Unknown customer c_098]
+
+  - id: cb_03_card_down
+    about: When Card does not answer, the answer is that it could not tell. Not "normal".
+    customer: c_001
+    topic: repayments
+    card: down
+    question: Has the card been repaid on time?
+    expect:
+      findings: none
+      says: [did not answer]
+
+  # --- a change in how the customer pays is noticed -----------------------------------------------
+  - id: cb_04_new_paying_account
+    about: c_006's repayments come from a new account Bank cannot see.
+    customer: c_006
+    topic: paying_account
+    question: Did the account that pays the card change?
+    expect:
+      findings: some
+      records:
+        - {kind: funding_account_change, where: {changed: true, from: acct_c006_a, to: acct_external_new_c006}}
+
+  - id: cb_05_new_paying_account_unasked
+    about: The change is reported even when the question is about something else.
+    customer: c_006
+    topic: null
+    question: How is the card being used?
+    expect:
+      findings: some
+      records:
+        - {kind: funding_account_change, where: {changed: true, to: acct_external_new_c006}}
+
+  - id: cb_06_same_paying_account
+    about: No false alarm where the account did not change.
+    customer: c_002
+    topic: paying_account
+    question: Did the account that pays the card change?
+    expect:
+      findings: some
+      records:
+        - {kind: funding_account_change, where: {changed: false, to: acct_c002_a}}
+      forbid:
+        - {kind: funding_account_change, where: {changed: true}}
+
+  # --- what a failed repayment means (c_010) and a late one (c_003) ------------------------------
+  - id: cb_07_failed_repayment
+    about: c_010's Nov 5 repayment was returned for insufficient funds and has not been paid since.
+    customer: c_010
+    topic: repayments
+    question: Has the card been repaid on time?
+    expect:
+      findings: some
+      records:
+        - {kind: card_repayment, where: {due: "2026-11-05", status: failed, ach_return_code: R01, paid_since: "no", amount_cents: 5000000}}
+
+  - id: cb_08_failed_repayment_unasked
+    about: The failed repayment is reported when the question is about card use.
+    customer: c_010
+    topic: null
+    question: How much of the limit is in use?
+    expect:
+      findings: some
+      records:
+        - {kind: card_repayment, where: {status: failed, paid_since: "no"}}
+        - {kind: card_balance, where: {utilization_trend: spiking, used_share_bp: 9200}}
+
+  - id: cb_09_late_repayment
+    customer: c_003
+    topic: repayments
+    question: Has the card been repaid on time?
+    expect:
+      findings: some
+      records:
+        - {kind: card_repayment, where: {due: "2026-11-05", status: late, days_late: 3, amount_cents: 4000000}}
+
+  # --- card use against the customer's own past -----------------------------------------------
+  - id: cb_10_rising_use
+    customer: c_003
+    topic: card_use
+    question: How much of the limit is in use, and is that unusual?
+    expect:
+      findings: some
+      records:
+        - {kind: card_balance, where: {utilization_trend: rising, used_share_bp: 8500}}
+        - {kind: card_spend_series, where: {unusual: up}}
+
+  - id: cb_11_spiking_use
+    customer: c_010
+    topic: card_use
+    question: How much of the limit is in use, and is that unusual?
+    expect:
+      findings: some
+      records:
+        - {kind: card_balance, where: {utilization_trend: spiking}}
+      forbid:
+        - {kind: card_spend_series, where: {unusual: {in: [up, down]}}}
+
+  # The bank side of these has the trouble (a stale account, a memo injection, an unexplained
+  # payment, a balance gap); the card side does not, and must not invent any.
+  - id: cb_12_c004_card_use
+    customer: c_004
+    topic: card_use
+    question: How much of the limit is in use, and is that unusual?
+    expect: &steady_use
+      findings: some
+      records:
+        - {kind: card_balance, where: {utilization_trend: steady}}
+        - {kind: card_spend_series, where: {unusual: "no"}}
+      forbid:
+        - {kind: card_balance, where: {utilization_trend: {in: [rising, spiking, falling]}}}
+
+  - id: cb_13_c005_card_use
+    customer: c_005
+    topic: card_use
+    question: How much of the limit is in use, and is that unusual?
+    expect: *steady_use
+
+  - id: cb_14_c009_everything
+    customer: c_009
+    topic: null
+    question: What does the card side show for this customer?
+    expect:
+      findings: some
+      records:
+        - {kind: card_balance, where: {utilization_trend: steady}}
+        - {kind: repayment_summary, where: {failed: 0, late: 0}}
+      forbid:
+        - {kind: card_repayment, where: {status: {in: [late, failed]}}}
+
+  - id: cb_15_c011_card_use
+    customer: c_011
+    topic: card_use
+    question: How much of the limit is in use, and is that unusual?
+    expect: *steady_use
+
+  - id: cb_16_c012_repayments
+    customer: c_012
+    topic: repayments
+    question: Has the card been repaid on time?
+    expect:
+      findings: some
+      records:
+        - {kind: repayment_summary, where: {paid: 3, late: 0, failed: 0}}
+
+  - id: cb_17_c007_card_use
+    about: Kestrel Outdoor's dip is seasonal and on the bank side; its card use is its usual.
+    customer: c_007
+    topic: card_use
+    question: How much of the limit is in use, and is that unusual?
+    expect: *steady_use
+
+  - id: cb_18_c008_everything
+    about: Orbit Logistics paid three new payees from the bank; the card side shows nothing unusual.
+    customer: c_008
+    topic: null
+    question: What does the card side show for this customer?
+    expect:
+      findings: some
+      records:
+        - {kind: card_balance, where: {utilization_trend: steady}}
+        - {kind: card_spend_series, where: {unusual: "no"}}
+        - {kind: repayment_summary, where: {paid: 3, late: 0, failed: 0}}
+        - {kind: funding_account_change, where: {changed: false}}
