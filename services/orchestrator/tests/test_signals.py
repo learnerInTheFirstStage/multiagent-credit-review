@@ -1,10 +1,12 @@
 import copy
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
 
 from app.api import signals
 from app.db.models import Case, SignalRow
+from tests.conftest import bearer
 
 # The example in API doc section 3: two review reasons at once.
 SIGNAL = {
@@ -287,3 +289,50 @@ def test_extra_snapshot_numbers_are_kept(client, session):
     client.post("/signals", json=signal)
 
     assert session.get(SignalRow, "sig_551").payload["snapshot"]["card"]["utilization_pct"] == 92
+
+
+def test_a_signal_for_a_customer_not_in_the_data_is_refused_and_opens_nothing(client, session):
+    response = client.post("/signals", json=changed("customer_id", "c_099"))
+
+    assert response.status_code == 422
+    assert response.json() == {"error": "invalid_request", "message": "customer c_099 is not known"}
+    assert count(session, Case) == 0
+    assert count(session, SignalRow) == 0
+
+
+def test_a_customer_is_known_only_when_a_data_file_the_service_reads_holds_it(client, monkeypatch):
+    # c_110 is one of the evaluation's own customers: unknown on the main stack, known when its file is named.
+    eval_customer = changed("customer_id", "c_110")
+    assert client.post("/signals", json=eval_customer).status_code == 422
+
+    root = Path(__file__).resolve().parents[3]
+    files = [root / "data" / "shared_customers.yaml", root / "eval" / "extra_customers.yaml"]
+    monkeypatch.setenv("SHARED_CUSTOMERS_FILE", ":".join(str(path) for path in files))
+
+    assert client.post("/signals", json=eval_customer).status_code == 201
+
+
+def test_a_caller_who_may_not_send_is_refused_before_the_customer_is_looked_up(client, session):
+    # Otherwise an analyst could tell which customer ids exist from 422 against 403.
+    response = client.post("/signals", json=changed("customer_id", "c_099"), headers=bearer())
+
+    assert response.status_code == 403
+    assert count(session, Case) == 0
+
+
+def test_a_reused_signal_id_is_a_conflict_even_when_its_new_customer_is_not_known(client, session):
+    # The 409 names the sender's bug. The stored signal is checked before the customer is.
+    client.post("/signals", json=SIGNAL)
+
+    response = client.post("/signals", json=changed("customer_id", "c_099"))
+
+    assert response.status_code == 409
+    assert count(session, SignalRow) == 1
+
+
+def test_an_empty_name_in_the_data_file_setting_is_skipped(client, monkeypatch):
+    # A trailing separator would otherwise read the current folder and fail every signal.
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.setenv("SHARED_CUSTOMERS_FILE", f"{root / 'data' / 'shared_customers.yaml'}:")
+
+    assert client.post("/signals", json=SIGNAL).status_code == 201

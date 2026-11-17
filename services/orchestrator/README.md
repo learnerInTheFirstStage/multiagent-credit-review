@@ -7,7 +7,7 @@ Turns a signal into a reviewed recommendation with evidence and carries the case
 | Endpoint | What it does |
 |---|---|
 | `GET /health` | Fails if the database is unreachable |
-| `POST /signals` | Opens a case, or joins the case the customer already has open. A repeated signal is ignored. A new case is investigated after the answer is sent. Needs a `service` or `admin` token |
+| `POST /signals` | Opens a case, or joins the case the customer already has open. A repeated signal is ignored. A customer the data files do not hold is a 422. A new case is investigated after the answer is sent. Needs a `service` or `admin` token |
 | `GET /cases` | The queue: the open cases of the customers the token may see, the longest waiting first. `?status=` lists one status instead, closed ones included. `?limit=` (50, at most 200), `?offset=`. Answers `{"cases": [...], "total": n}` |
 | `GET /cases/{id}` | The case page: status, whose move it is, the checked report, the decisions, the action |
 | `GET /cases/{id}/path` | How the case was investigated, as ids and labels: the questions with their topic, focus and outcome, the searches, the gap passes, the checked drafts, the earlier reviews it was given, and how it was handed over. Same access rule as the case page. Empty for a case nobody ran |
@@ -124,4 +124,4 @@ TEST_DATABASE_URL=postgresql+psycopg://user:password@127.0.0.1:5432/dbname pytes
 - A problem the tools found, such as an account that stopped syncing or records that disagree, is a finding with evidence. When the tools could not answer at all, `findings` is empty and `could_not_determine` says why.
 - Evidence ids start with a prefix that one service owns: Bank uses `txn_`, `acct_` and `bal_`, Card uses `rep_` and `bal_card_` (the Card side has still to confirm). An aggregate is `agg_` plus a short id worked out from the tool's inputs. The same fact keeps the same id in every call, because the report check compares ids as plain strings. `kind` is a free string for now.
 - Model and LangFuse settings are read in one place in this service, not in each agent folder.
-- Until the real agents can be called, `app/agents/mock.py` stands in for both. `mock.cash_flow` and `mock.credit_behavior` take the same request and return the same response as the real `investigate` functions, built from `data/shared_customers.yaml`.
+- Until the real agents can be called, `app/agents/mock.py` stands in for both. `mock.cash_flow` and `mock.credit_behavior` take the same request and return the same response as the real `investigate` functions, built from `data/shared_customers.yaml`. `POST /signals` also refuses a customer these files do not hold (KAN-36: ask Bank and Card instead).
