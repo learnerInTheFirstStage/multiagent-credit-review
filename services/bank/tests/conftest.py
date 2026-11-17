@@ -7,6 +7,8 @@ import pytest
 # Tests run on a throwaway SQLite file. Postgres is exercised by running the stack.
 _db_dir = tempfile.mkdtemp(prefix="bank-tests-")
 os.environ["DATABASE_URL"] = f"sqlite:///{_db_dir}/test.db"
+# The lifespan refuses tokens nobody can check; tests need a secret set.
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-not-used-anywhere-real")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import event  # noqa: E402
@@ -34,3 +36,36 @@ def session():
     Base.metadata.create_all(engine)
     with SessionLocal() as db_session:
         yield db_session
+
+
+def mint_token(
+    *,
+    sub: str = "orchestrator",
+    role: str = "service",
+    customers: list[str] | None = None,
+    expires_in: int = 3600,
+) -> str:
+    """Mint a JWT for tests. Same shape as orchestrator/app/dev_token.py."""
+    import time
+
+    import jwt
+
+    claims = {
+        "sub": sub,
+        "role": role,
+        "customers": customers or [],
+        "exp": int(time.time()) + expires_in,
+    }
+    return jwt.encode(claims, os.environ["JWT_SECRET"], algorithm="HS256")
+
+
+@pytest.fixture
+def mint():
+    return mint_token
+
+
+@pytest.fixture
+def auth_headers():
+    """Service token covering every seeded customer. Most tests use this."""
+    customers = [f"c_{i:03d}" for i in range(1, 13)]
+    return {"Authorization": f"Bearer {mint_token(customers=customers)}"}
