@@ -6,7 +6,7 @@ Customers, limits, card spend and repayments, served as read-only analysis tools
 
 The Credit Behavior Agent that calls these tools lives in `services/orchestrator/app/agents/credit_behavior`.
 
-Today: `GET /snapshots` (below) and `GET /health`. Every start refuses to run without `JWT_SECRET`, creates four tables and, when the database is empty, seeds the 12 customers from `data/shared_customers.yaml` (`SHARED_CUSTOMERS_YAML` overrides the path). After changing that file, run `docker compose down -v` and `docker compose up --build`, since the file is copied into the image. To seed an empty database by hand: `docker compose exec card python -m app.db.seed`. Tests: `services/card/tests`. Nothing calls Card's data yet: the Orchestrator's stand-in Credit Behavior specialist reads the YAML file directly.
+Today: `GET /snapshots`, the analysis tools (both below) and `GET /health`. Every start refuses to run without `JWT_SECRET`, creates four tables and, when the database is empty, seeds the 12 customers from `data/shared_customers.yaml` (`SHARED_CUSTOMERS_YAML` overrides the path). After changing that file, run `docker compose down -v` and `docker compose up --build`, since the file is copied into the image. To seed an empty database by hand: `docker compose exec card python -m app.db.seed`. Tests: `services/card/tests`. Nothing calls Card's data yet: the Orchestrator's stand-in Credit Behavior specialist reads the YAML file directly.
 
 Next: the tasks under the "Card Service + Credit Behavior Agent" epic (KAN-6). The topics the Credit Behavior Agent must answer are listed in `services/orchestrator/README.md` (Agents). The evidence kinds are `KIND_TOPIC` in `services/orchestrator/app/graph/causes.py`, and `services/orchestrator/app/agents/mock.py` returns every kind and key the checks read.
 
@@ -34,6 +34,25 @@ curl -s -H "Authorization: Bearer $TOKEN" "localhost:8003/snapshots?customer_id=
 - Token: role `service` with `snapshots:read` in a `scope` claim (a list, or a space-separated string). An agent's token names one customer and no scope, so it cannot read every customer. `python -m app.dev_token` makes one for local use.
 - `balance_cents`: everything authorized and not declined, less every completed repayment, at the end of `as_of`. `used_share_bp` is that over the limit in basis points.
 - `repayments`: the last three due on or before `as_of` whose outcome is known, oldest first. `paid` settled by its due date, `late` settled after it (or is past due and not settled yet), `failed` came back from the bank. The rules are in `app/ledger.py`, which the analysis tools use too.
+
+## Analysis tools
+
+`GET /customers/{customer_id}/tools/<name>?...`, called by the Credit Behavior Agent with a short-lived service token that names the customer (any other token is a 403). The envelope is the Bank tools' one: `{data, evidence}`. Code works out every number; "unusual" means unlike this customer's own past, and where there is too little past a tool says `too_short_to_tell`, never steady. Code is in `app/api/tools.py`.
+
+| Tool | Orchestrator topic | Arguments | Answers | Evidence |
+|---|---|---|---|---|
+| `repayments` | repayments | `count` (1-13, default 6) | the latest repayments that are due, each `paid`, `late` (with `days_late`) or `failed` (with the NACHA code and `paid_since`), and the counts | `card_repayment` per repayment, `repayment_summary` |
+| `paying_account` | paying_account | `count` (2-13, default 3) | whether the account the card is paid from changed across those repayments: `changed`, `from`, `to`, `changed_on` | `funding_account_change`, and the repayments compared |
+| `utilization` | card_use | `on` (a day, default the as-of date) | balance over the limit at the end of that day and `utilization_trend` against the same day of the three months before: `spiking` (25+ points up and at 90%+), `rising` (15+ up), `falling` (15+ down), `steady`, or `too_short_to_tell` | `card_balance` for the day and the three earlier ones |
+| `spend_by_cycle` | card_use | `cycles` (3-13, default 6) | spend per statement cycle; the open cycle (projected when not over) against the median of the closed ones, `unusual` at +50% / -40%; `too_short_to_tell` with fewer than 3 closed cycles | `card_spend_series` |
+| `transactions` | drill-down | `start`, `end`, and any of `merchant`, `category`, `mcc`, `card_id`, `state` (approved, declined, any), `min_amount_cents`, `limit` (≤ 50) | the matching transactions, largest first, with totals and declines by reason | `card_transaction` per row, `card_transaction_search` |
+| `spend_breakdown` | drill-down | `start`, `end`, `by` (category, merchant, card, mcc) | approved spend per group against the period of the same length just before, with each group's share and whether it is new | `card_spend_breakdown` |
+
+Windows end on or before the as-of date and start at most 400 days before it.
+
+Evidence ids keep their content, since the Orchestrator refuses an answer in which a known id comes back changed. A row's record depends only on the row, read at the as-of date: `rep_c_010_202611` (repayment), `ctx_c_003_00942` (transaction), `bal_card_c_010_20261110` (the balance at the end of a day). An aggregate is `agg_` plus 8 hex of a hash over the tool, the customer and its arguments, so the same question gives the same id. The kinds and keys the Orchestrator's rules read are kept as it reads them (`app/api/evidence.py`): for example `card_repayment.status` is `paid`, `late` or `failed`, and `funding_account_change` has `changed`, `from` and `to`.
+
+What the seeded customers give (tested in `tests/test_tools.py`): c_003 utilization `rising`, spend `up`, the Nov 5 repayment `late` by 3 days, two declines at the limit; c_010 `spiking`, the Nov 5 repayment `failed`, R01, `paid_since: no`; c_006 paying account changed from `acct_c006_a` to `acct_external_new_c006` on 2026-09-20; every other customer `steady`, spend not unusual, account unchanged.
 
 ## Tables
 
