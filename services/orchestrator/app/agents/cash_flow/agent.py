@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import time
-from typing import Iterable
+from typing import Any
 
 import httpx
 import jwt
@@ -61,8 +61,12 @@ def cash_flow(
         # No model available — mirror app.runtime's "no LLM_MODEL" behaviour.
         return _cannot("The Cash Flow agent has no model configured (LLM_MODEL is unset).")
 
-    token = _mint_service_token(customer_id=request.customer_id, case_id=request.case_id)
-    tools = build_tools(customer_id=request.customer_id, token=token, http=http)
+    try:
+        token = _mint_service_token(customer_id=request.customer_id, case_id=request.case_id)
+    except RuntimeError as error:
+        return _cannot(str(error))
+
+    tools, close_http = build_tools(customer_id=request.customer_id, token=token, http=http)
     tools_by_name = {tool.name: tool for tool in tools}
 
     pool = guardrails.EvidencePool()
@@ -86,66 +90,96 @@ def cash_flow(
     could_not_determine: list[str] = []
     suggested_next: str | None = None
     tool_calls_made = 0
+    # Checked between steps. A long single invoke is not pre-empted; callers
+    # upstream (graph) also enforce an overall case timeout.
     deadline = time.monotonic() + MAX_SECONDS
+    budget_exhausted = False
 
-    while True:
-        if time.monotonic() > deadline:
-            could_not_determine.append("The 60-second budget ran out before a final answer.")
-            break
+    try:
+        while True:
+            if time.monotonic() > deadline:
+                could_not_determine.append("The 60-second budget ran out between steps.")
+                break
 
-        reply = model_with_tools.invoke(messages)
-        messages.append(reply)
+            try:
+                reply = model_with_tools.invoke(messages)
+            except Exception as error:  # noqa: BLE001
+                log.warning("model invoke raised: %s", error)
+                could_not_determine.append(f"The model call failed: {error}")
+                break
+            messages.append(reply)
 
-        tool_calls = getattr(reply, "tool_calls", None) or []
-        if not tool_calls:
-            # The model is done. Parse its final answer for findings.
-            findings, suggested_next = _findings_from_message(reply)
-            return guardrails.build_response(
-                findings=findings,
-                pool=pool,
-                could_not_determine=could_not_determine,
-                suggested_next=suggested_next,
-            )
-
-        for call in tool_calls:
-            if tool_calls_made >= MAX_TOOL_CALLS:
-                could_not_determine.append("Reached the 5-tool-call budget.")
+            tool_calls = getattr(reply, "tool_calls", None) or []
+            if not tool_calls:
+                findings, suggested_next = _findings_from_message(reply)
                 return guardrails.build_response(
-                    findings=[],
+                    findings=findings,
                     pool=pool,
                     could_not_determine=could_not_determine,
-                    suggested_next=None,
+                    suggested_next=suggested_next,
                 )
 
-            name = call["name"]
-            args = call.get("args") or {}
-            tool = tools_by_name.get(name)
-            if tool is None:
-                observation = {"error": "unknown_tool", "message": f"No such tool: {name}"}
-            else:
+            for call in tool_calls:
+                if tool_calls_made >= MAX_TOOL_CALLS:
+                    budget_exhausted = True
+                    break
+
+                name = call["name"]
+                args = call.get("args") or {}
+                tool = tools_by_name.get(name)
+                if tool is None:
+                    observation = {"error": "unknown_tool", "message": f"No such tool: {name}"}
+                else:
+                    try:
+                        raw = tool.invoke(args)
+                        observation = guardrails.sanitize_tool_result(raw)
+                        pool.add(observation)
+                    except Exception as error:  # noqa: BLE001 — surface any tool-level problem
+                        log.warning("tool %s raised: %s", name, error)
+                        observation = {"error": "tool_raised", "message": str(error)}
+
+                messages.append(
+                    ToolMessage(
+                        content=json.dumps(observation),
+                        tool_call_id=call["id"],
+                    )
+                )
+                tool_calls_made += 1
+
+            if budget_exhausted:
+                could_not_determine.append("Reached the 5-tool-call budget; summarising from what is known.")
+                # Give the model one last chance to write findings, now without
+                # tools, so the evidence already gathered is not thrown away.
+                messages.append(
+                    HumanMessage(
+                        content=(
+                            "You have used your tool-call budget. Do not call any more tools. "
+                            "Write your final answer as JSON from the evidence you already have."
+                        )
+                    )
+                )
                 try:
-                    raw = tool.invoke(args)
-                    observation = guardrails.sanitize_tool_result(raw)
-                    pool.add(observation)
-                except Exception as error:  # noqa: BLE001 — surface any tool-level problem
-                    log.warning("tool %s raised: %s", name, error)
-                    observation = {"error": "tool_raised", "message": str(error)}
-
-            messages.append(
-                ToolMessage(
-                    content=json.dumps(observation),
-                    tool_call_id=call["id"],
+                    final = model.invoke(messages)
+                except Exception as error:  # noqa: BLE001
+                    log.warning("final invoke raised: %s", error)
+                    could_not_determine.append(f"The summary call failed: {error}")
+                    break
+                findings, suggested_next = _findings_from_message(final)
+                return guardrails.build_response(
+                    findings=findings,
+                    pool=pool,
+                    could_not_determine=could_not_determine,
+                    suggested_next=suggested_next,
                 )
-            )
-            tool_calls_made += 1
 
-    # Only reached when the time budget expired mid-loop.
-    return guardrails.build_response(
-        findings=[],
-        pool=pool,
-        could_not_determine=could_not_determine,
-        suggested_next=None,
-    )
+        return guardrails.build_response(
+            findings=[],
+            pool=pool,
+            could_not_determine=could_not_determine,
+            suggested_next=None,
+        )
+    finally:
+        close_http()
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +197,7 @@ def _findings_from_message(message: AIMessage) -> tuple[list[Finding], str | Non
     If parsing fails, return empty findings so the guardrail layer records the
     reason via could_not_determine.
     """
-    content = message.content if isinstance(message.content, str) else ""
+    content = _flatten_content(message.content)
     try:
         payload = json.loads(_extract_json(content))
     except (ValueError, TypeError):
@@ -177,6 +211,27 @@ def _findings_from_message(message: AIMessage) -> tuple[list[Finding], str | Non
             continue
     suggested = payload.get("suggested_next")
     return findings, suggested if isinstance(suggested, str) and suggested else None
+
+
+def _flatten_content(content: Any) -> str:
+    """Normalise message.content to a plain string.
+
+    Anthropic chat models via LangChain often return a list of blocks like
+    ``[{"type": "text", "text": "..."}]``. OpenAI returns a plain string.
+    Join the text blocks and ignore non-text ones (images, tool_use blocks
+    land in message.tool_calls, not here).
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+            elif isinstance(block, str):
+                parts.append(block)
+        return "".join(parts)
+    return ""
 
 
 def _extract_json(text: str) -> str:

@@ -115,20 +115,25 @@ def _call(
     return body
 
 
-def build_tools(*, customer_id: str, token: str, http: httpx.Client | None = None) -> list[StructuredTool]:
+def build_tools(
+    *, customer_id: str, token: str, http: httpx.Client | None = None
+) -> tuple[list[StructuredTool], Any]:
     """Build the seven tools, pre-bound to this request's customer and token.
 
-    The agent calls these; the LLM only sees names, arg schemas and docstrings.
+    Returns the tool list and a close() callable. close() closes the httpx
+    client only when this function created it (not when the caller injected
+    one). The agent wraps the main loop in try/finally to always call it.
     """
+    owns_client = http is None
     client = http or httpx.Client()
 
-    def _bind(name: str, args_model: type[BaseModel]):
+    def _bind(name: str):
         def fn(**kwargs: Any) -> dict[str, Any]:
             return _call(client, customer_id, token, name, **kwargs)
 
         return fn
 
-    return [
+    tools = [
         StructuredTool.from_function(
             name="cash_summary",
             description=(
@@ -137,7 +142,7 @@ def build_tools(*, customer_id: str, token: str, http: httpx.Client | None = Non
                 "calling this when you need to know the size and shape of the change."
             ),
             args_schema=_CashSummaryArgs,
-            func=_bind("cash_summary", _CashSummaryArgs),
+            func=_bind("cash_summary"),
         ),
         StructuredTool.from_function(
             name="transactions",
@@ -148,7 +153,7 @@ def build_tools(*, customer_id: str, token: str, http: httpx.Client | None = Non
                 "evidence so a finding can cite it by id (txn_...)."
             ),
             args_schema=_TransactionsArgs,
-            func=_bind("transactions", _TransactionsArgs),
+            func=_bind("transactions"),
         ),
         StructuredTool.from_function(
             name="income_trend",
@@ -159,7 +164,7 @@ def build_tools(*, customer_id: str, token: str, http: httpx.Client | None = Non
                 "trend as unreliable in that case."
             ),
             args_schema=_IncomeTrendArgs,
-            func=_bind("income_trend", _IncomeTrendArgs),
+            func=_bind("income_trend"),
         ),
         StructuredTool.from_function(
             name="payee_history",
@@ -169,7 +174,7 @@ def build_tools(*, customer_id: str, token: str, http: httpx.Client | None = Non
                 "which you take from an earlier transactions result."
             ),
             args_schema=_PayeeHistoryArgs,
-            func=_bind("payee_history", _PayeeHistoryArgs),
+            func=_bind("payee_history"),
         ),
         StructuredTool.from_function(
             name="account_reporting",
@@ -179,7 +184,7 @@ def build_tools(*, customer_id: str, token: str, http: httpx.Client | None = Non
                 "the balance only looks lower because it is missing."
             ),
             args_schema=_AccountReportingArgs,
-            func=_bind("account_reporting", _AccountReportingArgs),
+            func=_bind("account_reporting"),
         ),
         StructuredTool.from_function(
             name="balance_vs_txn",
@@ -189,7 +194,7 @@ def build_tools(*, customer_id: str, token: str, http: httpx.Client | None = Non
                 "Use this to answer 'do balances and transactions agree?'."
             ),
             args_schema=_BalanceVsTxnArgs,
-            func=_bind("balance_vs_txn", _BalanceVsTxnArgs),
+            func=_bind("balance_vs_txn"),
         ),
         StructuredTool.from_function(
             name="prior_year_compare",
@@ -199,6 +204,12 @@ def build_tools(*, customer_id: str, token: str, http: httpx.Client | None = Non
                 "Use this for seasonal-dip questions."
             ),
             args_schema=_PriorYearCompareArgs,
-            func=_bind("prior_year_compare", _PriorYearCompareArgs),
+            func=_bind("prior_year_compare"),
         ),
     ]
+
+    def close() -> None:
+        if owns_client:
+            client.close()
+
+    return tools, close

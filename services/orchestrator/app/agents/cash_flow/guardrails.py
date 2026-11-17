@@ -66,10 +66,13 @@ def _sanitize(value: Any) -> Any:
 
 def _wrap_if_memo(key: str, value: Any) -> Any:
     if isinstance(value, str) and key == "memo" and value:
-        # Idempotent: a memo already wrapped stays wrapped.
-        if value.startswith("<memo>") and value.endswith("</memo>"):
-            return value
-        return f"<memo>{value}</memo>"
+        # Neutralise any angle brackets in the memo before wrapping, so a
+        # malicious memo cannot close the <memo> tag early and smuggle text
+        # out of the data boundary. The idempotence shortcut was dropped on
+        # purpose: sanitize_tool_result runs once per tool result, and a
+        # pre-wrapped value from upstream would itself be suspicious.
+        escaped = value.replace("<", "&lt;").replace(">", "&gt;")
+        return f"<memo>{escaped}</memo>"
     return value
 
 
@@ -173,8 +176,18 @@ def build_response(
     survived, evidence_drops = enforce_evidence(findings, pool)
     survived, verb_drops = strip_limit_verbs(survived)
 
-    cited = {eid for finding in survived for eid in finding.evidence_ids}
-    evidence = [pool.records[eid] for eid in cited if eid in pool.records]
+    # Deterministic order: walk findings in order, then each finding's
+    # evidence_ids in order. Deduplicate so an id cited by two findings
+    # appears once. Tests compare responses with ==; a set would make them
+    # flaky.
+    cited_in_order: list[str] = []
+    seen: set[str] = set()
+    for finding in survived:
+        for eid in finding.evidence_ids:
+            if eid in pool.records and eid not in seen:
+                cited_in_order.append(eid)
+                seen.add(eid)
+    evidence = [pool.records[eid] for eid in cited_in_order]
 
     reasons = list(could_not_determine) + evidence_drops + verb_drops
     # If every finding was dropped and there is no reason, the Pydantic model
