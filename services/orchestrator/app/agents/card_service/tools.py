@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
 from typing import Any, Literal
 
 import httpx
@@ -133,11 +132,12 @@ class CardTools:
             return {"error": str(detail["error"]), "message": str(detail.get("message", ""))[:300]}
         return {"error": f"http_{response.status_code}", "message": (json.dumps(detail) if detail else response.text)[:300]}
 
-    def langchain_tools(self, run: Callable[[str, dict[str, Any]], Any]) -> list[StructuredTool]:
-        """Tool schemas for bind_tools. The agent runs calls itself (through `run`), to keep the budget."""
+    def langchain_tools(self) -> list[StructuredTool]:
+        """The tools as the model sees them, for bind_tools. The graph's `tools` node runs the calls
+        itself, through call(), so it can keep the budget and the cache."""
         return [
             StructuredTool.from_function(name=name, description=description, args_schema=schema,
-                                         func=lambda _n=name, **kwargs: run(_n, kwargs))
+                                         func=lambda _n=name, **kwargs: self.call(_n, **kwargs))
             for name, (_, schema, description) in SPECS.items()
         ]
 
