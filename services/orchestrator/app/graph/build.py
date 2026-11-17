@@ -11,14 +11,17 @@ from collections.abc import Callable
 from datetime import date, timedelta
 from typing import Literal
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
-from app.graph import prompts
+from app import policy
+from app.graph import facts, figures, prompts
+from app.graph.causes import CAUSES, OWN_KINDS, TOPIC_TESTS, TOPICS
 from app.graph.report import ReportDraft
 from app.graph.state import CaseState, RunContext
 from contracts import InvestigateRequest, InvestigateResponse
@@ -26,29 +29,62 @@ from contracts import InvestigateRequest, InvestigateResponse
 log = logging.getLogger(__name__)
 
 MAX_ROUNDS = 6  # questions to specialists per case
+MAX_REFUSALS = 3  # calls refused before they were sent that use no round
 MAX_GAP_RETURNS = 2  # times step 3 may send the case back to step 2
 MAX_DRAFTS = 2  # the report is redrafted once if the check fails
 WINDOW_DAYS = 7
+EARLIEST_DAYS = 400  # how far before the signal's day a question's dates may reach
 MANAGER_CUT = 0.5  # a cut above this share of the limit needs a manager
+NOTE_MAX = 500  # characters of a decision's note
 
 Specialist = Callable[[InvestigateRequest], InvestigateResponse]
 
+Cause = Literal[
+    "payroll_or_tax", "planned_vendor_payment", "seasonal_dip", "funds_moved_out_of_view",
+    "revenue_loss", "unexplained_outflow", "insufficient_data",
+]  # fmt: skip
+
 
 class AskCashFlow(BaseModel):
-    """Ask the Cash Flow agent one question about the customer's bank records."""
+    """Ask the Cash Flow agent about one topic of the customer's bank records."""
 
-    question: str
-    context: str = Field(default="", description="What it needs to know from earlier answers.")
+    topic: Literal["transactions", "income", "payee_history", "accounts", "reconciliation", "prior_year"]
+    question: str = Field(min_length=1)
+    separates: list[Cause] = Field(min_length=1, description="The causes this answer will tell apart.")
+    record_id: str | None = Field(
+        default=None,
+        description="An evidence id from an earlier answer. payee_history needs the id of one transaction.",
+    )
+    account_id: str | None = Field(
+        default=None, description="One account, by an id the signal facts or an earlier answer named."
+    )
+    start: str | None = Field(
+        default=None, description="First day to look at, as YYYY-MM-DD. Leave out for the review window."
+    )
+    end: str | None = Field(default=None, description="Last day to look at.")
 
 
 class AskCreditBehavior(BaseModel):
-    """Ask the Credit Behavior agent one question about the customer's card records."""
+    """Ask the Credit Behavior agent about one topic of the customer's card records."""
 
-    question: str
-    context: str = Field(default="", description="What it needs to know from earlier answers.")
+    topic: Literal["repayments", "paying_account", "card_use"]
+    question: str = Field(min_length=1)
+    separates: list[Cause] = Field(min_length=1, description="The causes this answer will tell apart.")
+    start: str | None = None
+    end: str | None = None
 
 
+TOOLS = {"AskCashFlow": AskCashFlow, "AskCreditBehavior": AskCreditBehavior}
 AGENT_FOR_TOOL = {"AskCashFlow": "cash_flow", "AskCreditBehavior": "credit_behavior"}
+# Ids only the Orchestrator gives (1.4). A specialist's record under one would forge the case's own facts.
+_OWN_IDS = ("sig_", "hist_", "xs_")
+_FOCUS = ("record_id", "account_id")
+# The parts of a report whose items cite records.
+_CITING = ("evidence", "ruled_out", "other_findings", "review_reasons")
+UNREADABLE = "That call could not be read. Send it again."
+# In the summary of a report given up on: the draft's figures are not repeated to the analyst.
+FIGURES_NOT_SHOWN = "It stated figures that are not in the evidence it cited."
+DECIDED = ("keep_limit", "reduce_limit", "pause_card", "request_documents")
 
 
 class GapReview(BaseModel):
@@ -66,6 +102,9 @@ def _person_decides(state: CaseState, step: str) -> dict:
     This runs again from its first line each time the case resumes, so it has no
     side effects. An answer that is not a decision pauses the case again. Raising
     instead would leave that answer stored as the reply to the pause for good.
+
+    A note and what the person decided on a hand-over are kept only when given:
+    a decision without them looks as it did before they existed.
     """
     shown = {"case_id": state["case_id"], "step": step, "report": state["report"]}
     while True:
@@ -76,7 +115,13 @@ def _person_decides(state: CaseState, step: str) -> dict:
             and isinstance(answer.get("by"), str)
             and answer["by"]
         ):
-            return {"step": step, "decision": answer["decision"], "by": answer["by"]}
+            decision = {"step": step, "decision": answer["decision"], "by": answer["by"]}
+            note = answer.get("note")
+            if isinstance(note, str) and (note := note.replace("\x00", "").strip()[:NOTE_MAX]):
+                decision["note"] = note
+            if answer.get("decided") in DECIDED:
+                decision["decided"] = answer["decided"]
+            return decision
         shown = {**shown, "problem": DECISION_SHAPE}
 
 
@@ -99,54 +144,244 @@ def _needs_manager(state: CaseState) -> bool:
     return recommendation == "reduce_limit" and cut > MANAGER_CUT
 
 
-def _report_problems(state: CaseState) -> list[str]:
+def _cited(report: dict) -> list[str]:
+    """The ids a report cites, in its four parts, in order and once each."""
+    ids = (record_id for part in _CITING for item in report[part] for record_id in item["evidence_ids"])
+    return list(dict.fromkeys(ids))
+
+
+def _reads_as_id(value: str) -> bool:
+    """Whether a value a draft wrote where an id goes is shaped like an id (6.1, step 1).
+
+    Code repeats no other such value: it is the draft's own text, and could carry a figure the model made up
+    to the analyst, in the summary of a report given up on, or into draft_log.
+    """
+    return figures._IDS.fullmatch(value) is not None
+
+
+def _named(unknown: list[str]) -> str:
+    """Ids a draft cited that the case does not hold, as a sentence code writes names them."""
+    named = [value for value in unknown if _reads_as_id(value)]
+    if len(named) < len(unknown):
+        named.append("text that is not an id")
+    return ", ".join(named)
+
+
+def _report_problems(state: CaseState) -> list[tuple[list[str], str]]:
+    """What is wrong with the draft, as (codes, sentence) pairs.
+
+    The sentences go to the redraft and the check, the codes to draft_log.
+    """
     report = state["report"]
     if report is None:
-        return [f"The output did not fit the report shape. {state.get('draft_error') or ''}".strip()]
+        sentence = f"The output did not fit the report shape. {state.get('draft_error') or ''}".strip()
+        return [(["not_a_report"], sentence)]
 
     problems = []
     signal = state["signal"]
     recommendation = report["recommendation"]
     acts = recommendation != "needs_human"
-    returned = {
-        evidence["id"]
-        for answer in state.get("answers", [])
-        if "response" in answer
-        for evidence in answer["response"]["evidence"]
-    }
-    cited = {
-        evidence_id
-        for part in ("evidence", "ruled_out", "other_findings", "review_reasons")
-        for item in report[part]
-        for evidence_id in item["evidence_ids"]
-    }
-    if unknown := sorted(cited - returned):
-        problems.append(f"It cites evidence no specialist returned: {', '.join(unknown)}.")
+    ledger = facts.ledger(state)
+    if unknown := sorted(set(_cited(report)) - set(ledger)):
+        problems.append((["evidence_unknown"], f"It cites evidence no specialist returned: {_named(unknown)}."))
     if acts and not report["evidence"]:
-        problems.append(f"It recommends {recommendation} without citing evidence.")
+        problems.append((["no_evidence"], f"It recommends {recommendation} without citing evidence."))
 
     addressed = {item["reason"] for item in report["review_reasons"]}
     if missing := sorted(set(signal["review_reasons"]) - addressed):
-        problems.append(f"It does not address the review reason: {', '.join(missing)}.")
+        problems.append((["review_reason"], f"It does not address the review reason: {', '.join(missing)}."))
 
     allows = {guideline["id"]: guideline["allows"] for guideline in state["guidelines"]}
     cited_guidelines = report["guideline_ids"]
     if unknown := sorted(set(cited_guidelines) - set(allows)):
-        problems.append(f"It cites a guideline that does not exist: {', '.join(unknown)}.")
+        problems.append((["guideline_unknown"], f"It cites a guideline that does not exist: {_named(unknown)}."))
     elif acts and not cited_guidelines:
-        problems.append("It cites no guideline.")
+        problems.append((["guideline_missing"], "It cites no guideline."))
     elif acts and (a_person_decides := [g for g in cited_guidelines if allows[g] == ["needs_human"]]):
         # Another guideline cited next to it must not outvote one that leaves the decision to a person.
-        problems.append(
-            f"It cites {', '.join(a_person_decides)}, under which a person decides, so it may only recommend needs_human."
-        )
+        problems.append((
+            ["guideline_person"],
+            f"It cites {', '.join(a_person_decides)}, under which a person decides, "
+            "so it may only recommend needs_human.",
+        ))
     elif acts and not any(recommendation in allows[guideline_id] for guideline_id in cited_guidelines):
-        problems.append(f"No guideline it cites allows {recommendation}.")
+        problems.append((["guideline_allows"], f"No guideline it cites allows {recommendation}."))
 
     # Step 9 sets the engine's limit, so a "reduction" must be one.
     if recommendation == "reduce_limit" and signal["engine_limit_cents"] >= signal["current_limit_cents"]:
-        problems.append("It recommends reduce_limit, but the engine's limit is not below the current limit.")
+        problems.append((
+            ["not_a_reduction"], "It recommends reduce_limit, but the engine's limit is not below the current limit."
+        ))
+
+    # Last, so that the first problem keeps its meaning. A figure is backed only by a record the sentence cites (6.1).
+    if refused := figures.made_up(report, ledger):
+        by_part: dict[str, list[str]] = {}
+        for part, written, elsewhere in refused:
+            named = f" ({elsewhere} shows it and is not cited there)" if elsewhere else ""
+            by_part.setdefault(part, []).append(written + named)
+        listed = "; ".join(f"{part}: {', '.join(written)}" for part, written in by_part.items())
+        problems.append((
+            ["figure"],
+            f"It states figures that are not in the evidence it cites for them: {listed}. "
+            "State only figures the cited evidence shows, exactly as shown, or leave the figure out.",
+        ))
     return problems
+
+
+def _logged(draft: int, codes: list[str], report: dict | None, result: str, known: set[str]) -> dict:
+    """One checked draft for draft_log: its labels and the ids it cited, never its prose.
+
+    An id is kept when the case holds that record or guideline (known), or when it is shaped like an id.
+    """
+
+    def ids(values: list[str]) -> list[str]:
+        return [value for value in values if value in known or _reads_as_id(value)]
+
+    return {
+        "draft": draft,
+        "codes": codes,
+        "result": result,
+        "recommendation": report and report["recommendation"],
+        "likely_cause": report and report["likely_cause"],
+        "confidence": report and report["confidence"],
+        "guideline_ids": ids(report["guideline_ids"]) if report else [],
+        "cited": ids(_cited(report)) if report else [],
+    }
+
+
+def _found(answers: list[dict], ledger: dict[str, dict]) -> list[dict]:
+    """The specialists' findings, for a report given up on: each one whose figures the records it cites show."""
+    found = []
+    for answer in answers:
+        for finding in (answer.get("response") or {}).get("findings", []):
+            cited = [ledger[record_id] for record_id in finding["evidence_ids"] if record_id in ledger]
+            shown = figures.allowed_figures(cited)
+            item = {"claim": finding["claim"], "evidence_ids": finding["evidence_ids"]}
+            if not figures.not_backed(finding["claim"], shown) and item not in found:
+                found.append(item)
+    return found
+
+
+def _not_a_report(error: Exception | None) -> str:
+    """Which fields of a draft did not fit, by path and error type.
+
+    Never the parser's own message: it quotes the whole draft, and a figure the model made up would ride
+    along into the redraft and, on the last draft, into what the analyst reads.
+    """
+    if error is None:
+        return "No report was returned."
+    invalid = error if isinstance(error, ValidationError) else error.__cause__
+    if not isinstance(invalid, ValidationError):
+        return "It could not be read as a report."
+    return "; ".join(
+        f"{'.'.join(str(part) for part in problem['loc'])}: {problem['type']}" for problem in invalid.errors()[:10]
+    )
+
+
+def _why(error: ValueError, tool: str) -> str:
+    """Why a call was not sent, in words code wrote. Never the call's own values, which pydantic's messages quote."""
+    if not isinstance(error, ValidationError):
+        return str(error)
+    rules = {
+        "topic": f"must be one of {', '.join(TOPICS[tool])}",
+        "question": "say in words what is asked",
+        "separates": f"name at least one cause, from {', '.join(CAUSES)}",
+    }
+    fields = dict.fromkeys(str(problem["loc"][0]) if problem["loc"] else "the call" for problem in error.errors())
+    return "; ".join(f"{field}: {rules.get(field, 'must be text, or be left out')}" for field in fields)
+
+
+def _window(ask: AskCashFlow | AskCreditBehavior, state: CaseState) -> dict:
+    """The dates of this question: the review window, or the start and end it names."""
+    if ask.start is None and ask.end is None:
+        return state["window"]
+    if ask.start is None or ask.end is None:
+        raise ValueError("Give start and end together, or neither.")
+    try:
+        start, end = date.fromisoformat(ask.start), date.fromisoformat(ask.end)
+    except ValueError:
+        raise ValueError("start and end must be dates written as YYYY-MM-DD.") from None
+    as_of = date.fromisoformat(state["signal"]["as_of"])
+    if not as_of - timedelta(days=EARLIEST_DAYS) <= start <= end <= as_of:
+        raise ValueError(
+            "start must not be after end, end must not be after the signal's day, "
+            "and start may reach back a little over a year from it."
+        )
+    return {"start": start.isoformat(), "end": end.isoformat()}
+
+
+def _accounts(known: dict[str, dict]) -> set[str]:
+    """The accounts the case has seen: those the signal lists or a bank answer links, where a listed payment
+    went, and the accounts that paid the card before and after a change.
+
+    Only values a model is shown as they are. Text a record holds there is shown marked or withheld, and as a
+    question's focus it would reach the gap reviewer and the report writer unmarked.
+    """
+    seen = []
+    for record in known.values():
+        data = facts.shown(record)["data"]
+        if record["kind"] == "account_sync":
+            seen += [account.get("id") for account in data.get("accounts", []) if isinstance(account, dict)]
+        elif record["kind"] == "linked_account":
+            seen.append(record["id"])
+        elif record["kind"] == "bank_transaction":
+            seen.append(data.get("to_account"))
+        elif record["kind"] == "funding_account_change":
+            seen += [data.get("from"), data.get("to")]
+    return {value for value in seen if isinstance(value, str)}
+
+
+def _focus_is_known(ask: AskCashFlow | AskCreditBehavior, known: dict[str, dict]) -> None:
+    record_id, account_id = (getattr(ask, key, None) for key in _FOCUS)
+    if ask.topic == "payee_history":
+        if record_id is None or known.get(record_id, {}).get("kind") != "bank_transaction":
+            raise ValueError("payee_history needs record_id: the id of one transaction an earlier answer returned.")
+    elif record_id is not None and record_id not in known:
+        raise ValueError("record_id must be the id of a record this case holds.")
+    if account_id is not None and account_id not in _accounts(known):
+        raise ValueError("account_id must be an account the signal facts or an earlier answer named.")
+
+
+def _context(state: CaseState) -> str:
+    """What a specialist is told about the case. Written by code: no model's words reach it this way."""
+    signal, window = state["signal"], state["window"]
+    bank = signal["snapshot"]["bank"]
+    change = bank["cash_now_cents"] - bank["cash_7d_ago_cents"]
+    moved = "did not change"
+    if change:
+        moved = f"fell by {facts.usd(-change)}" if change < 0 else f"rose by {facts.usd(change)}"
+    return (
+        f"Linked cash {moved} between {window['start']} and {window['end']}. "
+        f"Review reasons: {', '.join(signal['review_reasons'])}."
+    )
+
+
+def _usable(response: InvestigateResponse, known: dict[str, dict]) -> None:
+    """Raises when an answer forges one of the case's own records, or changes one the case holds.
+
+    One id means one payload, whichever side or topic returned it.
+    """
+    for item in response.evidence:
+        if item.kind in OWN_KINDS or item.id.startswith(_OWN_IDS):
+            raise ValueError(f"{item.id} is of a kind or an id only the Orchestrator gives")
+        record = item.model_dump(mode="json")
+        before = known.get(item.id)
+        if before is not None and (before["kind"], before["data"]) != (record["kind"], record["data"]):
+            raise ValueError(f"{item.id} came back with other content")
+
+
+def _unread(message) -> list[ToolMessage]:
+    """An answer to each tool call that could not be read. A provider refuses a call left without one."""
+    return [
+        ToolMessage(UNREADABLE, tool_call_id=bad["id"], status="error")
+        for bad in getattr(message, "invalid_tool_calls", None) or []
+        if bad.get("id")
+    ]
+
+
+def _own_facts(state: CaseState) -> list[dict]:
+    """The case's own records for the briefs: signal facts, earlier reviews, and the cross-side match once made."""
+    return [record for record in facts.ledger(state).values() if record["kind"] in OWN_KINDS]
 
 
 def build_graph(
@@ -157,6 +392,7 @@ def build_graph(
     carry_out: Callable[[dict, str | None], dict],
     checkpointer=None,
     structured_output: dict | None = None,
+    earlier_reviews: Callable[[str, str], list[dict]] = lambda customer_id, as_of: [],
 ):
     """Build the graph.
 
@@ -168,10 +404,14 @@ def build_graph(
     structured_output goes to the model's with_structured_output, for a provider's
     own way of returning a schema, such as {"method": "json_schema"}.
 
+    earlier_reviews(customer_id, as_of) gives the customer's reviews before as_of,
+    which become the hist_ records of the case. Left out, every case is a first
+    review. It is not caught here: a lookup that fails must not read as "no history".
+
     Start a case once per thread, then resume it with Command(resume=...). The
     caller must not invoke a thread with a signal twice: the answers add up.
     """
-    investigator = model.bind_tools([AskCashFlow, AskCreditBehavior])
+    investigator = model.bind_tools([AskCashFlow, AskCreditBehavior], parallel_tool_calls=False)
     how = structured_output or {}
     gap_reviewer = model.with_structured_output(GapReview, include_raw=True, **how)
     report_writer = model.with_structured_output(ReportDraft, include_raw=True, **how)
@@ -180,15 +420,21 @@ def build_graph(
         signal = state["signal"]
         end = date.fromisoformat(signal["as_of"])
         window = {"start": (end - timedelta(days=WINDOW_DAYS)).isoformat(), "end": end.isoformat()}
+        reviews = earlier_reviews(signal["customer_id"], signal["as_of"])
+        case_facts = [*facts.signal_facts(signal, window), *facts.history_facts(reviews, signal)]
         return {
             "status": "investigating",
             "window": window,
+            "facts": case_facts,
+            "flow": "agent",
+            "policy_version": policy.POLICY_VERSION,
             "rounds": 0,
+            "refusals": 0,
             "gap_passes": 0,
             "drafts": 0,
             "messages": [
                 SystemMessage(prompts.INVESTIGATOR),
-                HumanMessage(prompts.signal_brief(signal, window)),
+                HumanMessage(prompts.opening_brief(case_facts, window)),
             ],
         }
 
@@ -210,20 +456,48 @@ def build_graph(
         return "ask_specialist" if asked else "look_for_gaps"
 
     def ask_specialist(state: CaseState) -> dict:
-        call, *extra_calls = state["messages"][-1].tool_calls
+        last = state["messages"][-1]
+        call, *extra_calls = last.tool_calls
         agent = AGENT_FOR_TOOL.get(call["name"])
         asked = agent or call["name"]
         answer = {"agent": agent, "question": call["args"].get("question")}
+        entry = {"tool": call["name"], "agent": agent, "outcome": "refused", "returned": []}
+        known = facts.ledger(state)
         try:
             if agent is None:
                 raise ValueError(f"there is no specialist behind the tool {call['name']}")
+            # What a schema cannot say is checked here too. A call that fails is not sent, and the model
+            # is told why in words code wrote.
+            try:
+                ask = TOOLS[call["name"]].model_validate(call["args"])
+                window = _window(ask, state)
+                _focus_is_known(ask, known)
+                if figures.not_backed(ask.question, figures.allowed_figures(known.values()), loose=True):
+                    raise ValueError(
+                        "The question states a figure no record of the case shows. Name the record by its id."
+                    )
+            except ValueError as error:
+                answer["error"] = f"Not asked: {_why(error, call['name'])}"
+                raise
+            entry |= {
+                "topic": ask.topic,
+                "separates": list(ask.separates),
+                "tests": list(TOPIC_TESTS[ask.topic]),
+                "outcome": "no_answer",
+            }
+            entry |= {key: value for key in _FOCUS if (value := getattr(ask, key, None))}
+            if ask.start is not None:
+                entry |= window
             request = InvestigateRequest(
                 case_id=state["case_id"],
                 customer_id=state["signal"]["customer_id"],
-                question=call["args"].get("question", ""),
-                window_start=state["window"]["start"],
-                window_end=state["window"]["end"],
-                context=call["args"].get("context", ""),
+                question=ask.question,
+                window_start=window["start"],
+                window_end=window["end"],
+                context=_context(state),
+                topic=ask.topic,
+                account_id=getattr(ask, "account_id", None),
+                record_id=getattr(ask, "record_id", None),
             )
             returned = specialists[agent](request)
             # Checked again here: an answer that breaks the rules must not reach the report.
@@ -232,25 +506,48 @@ def build_graph(
             )
             if response.agent != agent:
                 raise ValueError(f"{agent} was asked but {response.agent} answered")
+            _usable(response, known)
             answer["response"] = response.model_dump(mode="json")
+            entry |= {"outcome": "answered", "returned": [item["id"] for item in answer["response"]["evidence"]]}
         except Exception as error:  # a specialist that fails is "no answer", the case goes on
             log.warning("case %s: %s gave no usable answer: %s", state["case_id"], asked, error)
-            answer["error"] = f"No usable answer from {asked}."
+            answer.setdefault("error", f"No usable answer from {asked}.")
 
-        told = answer.get("response") or {"error": answer["error"]}
-        messages = [ToolMessage(json.dumps(told), tool_call_id=call["id"])]
+        told = facts.shown_answer(answer, untrusted=True)
+        if "response" in answer and "xs_account_match" not in known:
+            # Neither side could say it alone: whether the money went to the account that now pays the card.
+            if match := facts.ledger({**state, "answers": [*state.get("answers", []), answer]}).get("xs_account_match"):
+                told["worked_out_by_code"] = facts.shown(match)
+        status = "error" if "error" in answer else "success"
+        messages = [ToolMessage(json.dumps(told), tool_call_id=call["id"], status=status)]
         messages += [
             ToolMessage("Not asked. Ask one question per turn.", tool_call_id=extra["id"])
             for extra in extra_calls
         ]
-        return {"answers": [answer], "messages": messages, "rounds": state["rounds"] + 1}
+        messages += _unread(last)
+        update = {"answers": [answer], "asked": [entry], "messages": messages}
+        # A slip in the form of a call does not use up the questions. Bounded all the same: after
+        # MAX_REFUSALS such slips, each one uses a round. A tool that does not exist always does.
+        refusals = state.get("refusals", 0)
+        if agent is not None and entry["outcome"] == "refused" and refusals < MAX_REFUSALS:
+            update["refusals"] = refusals + 1
+        else:
+            update["rounds"] = state["rounds"] + 1
+        return update
 
     def _goes_back(gaps: list[str], rounds: int, gap_passes: int) -> bool:
         return bool(gaps) and rounds < MAX_ROUNDS and gap_passes <= MAX_GAP_RETURNS
 
     def look_for_gaps(state: CaseState) -> dict:
-        brief = prompts.investigation_brief(state["signal"], state.get("answers", []))
-        reply = gap_reviewer.invoke([SystemMessage(prompts.GAPS), HumanMessage(brief)])
+        brief = prompts.investigation_brief(
+            state["signal"]["review_reasons"],
+            _own_facts(state),
+            prompts.questions(state.get("asked", []), state.get("answers", [])),
+        )
+        try:
+            reply = gap_reviewer.invoke([SystemMessage(prompts.GAPS), HumanMessage(brief)])
+        except OutputParserException as error:  # prose, from a provider that raises on it
+            reply = {"raw": None, "parsed": None, "parsing_error": error}
         review = None if _cut_off(reply["raw"]) else reply["parsed"]
         if review is None:
             # The case goes on: step 6 still checks that the report addresses every review reason.
@@ -260,7 +557,9 @@ def build_graph(
         gap_passes = state["gap_passes"] + 1
         update = {"gaps": gaps, "gap_passes": gap_passes}
         if _goes_back(gaps, state["rounds"], gap_passes):
-            update["messages"] = [HumanMessage("Still unexplained:\n" + "\n".join(f"- {gap}" for gap in gaps))]
+            # A reply whose tool call could not be read ended the questions. It is answered before the nudge.
+            nudge = HumanMessage("Still unexplained:\n" + "\n".join(f"- {gap}" for gap in gaps))
+            update["messages"] = [*_unread(state["messages"][-1]), nudge]
         return update
 
     def after_gaps(state: CaseState) -> str:
@@ -273,20 +572,28 @@ def build_graph(
     def draft_report(state: CaseState) -> dict:
         signal = state["signal"]
         brief = prompts.report_brief(
-            signal,
-            state.get("answers", []),
+            _own_facts(state),
+            prompts.questions(state.get("asked", []), state.get("answers", [])),
             state["guidelines"],
             state.get("check", {}).get("problems", []),
         )
-        reply = report_writer.invoke([SystemMessage(prompts.REPORT), HumanMessage(brief)])
+        try:
+            reply = report_writer.invoke([SystemMessage(prompts.REPORT), HumanMessage(brief)])
+        except OutputParserException as error:  # prose, from a provider that raises on it
+            log.warning("case %s: draft %d could not be parsed: %s", state["case_id"], state["drafts"] + 1, error)
+            reply = {"raw": None, "parsed": None, "parsing_error": error.__cause__}
         cut_off = _cut_off(reply["raw"])
         draft = None if cut_off else reply["parsed"]
         if draft is None:
-            error = "It was cut off before it was complete. Write a shorter report." if cut_off else None
-            error = error or str(reply["parsing_error"] or "No report was returned.")
-            log.warning("case %s: draft %d is not a report: %s", state["case_id"], state["drafts"] + 1, error)
+            if cut_off:
+                error = "It was cut off before it was complete. Write a shorter report."
+            else:
+                error = _not_a_report(reply["parsing_error"])
+            # The parser's own message goes to the log only.
+            why = reply["parsing_error"] or error
+            log.warning("case %s: draft %d is not a report: %s", state["case_id"], state["drafts"] + 1, why)
             # The redraft is told what did not fit.
-            return {"report": None, "draft_error": error[:1000], "drafts": state["drafts"] + 1}
+            return {"report": None, "draft_error": error.replace("\x00", "")[:1000], "drafts": state["drafts"] + 1}
         report = {
             "case_id": state["case_id"],
             "customer_id": signal["customer_id"],
@@ -296,22 +603,32 @@ def build_graph(
         return {"report": report, "draft_error": None, "drafts": state["drafts"] + 1}
 
     def check_report(state: CaseState) -> dict:
-        problems = _report_problems(state)
+        found = _report_problems(state)
+        problems = [sentence for _, sentence in found]
         report = state["report"]
+        ledger = facts.ledger(state)
         out_of_drafts = state["drafts"] >= MAX_DRAFTS
+        if problems:
+            result = "gave_up" if out_of_drafts else "refused"
+        else:
+            result = "passed_low_confidence" if report["confidence"] == "low" else "passed"
+        codes = [code for problem_codes, _ in found for code in problem_codes]
+        known = {*ledger, *(guideline["id"] for guideline in state["guidelines"])}
+        logged = [_logged(state["drafts"], codes, report, result, known)]
         if problems and not out_of_drafts:
-            return {"check": {"passed": False, "problems": problems}}
+            return {"check": {"passed": False, "problems": problems}, "draft_log": logged}
 
         if problems:
-            # Two drafts failed. A person decides from what was found.
+            # Two drafts failed. A person decides from what the specialists found, without the draft's own figures.
+            said = [FIGURES_NOT_SHOWN if "figure" in problem_codes else sentence for problem_codes, sentence in found]
             report = {
                 "case_id": state["case_id"],
                 "customer_id": state["signal"]["customer_id"],
                 "likely_cause": "no_clear_cause",
-                "summary": "The report could not be completed. " + " ".join(problems),
+                "summary": "The report could not be completed. " + " ".join(said),
                 "evidence": [],
                 "ruled_out": [],
-                "other_findings": [],
+                "other_findings": _found(state.get("answers", []), ledger),
                 "review_reasons": [],
                 "confidence": "low",
                 "recommendation": "needs_human",
@@ -325,6 +642,7 @@ def build_graph(
             "check": {"passed": not problems, "problems": problems},
             "report": report,
             "status": "needs_approval",
+            "draft_log": logged,
         }
 
     def after_check(state: CaseState) -> str:

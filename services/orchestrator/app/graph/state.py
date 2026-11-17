@@ -16,7 +16,9 @@ class CaseState(TypedDict, total=False):
     """What the graph knows about one case. Saved after every step.
 
     Plain dicts and lists, apart from the investigator's messages, which
-    LangGraph knows how to save.
+    LangGraph knows how to save. A case paused before a key was added has
+    none of it, so every step that can run on such a case reads new keys
+    with .get.
     """
 
     case_id: str
@@ -39,3 +41,20 @@ class CaseState(TypedDict, total=False):
     check: dict
     decisions: Annotated[list[dict], operator.add]
     action: dict | None
+    # The Orchestrator's own records, written once when the case opens: signal facts and earlier reviews.
+    facts: list[dict]
+    # One entry per specialist tool call, in step with `answers`: what was asked and what came back.
+    asked: Annotated[list[dict], operator.add]
+    # One entry per call of the search tool.
+    searches: Annotated[list[dict], operator.add]
+    # One entry per gap pass and per checked draft. For the path page and the grader.
+    gap_log: Annotated[list[dict], operator.add]
+    draft_log: Annotated[list[dict], operator.add]
+    # Fixed flows only: the follow-up questions code added to its plan.
+    plan_extra: Annotated[list[dict], operator.add]
+    # Calls refused before they were sent. The first MAX_REFUSALS of a case use no round.
+    refusals: int
+    # "agent", "fixed" or "fixed_rules".
+    flow: str
+    # policy.POLICY_VERSION as it was when the case opened.
+    policy_version: str

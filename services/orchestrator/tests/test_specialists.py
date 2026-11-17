@@ -10,6 +10,8 @@ import yaml
 from pydantic import ValidationError
 
 from app.agents import mock
+from app.graph import causes, facts, figures
+from app.graph.build import AskCashFlow, AskCreditBehavior
 from app.graph.report import LikelyCause, Recommendation
 from contracts import InvestigateRequest, InvestigateResponse
 
@@ -1159,3 +1161,61 @@ def test_money_is_said_in_whole_dollars_with_cents_only_when_there_are_some(cent
 def test_a_share_is_worked_out_in_basis_points_rounded_half_up_and_not_at_all_without_a_whole():
     assert [mock._bp(1, 3), mock._bp(2, 3), mock._bp(12000000, 49400000), mock._bp(1, 20000)] == [3333, 6667, 2429, 1]
     assert mock._bp(5, 0) is None and mock._bp(5, -1) is None
+
+
+# What the stand-ins say against what the graph shows a model (P5)
+
+
+@every_customer
+def test_every_figure_in_a_stand_ins_sentence_is_in_the_evidence_that_sentence_cites(both_files, customer_id):
+    # A dates focus moves the window to a week the data does not hold. A side then says which week it does hold:
+    # the review window, which no record of that answer holds. The case's own sig_cash does, and a model reads
+    # it next to every answer, so those dates are allowed for such an answer alone.
+    moved = {"window_start": "2025-11-03", "window_end": "2025-11-10"}
+    review_window = figures.allowed_figures(
+        [{"id": "sig_cash", "kind": "cash_change", "data": {key: REQUEST[key] for key in moved}}]
+    )
+    answers = [(topic, focus, answer, set()) for topic, focus, answer in every_answer(customer_id)]
+    answers += [
+        (topic, moved, on(side, customer_id, topic, **moved), review_window)
+        for side, topics in ((mock.cash_flow, mock.BANK_TOPICS), (mock.credit_behavior, mock.CARD_TOPICS))
+        for topic in topics
+    ]
+    for topic, focus, answer, also_shown in answers:
+        records = {evidence.id: evidence.model_dump(mode="json") for evidence in answer.evidence}
+        findings = [{"claim": finding.claim, "evidence_ids": finding.evidence_ids} for finding in answer.findings]
+        # Each finding as a claim of a report, checked by the report's own figure rule.
+        as_claims = {"summary": "", "evidence": findings, "ruled_out": [], "other_findings": [], "review_reasons": []}
+        assert figures.made_up(as_claims, records) == [], (topic, focus)
+        # What a side could not determine cites nothing. Its figures must be in the records of the whole answer:
+        # c_012's "Where the other $195,000 went" rests on the reconciliation it comes with.
+        shown = figures.allowed_figures(records.values()) | also_shown
+        for said in answer.could_not_determine:
+            assert figures.not_backed(said, shown) == [], (topic, focus, said)
+    if customer_id == "c_012":
+        # The one such line with a figure in it, so the check above is not empty. It cites nothing itself:
+        # the record that holds its figure is in the answer, cited by the finding that states the same figure.
+        books = on(mock.cash_flow, "c_012", "reconciliation")
+        [said] = books.could_not_determine
+        assert figures.figures(said) == {"m:195000": "$195,000"}
+        for finding in books.findings:
+            cited = [evidence.model_dump(mode="json") for evidence in books.evidence if evidence.id in finding.evidence_ids]
+            assert figures.not_backed(said, figures.allowed_figures(cited)) == ([] if "$195,000" in finding.claim else ["$195,000"])
+
+
+@pytest.mark.parametrize(
+    "value", [0, 1, 5, 49, 50, 99, 100, 149, 150, 1250, 4449, 4450, 9999, 10000, 42500, 99991, 23000000, -1, -49, -1250]
+)
+def test_the_stand_ins_print_money_and_shares_the_way_the_formatter_does(value):
+    # A figure in a stand-in's sentence must read exactly as the record it rests on is shown to a model.
+    assert mock._usd(value) == facts.usd(value)
+    assert mock._pct(value) == facts.pct(value)
+    for whole in (0, -5, 3, 23000000):
+        assert mock._bp(value, whole) == facts.bp(value, whole)
+
+
+def test_the_topics_the_stand_ins_answer_are_the_topics_the_tools_offer():
+    assert mock.BANK_TOPICS == causes.TOPICS["AskCashFlow"] == get_args(AskCashFlow.model_fields["topic"].annotation)
+    assert mock.CARD_TOPICS == causes.TOPICS["AskCreditBehavior"] == get_args(
+        AskCreditBehavior.model_fields["topic"].annotation
+    )

@@ -502,7 +502,7 @@ def test_a_case_stopped_part_way_goes_on_from_where_it_stopped(client):
     assert [answer["question"] for answer in state["answers"]] == [
         "Where did the money go?",
         "Did any repayment fail?",
-        "What was the paying account balance on the due date?",
+        "Is income steady?",
     ]
 
 
