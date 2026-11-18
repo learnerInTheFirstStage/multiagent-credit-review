@@ -1,25 +1,42 @@
-"""The Cash Flow agent's run loop.
+"""The Cash Flow agent: a LangGraph StateGraph with code-owned budgets.
 
-A standard tool-calling agent built on LangGraph's prebuilt tool-calling node,
-bounded by code: at most 5 tool calls and 60 seconds per run. Code owns the
-budget and the evidence attach — the model picks which tool to call and writes
-the final claims.
+    cash_flow(request) -> InvestigateResponse
 
-The model is read from LLM_MODEL (via app.runtime._chat_model), unless the
-caller injects one (tests do this). The service token is minted here — short,
-scoped to one customer, read-only — so the agent and the mock are drop-in
-replaceable by the graph: neither needs an external token.
+Same signature as mock.cash_flow so the case graph can swap one for the other
+(KAN-36). Each call compiles-and-invokes the graph once; the agent keeps
+nothing between calls.
 
-Public entry point: cash_flow(request).
+    START → investigate ⇄ tools
+                │          └─ budget used → summarise ──► check → END
+                └─ answer ─────────────────────────────►┘
+
+| Node       | Who   | What                                                     |
+|------------|-------|----------------------------------------------------------|
+| investigate| model | reads the question and tool observations, calls a tool  |
+|            |       | or answers in JSON                                       |
+| tools      | code  | runs the model's tool calls: 5 at most, memos wrapped,  |
+|            |       | raw results stashed in the pool                          |
+| summarise  | model | only when the 5-call budget runs out; answers tool-free  |
+| check      | code  | guardrails.build_response: evidence attach, cross-line  |
+|            |       | block, deterministic ordering                            |
+
+The model and the Bank tools travel in the run's Runtime context — never
+serialised into state. The graph is compiled with checkpointer=False as a
+defence against future subgraph composition; today cash_flow() calls
+_GRAPH.invoke() as a plain nested call rather than a subgraph node, so the
+flag is belt-and-braces. Trace integration with LangFuse goes through
+LangChain callbacks and is expected to attach automatically; verified in
+KAN-36 against a live model.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import operator
 import os
 import time
-from typing import Any
+from typing import Annotated, Any, TypedDict
 
 import httpx
 import jwt
@@ -31,16 +48,262 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.runtime import Runtime
+from langgraph.types import Command
 
 from app.agents.cash_flow import guardrails, prompts
 from app.agents.cash_flow.tools import build_tools
-from contracts import Finding, InvestigateRequest, InvestigateResponse
+from contracts import Evidence, Finding, InvestigateRequest, InvestigateResponse
 
 log = logging.getLogger(__name__)
 
 MAX_TOOL_CALLS = 5     # per API doc §10
-MAX_SECONDS = 60       # per API doc §10
+MAX_SECONDS = 60       # per API doc §10 (soft cap, checked between steps)
 TOKEN_TTL_SECONDS = 180
+# Longest run: 5 investigate + 5 tools + 1 summarise + 1 check = 12. Slack.
+RECURSION_LIMIT = 20
+
+
+# ---------------------------------------------------------------------------
+# state and context
+# ---------------------------------------------------------------------------
+
+
+def _first_kept(old: dict, new: dict) -> dict:
+    """Records keep their first value: the same id never changes mid-run.
+
+    Deterministic aggregate ids rely on this — the same inputs produce the
+    same id, and the response's evidence stays consistent across repeated
+    tool calls.
+    """
+    return {**new, **old}
+
+
+class AgentState(TypedDict, total=False):
+    """What the graph tracks across nodes. Serialisable."""
+
+    messages: Annotated[list[AnyMessage], add_messages]
+    # Bank's raw tool results, keyed by evidence id. Reconstituted as an
+    # EvidencePool by the check node for guardrails.build_response.
+    records: Annotated[dict[str, dict], _first_kept]
+    calls: int
+    budget_exhausted: bool
+    deadline: float  # time.monotonic() after which no node starts
+    # Reasons the response should carry in could_not_determine. operator.add
+    # lets any node append without stepping on another node's additions.
+    unknown: Annotated[list[str], operator.add]
+    # The model's final findings, as raw dicts; check parses them into
+    # Finding models inside build_response.
+    findings_raw: list[dict]
+    suggested_next: str | None
+    # The final InvestigateResponse, as a dict. Populated by check.
+    response: dict[str, Any]
+
+
+class AgentContext(TypedDict):
+    """What one run carries. Never saved."""
+
+    model: BaseChatModel
+    tools_by_name: dict[str, Any]
+    tools_list: list[Any]
+
+
+# ---------------------------------------------------------------------------
+# nodes
+# ---------------------------------------------------------------------------
+
+
+def _investigate(
+    state: AgentState, runtime: Runtime[AgentContext]
+) -> Command[Any]:
+    """Model step: either call a tool or write a final JSON answer."""
+    if time.monotonic() > state.get("deadline", float("inf")):
+        return Command(
+            update={"unknown": ["The 60-second budget ran out between steps."]},
+            goto="check",
+        )
+
+    model = runtime.context["model"]
+    tools_list = runtime.context["tools_list"]
+    model_with_tools = model.bind_tools(tools_list)
+
+    try:
+        reply = model_with_tools.invoke(state["messages"])
+    except Exception as error:  # noqa: BLE001
+        log.warning("model invoke raised: %s", error)
+        return Command(
+            update={"unknown": [f"The model call failed: {error}"]},
+            goto="check",
+        )
+
+    if not getattr(reply, "tool_calls", None):
+        # Final answer: parse and head to the check node.
+        findings, suggested = _findings_from_message(reply)
+        return Command(
+            update={
+                "messages": [reply],
+                "findings_raw": [f.model_dump() for f in findings],
+                "suggested_next": suggested,
+            },
+            goto="check",
+        )
+
+    return Command(update={"messages": [reply]}, goto="tools")
+
+
+def _tools(state: AgentState, runtime: Runtime[AgentContext]) -> Command[Any]:
+    """Code step: run each tool call the model emitted, within budget."""
+    tools_by_name = runtime.context["tools_by_name"]
+    last = state["messages"][-1]
+    calls_made = state.get("calls", 0)
+    budget_exhausted = state.get("budget_exhausted", False)
+
+    tool_messages: list[AnyMessage] = []
+    new_records: dict[str, dict] = {}
+
+    for call in last.tool_calls or []:
+        # Every call in the batch must be answered, even over budget — Anthropic
+        # and OpenAI both reject a follow-up invoke if any tool_use/tool_call in
+        # the previous AIMessage was left unanswered.
+        if calls_made >= MAX_TOOL_CALLS:
+            budget_exhausted = True
+            observation: dict = {
+                "error": "budget_exhausted",
+                "message": "The 5-call budget was reached before this call.",
+            }
+        else:
+            name = call["name"]
+            args = call.get("args") or {}
+            tool = tools_by_name.get(name)
+            if tool is None:
+                observation = {"error": "unknown_tool", "message": f"No such tool: {name}"}
+            else:
+                try:
+                    raw = tool.invoke(args)
+                    # Pool keeps Bank's raw result; model sees sanitised copy.
+                    # Downstream (Orchestrator's facts.shown with untrusted=True)
+                    # applies its own text sanitation, so raw memo text never
+                    # flows unescorted into a model.
+                    #
+                    # Validate each evidence item before stashing it — matches
+                    # the old EvidencePool.add semantics exactly: a malformed
+                    # first record is skipped, so a later valid record with the
+                    # same id can still win.
+                    for item in (raw.get("evidence") or []) if isinstance(raw, dict) else []:
+                        if not (isinstance(item, dict) and item.get("id")):
+                            continue
+                        try:
+                            validated = Evidence.model_validate(item)
+                        except Exception:  # noqa: BLE001
+                            continue
+                        new_records.setdefault(validated.id, validated.model_dump())
+                    observation = guardrails.sanitize_tool_result(raw)
+                except Exception as error:  # noqa: BLE001
+                    log.warning("tool %s raised: %s", name, error)
+                    observation = {"error": "tool_raised", "message": str(error)}
+            calls_made += 1
+
+        tool_call_id = call.get("id") or f"call_fallback_{id(call)}"
+        tool_messages.append(
+            ToolMessage(content=json.dumps(observation), tool_call_id=tool_call_id)
+        )
+
+    update: dict[str, Any] = {
+        "messages": tool_messages,
+        "records": new_records,
+        "calls": calls_made,
+    }
+    if budget_exhausted:
+        update["budget_exhausted"] = True
+        update["unknown"] = ["Reached the 5-tool-call budget; summarising from what is known."]
+        return Command(update=update, goto="summarise")
+    return Command(update=update, goto="investigate")
+
+
+def _summarise(
+    state: AgentState, runtime: Runtime[AgentContext]
+) -> Command[Any]:
+    """Model step: budget is spent — write the final answer tool-free."""
+    model = runtime.context["model"]
+    nudge = HumanMessage(
+        content=(
+            "You have used your tool-call budget. Do not call any more tools. "
+            "Write your final answer as JSON from the evidence you already have."
+        )
+    )
+    try:
+        final = model.invoke(state["messages"] + [nudge])
+    except Exception as error:  # noqa: BLE001
+        log.warning("summary invoke raised: %s", error)
+        return Command(
+            update={"unknown": [f"The summary call failed: {error}"]},
+            goto="check",
+        )
+
+    findings, suggested = _findings_from_message(final)
+    return Command(
+        update={
+            "messages": [nudge, final],
+            "findings_raw": [f.model_dump() for f in findings],
+            "suggested_next": suggested,
+        },
+        goto="check",
+    )
+
+
+def _check(state: AgentState) -> dict[str, Any]:
+    """Code step: run guardrails over the model's findings and the pool."""
+    pool = guardrails.EvidencePool()
+    for eid, data in state.get("records", {}).items():
+        try:
+            pool.records[eid] = Evidence.model_validate(data)
+        except Exception:  # noqa: BLE001
+            # A malformed evidence item is simply not addable.
+            continue
+
+    findings: list[Finding] = []
+    for raw in state.get("findings_raw", []) or []:
+        try:
+            findings.append(Finding.model_validate(raw))
+        except Exception:  # noqa: BLE001
+            continue
+
+    response = guardrails.build_response(
+        findings=findings,
+        pool=pool,
+        could_not_determine=state.get("unknown", []),
+        suggested_next=state.get("suggested_next"),
+    )
+    return {"response": response.model_dump()}
+
+
+# ---------------------------------------------------------------------------
+# graph construction
+# ---------------------------------------------------------------------------
+
+
+def _build_graph():
+    builder = StateGraph(AgentState, context_schema=AgentContext)
+    builder.add_node("investigate", _investigate)
+    builder.add_node("tools", _tools)
+    builder.add_node("summarise", _summarise)
+    builder.add_node("check", _check)
+    builder.add_edge(START, "investigate")
+    builder.add_edge("check", END)
+    # checkpointer=False is a defence against future subgraph composition.
+    # With the current plain .invoke() nested call, no parent checkpointer
+    # would have been inherited anyway.
+    return builder.compile(checkpointer=False)
+
+
+_GRAPH = _build_graph()
+
+
+# ---------------------------------------------------------------------------
+# entry point
+# ---------------------------------------------------------------------------
 
 
 def cash_flow(
@@ -49,10 +312,10 @@ def cash_flow(
     model: BaseChatModel | None = None,
     http: httpx.Client | None = None,
 ) -> InvestigateResponse:
-    """Entry point. Build the loop, run it, assemble the response.
+    """Public entry. Compile is at import time; this just invokes.
 
-    Tests pass `model` (a scripted fake) and `http` (an httpx.Client wired to a
-    MockTransport). Production leaves both at None and the agent reads
+    Tests pass `model` (a scripted fake) and `http` (an httpx.Client wired to
+    a MockTransport). Production leaves both at None and the agent reads
     LLM_MODEL / BANK_URL from the environment.
     """
     if model is None:
@@ -66,147 +329,56 @@ def cash_flow(
     except RuntimeError as error:
         return _cannot(str(error))
 
-    tools, close_http = build_tools(customer_id=request.customer_id, token=token, http=http)
-    tools_by_name = {tool.name: tool for tool in tools}
+    tools_list, close_http = build_tools(
+        customer_id=request.customer_id, token=token, http=http
+    )
+    tools_by_name = {tool.name: tool for tool in tools_list}
 
-    pool = guardrails.EvidencePool()
-    model_with_tools = model.bind_tools(tools)
+    initial_state: AgentState = {
+        "messages": [
+            SystemMessage(content=prompts.SYSTEM_PROMPT),
+            HumanMessage(
+                content=prompts.user_message(
+                    question=request.question,
+                    topic=request.topic,
+                    window_start=request.window_start.isoformat(),
+                    window_end=request.window_end.isoformat(),
+                    context=request.context,
+                    account_id=request.account_id,
+                    record_id=request.record_id,
+                )
+            ),
+        ],
+        "records": {},
+        "calls": 0,
+        "budget_exhausted": False,
+        "deadline": time.monotonic() + MAX_SECONDS,
+        "unknown": [],
+        "findings_raw": [],
+        "suggested_next": None,
+    }
 
-    messages: list[AnyMessage] = [
-        SystemMessage(content=prompts.SYSTEM_PROMPT),
-        HumanMessage(
-            content=prompts.user_message(
-                question=request.question,
-                topic=request.topic,
-                window_start=request.window_start.isoformat(),
-                window_end=request.window_end.isoformat(),
-                context=request.context,
-                account_id=request.account_id,
-                record_id=request.record_id,
-            )
-        ),
-    ]
-
-    could_not_determine: list[str] = []
-    suggested_next: str | None = None
-    tool_calls_made = 0
-    # Soft cap: checked between steps. A long single invoke or a slow Bank
-    # tool call is not pre-empted; the graph upstream also enforces an
-    # overall case timeout as the hard cap.
-    deadline = time.monotonic() + MAX_SECONDS
-    # Set inside the for-loop when the model requests a 6th tool call. Read
-    # right after the loop to trigger the summary-only final invoke.
-    budget_exhausted = False
+    context: AgentContext = {
+        "model": model,
+        "tools_by_name": tools_by_name,
+        "tools_list": tools_list,
+    }
 
     try:
-        while True:
-            if time.monotonic() > deadline:
-                could_not_determine.append("The 60-second budget ran out between steps.")
-                break
-
-            try:
-                reply = model_with_tools.invoke(messages)
-            except Exception as error:  # noqa: BLE001
-                log.warning("model invoke raised: %s", error)
-                could_not_determine.append(f"The model call failed: {error}")
-                break
-            messages.append(reply)
-
-            tool_calls = getattr(reply, "tool_calls", None) or []
-            if not tool_calls:
-                findings, suggested_next = _findings_from_message(reply)
-                return guardrails.build_response(
-                    findings=findings,
-                    pool=pool,
-                    could_not_determine=could_not_determine,
-                    suggested_next=suggested_next,
-                )
-
-            for call in tool_calls:
-                # Every call in the batch must get a ToolMessage, even past the
-                # budget: Anthropic and OpenAI both reject a follow-up invoke
-                # if any tool_use/tool_call in the previous AIMessage was left
-                # unanswered. Over-budget calls get an error stub instead of
-                # running the tool, and do not count against the budget again.
-                if tool_calls_made >= MAX_TOOL_CALLS:
-                    budget_exhausted = True
-                    observation = {
-                        "error": "budget_exhausted",
-                        "message": "The 5-call budget was reached before this call.",
-                    }
-                else:
-                    name = call["name"]
-                    args = call.get("args") or {}
-                    tool = tools_by_name.get(name)
-                    if tool is None:
-                        observation = {"error": "unknown_tool", "message": f"No such tool: {name}"}
-                    else:
-                        try:
-                            raw = tool.invoke(args)
-                            # Pool keeps Bank's raw result; the model sees a
-                            # sanitised copy. Response evidence[].data is
-                            # therefore Bank's text, not the <memo>-wrapped
-                            # form. The Orchestrator's downstream report step
-                            # applies its own text sanitation (facts.shown with
-                            # untrusted=True), so raw text never flows into the
-                            # synthesis model unescorted.
-                            pool.add(raw)
-                            observation = guardrails.sanitize_tool_result(raw)
-                        except Exception as error:  # noqa: BLE001 — surface any tool-level problem
-                            log.warning("tool %s raised: %s", name, error)
-                            observation = {"error": "tool_raised", "message": str(error)}
-                    tool_calls_made += 1
-
-                # Some providers (older configs, mocked conversions) leave id
-                # unset. Fall back to a generated one so ToolMessage always has
-                # a tool_call_id.
-                tool_call_id = call.get("id") or f"call_fallback_{id(call)}"
-                messages.append(
-                    ToolMessage(
-                        content=json.dumps(observation),
-                        tool_call_id=tool_call_id,
-                    )
-                )
-
-            if budget_exhausted:
-                could_not_determine.append("Reached the 5-tool-call budget; summarising from what is known.")
-                # Give the model one last chance to write findings, now without
-                # tools, so the evidence already gathered is not thrown away.
-                messages.append(
-                    HumanMessage(
-                        content=(
-                            "You have used your tool-call budget. Do not call any more tools. "
-                            "Write your final answer as JSON from the evidence you already have."
-                        )
-                    )
-                )
-                try:
-                    final = model.invoke(messages)
-                except Exception as error:  # noqa: BLE001
-                    log.warning("final invoke raised: %s", error)
-                    could_not_determine.append(f"The summary call failed: {error}")
-                    break
-                findings, suggested_next = _findings_from_message(final)
-                return guardrails.build_response(
-                    findings=findings,
-                    pool=pool,
-                    could_not_determine=could_not_determine,
-                    suggested_next=suggested_next,
-                )
-
-        return guardrails.build_response(
-            findings=[],
-            pool=pool,
-            could_not_determine=could_not_determine,
-            suggested_next=None,
+        final_state = _GRAPH.invoke(
+            initial_state,
+            context=context,
+            config={"recursion_limit": RECURSION_LIMIT},
         )
+        return InvestigateResponse.model_validate(final_state["response"])
     finally:
         close_http()
 
 
 # ---------------------------------------------------------------------------
-# helpers
+# helpers (unchanged from the previous hand-rolled loop)
 # ---------------------------------------------------------------------------
+
 
 def _findings_from_message(message: AIMessage) -> tuple[list[Finding], str | None]:
     """Extract Findings from the model's final text.
