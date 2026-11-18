@@ -166,8 +166,18 @@ class Book:
         return sum(t.amount_cents for t in self.txns_between(start, end) if t.approved)
 
     def due_by(self, day: date) -> list[Rep]:
-        """Repayments due on or before `day`, oldest first."""
-        return [r for r in self.repayments if r.due_date <= day]
+        """Repayments due on or before `day`, oldest first: one per statement, the scheduled debit.
+
+        A later payment toward the same statement (a returned debit paid by hand, rep_..._r1) is
+        not a repayment of its own; evidence.repayment reads it as the statement's paid_since.
+        """
+        seen: set[date] = set()
+        out = []
+        for r in self.repayments:
+            if r.due_date <= day and r.statement_period_end not in seen:
+                seen.add(r.statement_period_end)
+                out.append(r)
+        return out
 
     def first_day(self) -> date | None:
         """The first day the card ledger holds anything."""

@@ -187,3 +187,31 @@ def test_pause_takes_no_limit(card):
 def test_unknown_customer_is_404(card):
     body = reduce(1_000, "case_u1", customer="c_098")
     assert card(body, person("analyst", customers=["c_098"])).status_code == 404
+
+
+def test_a_limit_of_zero_is_refused(card):
+    # A zero limit leaves /tools/utilization without used_share_bp. The manager step, so only
+    # the floor can refuse it.
+    response = card(reduce(0, "case_z1", step="manager", by=MANAGER), person("manager"))
+    assert response.status_code == 422
+    assert limit_of("c_010") == 10_000_000
+
+
+# --- the receipt goes back only to the approver who gave it --------------------------------------
+
+
+def test_another_person_replaying_an_approval_does_not_get_the_receipt(card):
+    assert card(reduce(5_800_000, "case_s1"), person("analyst")).status_code == 200
+    other = "u_analyst2"
+    response = card(reduce(5_800_000, "case_s1", by=other), person("analyst", sub=other))
+    assert response.status_code == 409
+    assert ANALYST not in response.text
+    # The approver's own retry still gets it.
+    assert card(reduce(5_800_000, "case_s1"), person("analyst")).json()["status"] == "already_applied"
+
+
+def test_a_role_that_may_not_decide_the_step_does_not_get_the_receipt(card):
+    assert card(pause("case_s2"), person("manager")).status_code == 200
+    response = card(pause("case_s2", by=ANALYST), person("analyst"))
+    assert response.status_code == 403
+    assert MANAGER not in response.text

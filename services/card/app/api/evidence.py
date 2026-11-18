@@ -8,9 +8,12 @@ id comes back with other content. So:
     rep_c_010_202611           a repayment (the repayment_id)
     ctx_c_003_00412            a card transaction (the txn_id)
     bal_card_c_010_20261110    the card balance at the end of one day
+    rep_c_006_funding          whether the account paying the card changed (one per customer)
 - An aggregate's id is agg_ plus 8 hex of an MD5 over the tool, the customer and every argument
   that shaped it, so the same question gives the same id. (Bank's aggregates have 4 hex, so the
-  two services' ids cannot collide.)
+  two services' ids cannot collide.) Its record holds only what those arguments decide: an
+  argument left out of the hash, such as the page size of `transactions`, shapes the tool's
+  `data`, never the record.
 
 The kinds and keys the Orchestrator reads are fixed by services/orchestrator/app/graph/causes.py
 and app/guidelines.py: card_repayment (status paid|late|failed, amount_cents, paid_since,
@@ -21,7 +24,7 @@ card_spend_series (monthly_card_spend_cents). Payloads leave out keys whose valu
 from __future__ import annotations
 
 import hashlib
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from app.ledger import FAILED, LATE, Book, Rep, Txn, repayment_status
@@ -37,8 +40,15 @@ SPEND_BREAKDOWN = "card_spend_breakdown"
 
 
 def plain(value: Any) -> Any:
-    """JSON-ready: dates as ISO strings, None-valued keys dropped."""
-    if isinstance(value, (date, datetime)):
+    """JSON-ready: dates as ISO strings, None-valued keys dropped.
+
+    A time is always written in UTC with its offset. SQLite hands back a naive datetime (stored as UTC)
+    and Postgres an aware one in the session's time zone; both must give the same record.
+    """
+    if isinstance(value, datetime):
+        utc = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+        return utc.isoformat()
+    if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, dict):
         return {k: plain(v) for k, v in value.items() if v is not None}
@@ -58,6 +68,10 @@ def aggregate_id(tool: str, customer_id: str, *parts: object) -> str:
 
 def balance_id(customer_id: str, day: date) -> str:
     return f"bal_card_{customer_id}_{day:%Y%m%d}"
+
+
+def funding_id(customer_id: str) -> str:
+    return f"rep_{customer_id}_funding"
 
 
 def repayment(book: Book, rep: Rep, as_of: date) -> dict[str, Any]:

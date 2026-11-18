@@ -2,7 +2,7 @@
 
 Two uses:
 - hard facts: a failed or late repayment, or a change of the account that pays the card, must
-  reach the Orchestrator. If no accepted finding cites one, code adds its own.
+  reach the Orchestrator. Code always adds its own finding for one, whatever the model wrote.
 - no model configured: the agent answers from the topic's records alone (see agent.py).
 
 Every figure is formatted from the record it cites, so these pass guardrails.check.
@@ -13,17 +13,8 @@ from __future__ import annotations
 from contracts import Evidence, Finding
 
 from app.agents.card_service.guardrails import TOO_SHORT, EvidencePool
-
-
-def usd(cents: int) -> str:
-    sign = "-" if cents < 0 else ""
-    dollars = abs(cents) / 100
-    return f"{sign}${dollars:,.0f}" if abs(cents) % 100 == 0 else f"{sign}${dollars:,.2f}"
-
-
-def pct(bp: int) -> str:
-    value = bp / 100
-    return f"{value:.0f}%" if bp % 100 == 0 else f"{value:.1f}%"
+# The graph's own formats (whole percent, half up), so the graph's figure check reads what it shows.
+from app.graph.facts import pct, usd
 
 
 def _found(claim: str, *records: Evidence, confidence: str = "high") -> Finding:
@@ -59,14 +50,20 @@ def paying_account(record: Evidence) -> Finding:
     if d.get("changed"):
         when = f" on {d['changed_on']}" if d.get("changed_on") else ""
         return _found(f"The account that pays the card changed from {d['from']} to {d['to']}{when}.", record)
-    return _found(f"The account that pays the card, {d.get('to')}, did not change across the last "
-                  f"{d.get('repayments_compared')} repayments.", record)
+    # The record holds only {changed, from, to}: how many repayments were compared is in the tool's data.
+    return _found(f"The account that pays the card, {d.get('to')}, did not change across the repayments compared.",
+                  record)
 
 
 def balance(record: Evidence) -> Finding:
     d = record.data
-    claim = (f"On {d['date']} the card balance was {usd(d['balance_cents'])}, "
-             f"{pct(d['used_share_bp'])} of the {usd(d['credit_limit_cents'])} limit.")
+    claim = f"On {d['date']} the card balance was {usd(d['balance_cents'])}"
+    if "used_share_bp" in d:  # Card leaves the share out when there is no limit to divide by
+        claim += f", {pct(d['used_share_bp'])} of the {usd(d['credit_limit_cents'])} limit."
+    elif "credit_limit_cents" in d:
+        claim += f", against a {usd(d['credit_limit_cents'])} limit."
+    else:
+        claim += "."
     trend = d.get("utilization_trend")
     if trend == TOO_SHORT:
         claim += " The card's history is too short to tell whether that is usual for this customer."

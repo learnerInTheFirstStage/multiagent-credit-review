@@ -10,6 +10,9 @@ From the repo root, with the Orchestrator's Python environment (the runner impor
     services/orchestrator/.venv/bin/python eval/card_service/run.py --no-model --record
     services/orchestrator/.venv/bin/python eval/card_service/run.py --no-model --replay
 
+The recording holds only the calls code makes with no model (each topic's preflight). Replayed, any
+other call fails its case (check `card_calls`) instead of passing as "Card did not answer".
+
 Results: results/<stamp>-<mode>.json and results/latest.md (git-ignored). Exit code 1 if a case failed.
 """
 
@@ -59,12 +62,17 @@ def _key(request: httpx.Request) -> str:
 
 
 class Recording(httpx.BaseTransport):
-    """Passes calls to Card (or answers from a recording) and keeps every record Card returned."""
+    """Passes calls to Card (or answers from a recording) and keeps every record Card returned.
+
+    `problems` holds what the runner itself got wrong: a replayed call with no recording (the agent
+    would quietly report Card unreachable) or a reply that could not be recorded. Each fails the case.
+    """
 
     def __init__(self, *, store: dict, replay: bool, down: bool):
         self.store, self.replay, self.down = store, replay, down
         self.inner = None if replay or down else httpx.HTTPTransport()
         self.returned: dict[str, dict] = {}
+        self.problems: list[str] = []
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         if self.down:
@@ -72,12 +80,20 @@ class Recording(httpx.BaseTransport):
         key = _key(request)
         if self.replay:
             if key not in self.store:
+                self.problems.append(f"no recording for {key}")
                 raise httpx.ConnectError(f"no recording for {key}", request=request)
             status, body = self.store[key]["status"], self.store[key]["body"]
         else:
             response = self.inner.handle_request(request)
             response.read()
-            status, body = response.status_code, response.json()
+            status = response.status_code
+            try:
+                body = response.json()
+            except ValueError:
+                # An HTML 500 from a proxy, say: hand it to the agent as it came, and record nothing.
+                self.problems.append(f"{key}: Card answered {status} with a body that is not JSON")
+                return httpx.Response(status, content=response.content, request=request,
+                                      headers={"content-type": response.headers.get("content-type", "text/plain")})
             self.store[key] = {"status": status, "body": body}
         if status == 200:
             for item in body.get("evidence", []):
@@ -85,7 +101,8 @@ class Recording(httpx.BaseTransport):
         return httpx.Response(status, json=body, request=request)
 
 
-def run_case(case: dict, window: dict, *, store: dict, replay: bool, model=None) -> tuple[dict, dict]:
+def run_case(case: dict, window: dict, *, store: dict, replay: bool, model=None) -> tuple[dict, dict, list[str]]:
+    """The agent's answer, every record Card returned, and the runner's own problems with Card's calls."""
     from app.agents.card_service import card_service
     from contracts import InvestigateRequest
 
@@ -94,7 +111,7 @@ def run_case(case: dict, window: dict, *, store: dict, replay: bool, model=None)
                                  window_start=window["start"], window_end=window["end"], topic=case.get("topic"))
     with httpx.Client(transport=transport) as http:
         response = card_service(request, http=http, model=model)
-    return response.model_dump(mode="json"), transport.returned
+    return response.model_dump(mode="json"), transport.returned, transport.problems
 
 
 def run(*, replay: bool = False, record: bool = False, cases: list[dict] | None = None) -> list[dict]:
@@ -102,8 +119,9 @@ def run(*, replay: bool = False, record: bool = False, cases: list[dict] | None 
     store = json.loads(RECORDED.read_text()) if replay else {}
     results = []
     for case in cases or all_cases:
-        response, returned = run_case(case, window, store=store, replay=replay)
-        results.append({**checks.grade(case, response, returned), "about": case.get("about", ""), "response": response})
+        response, returned, problems = run_case(case, window, store=store, replay=replay)
+        results.append({**checks.grade(case, response, returned, problems), "about": case.get("about", ""),
+                        "response": response})
     if record:
         RECORDED.write_text(json.dumps(store, indent=1, sort_keys=True) + "\n")
     return results
@@ -132,7 +150,9 @@ def main() -> int:
     parser.add_argument("--card-url", default=os.environ.get("CARD_URL", "http://localhost:8003"))
     parser.add_argument("--no-model", action="store_true", help="code answers from the records alone")
     parser.add_argument("--record", action="store_true", help=f"save Card's answers to {RECORDED.name}")
-    parser.add_argument("--replay", action="store_true", help=f"answer from {RECORDED.name} instead of calling Card")
+    parser.add_argument("--replay", action="store_true",
+                        help=f"answer from {RECORDED.name} instead of calling Card; a call with no recording "
+                             "(a model's own tool call, say) fails the case")
     args = parser.parse_args()
     os.environ["CARD_URL"] = args.card_url
     # Card checks the agent's token with the same secret; this is docker-compose.yml's local fallback.
