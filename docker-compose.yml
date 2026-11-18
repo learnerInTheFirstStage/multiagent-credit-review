@@ -47,6 +47,12 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8002:8000"
+    healthcheck:
+      # The image has no curl. /health answers once seeding is done, and is a 500 when the database is not there.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   card:
     build:
@@ -60,6 +66,12 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8003:8000"
+    healthcheck:
+      # As bank's.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   orchestrator:
     build:
@@ -76,8 +88,15 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+      SPECIALISTS: ${SPECIALISTS:-}
     depends_on:
       postgres:
+        condition: service_healthy
+      # The real specialists call both. A Bank or Card that does not start stops `up` here, instead of
+      # every case reading bank_unreachable.
+      bank:
+        condition: service_healthy
+      card:
         condition: service_healthy
     ports:
       - "127.0.0.1:8004:8000"

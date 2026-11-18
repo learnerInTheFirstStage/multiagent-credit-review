@@ -16,9 +16,14 @@ os.environ.pop("LLM_MODEL", None)  # no test may reach a real model
 os.environ.pop("INVESTIGATION_FLOW", None)
 os.environ.pop("EMBEDDINGS_MODEL", None)
 os.environ.pop("SHARED_CUSTOMERS_FILE", None)
+# The service built in tests asks the stand-ins: no Bank or Card runs here. The real agents have their own tests.
+os.environ["SPECIALISTS"] = "stand_in"
 # Every start seeds reviews from this setting, and unset it names the image's file. A test that wants
 # seeds sets its own; the rest must not pick up an exported setting or a /eval/history.yaml on the host.
 os.environ["HISTORY_SEED_FILE"] = f"{_db_dir}/no-seeds.yaml"
+# The service looks for due retries at start and then every so often. In tests only the look at start happens on its
+# own: a test calls runner.retry_due itself, with the time it means.
+os.environ["OUTAGE_CHECK_SECONDS"] = "3600"
 
 import jwt  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

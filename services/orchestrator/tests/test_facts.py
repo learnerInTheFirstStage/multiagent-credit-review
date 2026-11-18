@@ -314,7 +314,9 @@ def test_a_share_is_rounded_half_up_to_a_whole_percent():
         "100%",
     ]
     # The share itself is rounded half up to a whole basis point, and there is none of nothing.
-    assert [facts.bp(1, 8), facts.bp(1, 3), facts.bp(2, 3), facts.bp(23000000, 52000000)] == [1250, 3333, 6667, 4423]
+    assert [facts.bp(1, 8), facts.bp(1, 3), facts.bp(2, 3), facts.bp(23000000, 52000000), facts.bp(1, 20000)] == [
+        1250, 3333, 6667, 4423, 1,
+    ]  # fmt: skip
     assert facts.bp(5, 0) is None
     assert facts.bp(5, -10) is None
 

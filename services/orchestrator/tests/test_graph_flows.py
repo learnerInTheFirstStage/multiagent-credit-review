@@ -489,9 +489,16 @@ def test_the_rules_go_back_no_more_often_than_the_agent_is_sent_back(monkeypatch
 
 
 def test_the_rules_ask_a_payees_history_for_each_payment_code_names(monkeypatch):
+    def payroll_and_tax(records) -> list[str]:
+        # c_010's two payments the story turns on. Its week also lists receipts and running costs.
+        return [
+            record["id"] for record in records
+            if record["kind"] == "bank_transaction" and record["data"]["category"] in ("payroll", "tax")
+        ]  # fmt: skip
+
     def one_payment_a_pass(guidelines, records, asked):
         done = {entry.get("record_id") for entry in asked}
-        payments = [record["id"] for record in records if record["kind"] == "bank_transaction"]
+        payments = payroll_and_tax(records)
         return [
             {"rule": "G2", "text": "A guideline is partly supported.",
              "ask": {"tool": "AskCashFlow", "args": {"topic": "payee_history", "record_id": payment}}}
@@ -502,7 +509,7 @@ def test_the_rules_ask_a_payees_history_for_each_payment_code_names(monkeypatch)
     run, requests = planned_run(TWO_DRAFTS, plan=plans.FIXED_PLAN[:1], follow_gaps=True)
 
     # Two questions on the same topic about two payments are two questions: the record is part of what is asked.
-    payments = [record["id"] for record in facts.ledger(run.state).values() if record["kind"] == "bank_transaction"]
+    payments = payroll_and_tax(facts.ledger(run.state).values())
     assert len(payments) == 2
     assert [(request.topic, request.record_id) for request in requests][1:] == [
         ("payee_history", payment) for payment in payments

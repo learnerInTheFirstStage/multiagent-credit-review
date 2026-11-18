@@ -1,11 +1,14 @@
 """Run the golden dataset against a running stack, over HTTP, and grade it.
 
-One arm per fresh stack, on a fresh volume. INVESTIGATION_FLOW names the stack's arm (spec 8.4):
+One arm per fresh stack, on a fresh volume. INVESTIGATION_FLOW names the stack's arm (spec 8.4), and
+SPECIALISTS who answers its questions: empty is the real Cash Flow and Card agents, stand_in the stand-ins.
 
-    INVESTIGATION_FLOW=fixed_rules docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres card orchestrator
+    INVESTIGATION_FLOW=fixed_rules docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres bank card orchestrator
     python eval/run.py --arm fixed_rules --container "docker compose -p goldenset exec -T orchestrator"
 
-Before the first signal the runner stops unless the stack runs the arm asked for,
+With SPECIALISTS=stand_in on the first line, pass --specialists stand_in on the second.
+
+Before the first signal the runner stops unless the stack runs the arm and the specialists asked for,
 no case is open, and the database is clean: both seed files are seeded again with
 --expect-clean, and the seeded cases are read back through the service.
 
@@ -17,10 +20,15 @@ another, customers side by side.
 
 This spends money on the model the stack is set to: about 80 runs for the whole set.
 Results go to eval/results/<run id>/: runs.jsonl as each run ends, summary.md at the end.
+
+With LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY (and LANGFUSE_BASE_URL) in the runner's environment and the
+langfuse package installed, the model calls, tokens and cost of every case are read from LangFuse once the runs
+are over, into usage.json. Without them the summary says they were not recorded, and the runs grade the same.
 """
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -41,12 +49,21 @@ from grade import grade, grade_path, summary  # noqa: E402
 from signals import customers, signal_for  # noqa: E402
 
 WORKING = ("queued", "investigating")
+# Bank or Card gave nothing, and the case waits to ask again (services/orchestrator/app/runner.py).
+WAITING_FOR_DATA = "waiting_for_data"
 ARMS = ("agent", "fixed", "fixed_rules")
+# Who answers the graph's questions, as SPECIALISTS names it in the service (app/runtime.py specialists()).
+SPECIALISTS = {
+    "real": "the Cash Flow and Card agents, which call Bank and Card",
+    "stand_in": "the stand-ins, which answer from the data files",
+}
 # The seed files where the overlay mounts them in the container, and where they are in this checkout.
 SEED_FILES = {
     "/eval/history.yaml": ROOT / "eval" / "history.yaml",
     "/eval/history_eval.yaml": ROOT / "eval" / "history_eval.yaml",
 }
+# LangFuse takes traces in with a delay. Usage is read this many seconds after the last run.
+USAGE_WAIT = 30
 # Run inside the container: what the stack runs with, as one JSON object on the last line of its output.
 STACK = """
 import hashlib, json, os
@@ -57,6 +74,7 @@ print(json.dumps({
     "model": os.environ.get("LLM_MODEL") or "none set",
     "structured_output": os.environ.get("LLM_STRUCTURED_OUTPUT") or "default",
     "flow": os.environ.get("INVESTIGATION_FLOW", ""),
+    "specialists": os.environ.get("SPECIALISTS", ""),
     "embedder": embedder.name if embedder else None,
     "policy": {name: value for name, value in vars(policy).items() if name.isupper()},
     "prompts": hashlib.sha256((Path(policy.__file__).parent / "graph" / "prompts.py").read_bytes()).hexdigest()[:12],
@@ -74,8 +92,9 @@ def bearer(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def stack(container: str, arm: str) -> dict:
-    """What the stack runs with, read inside its container, for the run's `about`. Stops when it runs another arm."""
+def stack(container: str, arm: str, specialists: str) -> dict:
+    """What the stack runs with, read inside its container, for the run's `about`.
+    Stops when it runs another arm or other specialists."""
     found = json.loads(inside(container, "python", "-c", STACK).splitlines()[-1])
     flow = found["flow"] or "agent"  # unset or empty is the agent, as in the service
     if flow not in ARMS:
@@ -89,12 +108,27 @@ def stack(container: str, arm: str) -> dict:
             f"The stack runs INVESTIGATION_FLOW={found['flow'] or '(unset)'}, not the {arm} arm. "
             "Start a fresh stack for each arm."
         )
+    # Unset or empty is the real agents, as in the service.
+    answering = found["specialists"] or "real"
+    if answering not in SPECIALISTS:
+        sys.exit(
+            f"The stack runs SPECIALISTS={found['specialists']}, which names neither real nor stand_in (or empty for "
+            "real). The service runs such a value as the real agents, but a misspelt stand_in is not counted as one. "
+            "Start a fresh stack with one of them."
+        )
+    if answering != specialists:
+        sys.exit(
+            f"The stack runs SPECIALISTS={found['specialists'] or '(unset)'}, not the {specialists} specialists. "
+            "Its results would not compare with runs of the other kind. Start a fresh stack, or pass --specialists "
+            f"{answering}."
+        )
     if arm != "agent":
         search = "off: this arm asks a fixed list and never searches"
     else:
         search = f"on, {found['embedder']}" if found["embedder"] else "off: no embedder could be loaded"
     return {
         "Arm": arm,
+        "Specialists": f"{specialists}: {SPECIALISTS[specialists]}",
         "Model": f"{found['model']} | structured output: {found['structured_output']}",
         "Search": search,
         # Every value: POLICY_VERSION alone would not change when a share line or a switch does.
@@ -131,6 +165,130 @@ def seed_history(client: httpx.Client, container: str) -> str:
     )
 
 
+def steered(data: dict[str, dict]) -> dict[str, list[str]]:
+    """Per customer, the memos of its bank feed: text written to steer the reviewer (c_009, c_203). A `note` is a
+    plain description and is not one."""
+    found = {}
+    for cid, customer in data.items():
+        events = (customer.get("signal_window") or {}).get("bank_events") or []
+        if memos := [" ".join(str(event["memo"]).split()) for event in events if event.get("memo")]:
+            found[cid] = memos
+    return found
+
+
+def wall_time(client: httpx.Client, token: str, case_id: str) -> float | None:
+    """Seconds from the case's opening to its report, from the service's own timestamps on the case list. Read
+    before the decision, which moves updated_at. None when the list does not show the case."""
+    page = client.get("/cases", params={"status": "needs_approval", "limit": 200}, headers=bearer(token)).json()
+    row = next((row for row in page.get("cases", []) if row["case_id"] == case_id), None)
+    if row is None:
+        return None
+    opened, reported = datetime.fromisoformat(row["created_at"]), datetime.fromisoformat(row["updated_at"])
+    return round((reported - opened).total_seconds(), 1)
+
+
+def langfuse_api() -> tuple[object | None, str]:
+    """LangFuse's API client from the runner's environment, with tracing off since the runner only reads, or None;
+    and what the summary says of usage."""
+    if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+        return None, "not recorded: LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are not set where the runner runs"
+    try:
+        from langfuse import Langfuse
+
+        api = Langfuse(tracing_enabled=False).api
+    except ImportError:
+        return None, "not recorded: the langfuse package is not installed where the runner runs"
+    except Exception as error:  # after the paid runs: a client that cannot be made loses usage, not the summary
+        return None, f"not recorded: the LangFuse client could not be made ({type(error).__name__}: {error})"
+    return api, f"read from LangFuse {USAGE_WAIT} seconds after the last run, session = case id"
+
+
+def _tokens(usage: dict, side: str) -> int | None:
+    """Every token of one side of a call. LangFuse splits parts out of input and output (input_cache_read,
+    output_reasoning) and takes them off the base count, so they are added back. A priority tier is no such part."""
+    if not isinstance(usage.get(side), int):
+        return None
+    parts = (value for key, value in usage.items() if key.startswith(f"{side}_") and "priority" not in key)
+    return usage[side] + sum(value for value in parts if isinstance(value, int))
+
+
+def generations(api, session_id: str) -> list[dict]:
+    """Every GENERATION of one LangFuse session, from every page, as plain records."""
+    found, cursor = [], None
+    while True:
+        page = api.observations.get_many(
+            session_id=session_id, type="GENERATION", fields="core,basic,usage,model", limit=100, cursor=cursor
+        )
+        for observation in page.data:
+            usage = observation.usage_details or {}
+            found.append({
+                "id": observation.id,
+                "type": observation.type,
+                "parent": observation.parent_observation_id,
+                "input": _tokens(usage, "input"),
+                "output": _tokens(usage, "output"),
+                "cost": observation.total_cost,
+            })  # fmt: skip
+        cursor = page.meta.cursor
+        if not cursor or not page.data:
+            return found
+
+
+def _total(values: list) -> float | None:
+    """A sum, or None when a part is missing: a missing cost is not $0."""
+    return None if None in values else sum(values)
+
+
+def usage_of(observations: list[dict]) -> dict | None:
+    """Model calls, tokens and cost of one case, from its generations. None when there is none yet.
+
+    Every model call is recorded twice: the LangChain callback's generation, and the Anthropic SDK's generation
+    inside it. Only the outer one counts: one whose parent is not itself a generation. Its cost counts the thinking
+    tokens, which are billed as output; the inner one's leaves them out."""
+    ids = {item["id"] for item in observations if item["type"] == "GENERATION"}
+    outer = [item for item in observations if item["type"] == "GENERATION" and item["parent"] not in ids]
+    if not outer:
+        return None
+    return {
+        "calls": len(outer),
+        "input_tokens": _total([item["input"] for item in outer]),
+        "output_tokens": _total([item["output"] for item in outer]),
+        "cost_usd": _total([item["cost"] for item in outer]),
+    }
+
+
+def read_usage(api, runs: list[dict]) -> dict[str, dict]:
+    """The usage of every run that opened a case, put on its record, and by case id for usage.json.
+    After two failures in a row the rest is not asked for: a LangFuse that hangs would hold up the summary."""
+    found, failed = {}, 0
+    for run in runs:
+        if "case_id" not in run:
+            continue
+        if failed >= 2:
+            found[run["case_id"]] = {"not_recorded": "not asked: LangFuse failed twice in a row"}
+            continue
+        try:
+            usage = usage_of(generations(api, run["case_id"]))
+            failed = 0
+        except Exception as error:  # LangFuse failing loses usage, never a paid run
+            found[run["case_id"]], failed = {"not_recorded": f"{type(error).__name__}: {error}"}, failed + 1
+            continue
+        if usage is None:
+            found[run["case_id"]] = {"not_recorded": "LangFuse holds no generation for this case"}
+        else:
+            found[run["case_id"]] = run["usage"] = usage
+    return found
+
+
+def outage_of(page: dict) -> str | None:
+    """Why a case waits for Bank or Card, or failed for want of them, as the service says it. None otherwise."""
+    if page.get("status") == WAITING_FOR_DATA:
+        return (page.get("outage") or {}).get("message") or "the case waits for Bank or Card"
+    if page.get("status") == "failed" and page.get("outage"):
+        return page["outage"]["message"]
+    return None
+
+
 def one_run(client: httpx.Client, tokens: dict, case: dict, signal: dict, rep: int, timeout: int) -> dict:
     """One case through the system once. Returns its record, with `closed` saying whether the case was closed."""
     record = {"case": case["id"], "rep": rep, "closed": True}
@@ -150,20 +308,38 @@ def one_run(client: httpx.Client, tokens: dict, case: dict, signal: dict, rep: i
         time.sleep(2)
     record["seconds"] = round(time.monotonic() - started)
 
+    if outage := outage_of(page):
+        # Bank or Card gave nothing: the case waits for it, or failed for want of it. Read from the case's own status,
+        # so a path page that cannot be read hides nothing. Not graded: it would measure the stack, not the agent.
+        # A waiting case is open, so the customer's next run is not sent.
+        return {**record, "closed": page["status"] == "failed", "outage": outage,
+                "error": f"Bank or Card did not answer, so the run is not graded: {outage}"}
     if page.get("status") != "needs_approval" or not page.get("report"):
         # failed: the model or a specialist raised. The service log has the reason.
         return {**record, "closed": page.get("status") == "failed", "error": f"the case ended as {page.get('status', page)}"}
-    record |= {"report": page["report"], "grades": grade(case, page["report"])}
-    # Whatever goes wrong with the path, the answer is graded all the same, and the case still closed.
+    # The path first: its records are what a spec in must_cite is matched against. Whatever goes wrong with it, the
+    # answer is graded all the same (a spec then is not), and the case still closed.
+    path = records = None
     try:
         answer = client.get(f"/cases/{case_id}/path", headers=bearer(tokens["analyst"]))
         if answer.status_code == 200:
             path = answer.json()
-            record |= {"path": path, "path_grades": grade_path(case, page["report"], path)}
+            records = path.get("records")
         else:
             record["path_error"] = f"http {answer.status_code} {answer.text[:200]}"
     except Exception as error:
-        record["path_error"] = f"{type(error).__name__}: {error}"
+        path, record["path_error"] = None, f"{type(error).__name__}: {error}"
+    record |= {"report": page["report"], "grades": grade(case, page["report"], records)}
+    if path is not None:
+        try:
+            record |= {"path": path, "path_grades": grade_path(case, page["report"], path)}
+        except Exception as error:
+            record["path_error"] = f"{type(error).__name__}: {error}"
+    try:
+        if (seconds := wall_time(client, tokens["analyst"], case_id)) is not None:
+            record["wall_seconds"] = seconds
+    except Exception as error:  # the summary then times the run by the runner's clock
+        record["wall_error"] = f"{type(error).__name__}: {error}"
 
     closed = client.post(f"/cases/{case_id}/decision", json={"decision": "reject"}, headers=bearer(tokens["analyst"]))
     if closed.status_code != 200 or closed.json()["status"] != "rejected":
@@ -231,6 +407,8 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=420, help="seconds to wait for one investigation")
     parser.add_argument("--out", type=Path, default=ROOT / "eval" / "results")
     parser.add_argument("--arm", required=True, choices=ARMS, help="the flow the stack runs: one arm per fresh stack")
+    parser.add_argument("--specialists", default="real", choices=SPECIALISTS,
+                        help="who the stack has answer its questions (SPECIALISTS): real (default) or stand_in")  # fmt: skip
     args = parser.parse_args()
 
     golden = yaml.safe_load((ROOT / "eval" / "golden_set.yaml").read_text())
@@ -240,7 +418,7 @@ def main() -> None:
     run_id = f"{datetime.now():%Y%m%d-%H%M%S}-{args.arm}"
     about = {
         "run_id": run_id,
-        **stack(args.container, args.arm),
+        **stack(args.container, args.arm, args.specialists),
         "Code": subprocess.run(["git", "describe", "--always", "--dirty"], cwd=ROOT, capture_output=True, text=True).stdout.strip(),
     }
     tokens = {
@@ -264,7 +442,7 @@ def main() -> None:
 
             def one_customer(case: dict) -> None:
                 for record in runs_of(client, tokens, case, signal_for(data[case["id"]], today), run_id, args.reps, args.timeout):
-                    record = {"arm": args.arm, **record}
+                    record = {"arm": args.arm, "specialists": args.specialists, **record}
                     with lock:
                         runs.append(record)
                         log.write(json.dumps(record) + "\n")
@@ -280,9 +458,23 @@ def main() -> None:
         requests = refusals(client, tokens, golden, valid, case_id, run_id)
 
     (folder / "requests.json").write_text(json.dumps(requests, indent=2) + "\n")
-    text = summary(golden, runs, requests, args.reps, about)
+    try:  # after the paid runs: whatever goes wrong here loses usage, never the summary
+        api, usage_note = langfuse_api()
+        if api is not None:
+            print(f"Reading usage from LangFuse in {USAGE_WAIT} seconds.", flush=True)
+            time.sleep(USAGE_WAIT)
+            usage = read_usage(api, runs)
+            (folder / "usage.json").write_text(json.dumps(usage, indent=2) + "\n")
+            if missing := sum("not_recorded" in found for found in usage.values()):
+                usage_note += f"; not recorded for {missing} of {len(usage)} cases, usage.json says why"
+    except Exception as error:
+        usage_note = f"not recorded: {type(error).__name__}: {error}"
+    text = summary(golden, runs, requests, args.reps, about, steering=steered(data), usage_note=usage_note)
     (folder / "summary.md").write_text(text)
     print(f"\n{text}\nWritten to {folder}")
+    if down := [run for run in runs if run.get("outage")]:
+        sys.exit(f"Bank or Card did not answer during {len(down)} run(s), which are not graded: the results are not "
+                 f"a measure of the agent. Check the stack and run again. First: {down[0]['outage']}")
 
 
 if __name__ == "__main__":

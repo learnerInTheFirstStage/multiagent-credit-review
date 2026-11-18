@@ -34,7 +34,7 @@ BGE_QUERY = "Represent this sentence for searching relevant passages: "
 # Masked before figures, so "c_007" is not "c_[figure]".
 _IDS = re.compile(
     r"(?<![A-Za-z\d])"
-    r"(?:(?:txn|acct|bal|agg|rep|sig|hist|xs|case|seed)_[A-Za-z\d_]+|c_\d{3}|G-\d{2}[a-z]?)"
+    r"(?:(?:txn|acct|bal|agg|rep|ctx|crd|sig|hist|xs|case|seed)_[A-Za-z\d_]+|c_\d{3}|G-\d{2}[a-z]?)"
     r"(?![A-Za-z\d])"
 )
 # A run of digits with its $, its commas and decimals, and a % or a K or M after it.

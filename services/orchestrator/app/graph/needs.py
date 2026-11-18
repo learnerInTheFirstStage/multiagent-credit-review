@@ -151,9 +151,14 @@ def state(need: dict, guideline: dict, records: list[dict], asked: list[dict]) -
     A guideline with a failed need is dead. none_fits is no record: it is never met here and no question closes it.
     What a narrowed question returned can meet a need but never fail one.
     """
+    kind, where = need["kind"], need.get("where") or {}
+    if KIND_TOPIC.get(kind) in NEEDS_RECORD:
+        # A payee's history settles the need only for a payment the guideline is about. Bank keeps one for every
+        # payee, and a running cost's history says nothing about the vendor payment G-02 asks after.
+        about = {record["id"] for record in _candidates(guideline, records)}
+        records = [record for record in records if record["kind"] != kind or record["data"].get("about") in about]
     if meets(need, records):
         return "met"
-    kind, where = need["kind"], need.get("where") or {}
     narrowed = _narrowed(records, asked)
     if kind in OWN_KINDS or any(record["kind"] == kind and record["id"] not in narrowed for record in records):
         return "failed"

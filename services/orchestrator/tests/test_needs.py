@@ -645,6 +645,23 @@ def test_a_half_supported_guideline_names_the_topic_that_was_not_asked():
     assert needs.permitted(GUIDELINES, with_history) == {"keep_limit": ["G-02"]}
 
 
+def test_the_history_of_a_running_cost_does_not_settle_the_vendor_payment_g02_is_about():
+    # Bank keeps a history for every payee now, and a running cost's has no vs_usual_bp. Asked about first, it must
+    # leave G-02 open, and the gap must still name the vendor's payment. Before, it marked G-02 failed.
+    records, asked = case("c_009", "transactions", "income")
+    running_cost = record("txn_c_009_05", "bank_transaction", amount_cents=-1100000, category="operating",
+                          share_of_fall_bp=bp(1100000, 15200000))
+    its_history = record("agg_c_009_payee_history_05", "payee_history", about="txn_c_009_05", n_prior_payments=13,
+                         amount_cents=1100000, usual_top_cents=1100000)
+    records = [*records, running_cost, its_history]
+    asked = [*asked, *sent(("payee_history", "txn_c_009_05"), returned=[running_cost["id"], its_history["id"]])]
+
+    assert needs.state(need("G-02", 2), guideline("G-02"), records, asked) == "open"
+    assert [gap["ask"] for gap in needs.code_gaps(GUIDELINES, records, asked)] == [
+        {"tool": "AskCashFlow", "args": {"topic": "payee_history", "record_id": "txn_c_009_01"}}
+    ]
+
+
 def test_a_guideline_whose_only_met_need_is_the_cases_own_record_is_not_called_half_supported():
     records, asked = case("c_001")
     healthy = guideline("G-04")  # every repayment paid is met by sig_repayments before anything is asked
@@ -872,7 +889,7 @@ def test_the_payee_gap_names_the_largest_vendor_payment_not_asked_about_yet():
     # Asked about both and neither came back: the need is settled and nothing names it again.
     after_both = gaps("c_099", "transactions", "income", ("payee_history", second), ("payee_history", first))
     assert all("payee_history" not in named for _, named in after_both)
-    # c_094: the payroll run is larger, but only a payment to a vendor paid before has a payee history to ask for.
+    # c_094: the payroll run is larger, but only a payment to a vendor paid before is G-02's to ask a history about.
     assert gaps("c_094", "transactions", "income") == [
         ("G2", "AskCashFlow, topic payee_history, record_id txn_c_094_01.")
     ]

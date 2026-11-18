@@ -122,8 +122,11 @@ def to_new_payees(cited: list[str]) -> dict:
     }
 
 
-def test_citing_one_payment_of_three_does_not_meet_a_need_the_three_meet_together():
+def test_citing_one_payment_of_three_does_not_meet_a_need_the_three_meet_together(monkeypatch):
     payments = ["txn_c_008_01", "txn_c_008_02", "txn_c_008_03"]
+    # The three are c_008's whole fall, so each alone is a quarter of it or more: txn_c_008_02 is 32%. A line of 40%
+    # keeps one payment short of the need, as a quarter did when the fall was more than the three. Read when used.
+    monkeypatch.setattr(policy, "LARGE_PART_BP", 4000)
 
     run = on_the_services_guidelines(
         [ask_bank("Where did the money go?"), DONE, gaps(), call("ReportDraft", **to_new_payees(["txn_c_008_02"])),
@@ -131,7 +134,7 @@ def test_citing_one_payment_of_three_does_not_meet_a_need_the_three_meet_togethe
         signal=signal_of("c_008"),
     )  # fmt: skip
 
-    # txn_c_008_02 alone is 24% of the fall. The three together are 77%.
+    # txn_c_008_02 alone is 32% of the fall. The three together are all of it.
     assert told(run) == [
         "G-09 needs payments to payees never paid before that together are a large part of the fall. "
         "The report cites no record that shows it. txn_c_008_01, txn_c_008_02, txn_c_008_03 would: cite them."

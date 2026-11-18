@@ -13,11 +13,16 @@ A stand-in measures and never judges: it works out a share of the fall, a ratio
 against the usual, a count of days, and leaves every threshold to the guidelines.
 So it imports nothing from the graph or the policy.
 
-The file sums a week up in a few lines. What it does not list is taken to be
-everyday business with no large payment in it, unless the file says the records
-do not reconcile. The stand-in says so in words, as a specialist with the whole
-ledger would: left to work it out, a model takes the difference for a hole in the books.
-Only the reconciliation topic says it, and a request with no topic, as before.
+The file lists every movement of the week's bank feed: the events the story
+turns on, then the everyday receipts and running costs. So the stand-in works
+out whether balances and transactions reconcile from the events, as a specialist
+with the whole ledger would, and says so in words. Only the reconciliation topic
+says it, and a request with no topic, as before.
+
+A payee's history is the payments Bank's seeder writes to it from the same file:
+the hint's for the first vendor paid before, and the weeks before the window for
+a running cost, a payroll run or a tax payment. The stand-in works them out the
+same way, and says them only on the payee_history topic.
 
 Left out on purpose, because each would hand the model the answer: the notes the
 file's authors wrote on a record, the payee's name, and anything one side could
@@ -51,8 +56,18 @@ _OUTFLOWS = {
     "vendor_known": "{amount} was paid to a vendor the customer has paid before.",
     "vendor_new": "{amount} was paid to a payee the customer has never paid before.",
     "transfer_other": "{amount} was transferred to an account that is not the customer's.",
+    "operating": "{amount} was paid in running costs to a payee the customer pays every week.",
     "other": "{amount} went out in the window.",
 }
+
+# A payee's history is the payments Bank's seeder writes to it before the window: running costs every week
+# and in last year's weeks, a payroll run every two weeks, a tax payment every quarter (weeks apart below).
+# Every payroll run goes to one payee, and every tax payment to another (their counterparty kinds).
+_EVERY_WEEKS = {"payroll": 2, "tax": 13}
+_SHARED_PAYEES = ("payroll_vendor", "tax_authority")
+# The payments whose history is set against what the payee was usually paid (vs_usual_bp): a vendor's, as
+# Bank. G-02 reads vs_usual_bp on any payee history, whatever payment it is about.
+_SET_AGAINST_THE_USUAL = ("vendor_known",)
 
 
 def _data_files() -> tuple[Path, ...]:
@@ -82,16 +97,12 @@ def customer_ids() -> frozenset[str]:
 def _read(paths: tuple[Path, ...]) -> dict:
     files = [yaml.safe_load(path.read_text()) for path in paths]
     clock = files[0]["clock"]  # the first file sets the date every customer is seen on
-    customers, unreconciled = {}, set()
+    customers = {}
     for data in files:
         for customer in data["customers"]:
             if customer["id"] in customers:
                 raise ValueError(f"{customer['id']} is in more than one data file")
             customers[customer["id"]] = customer
-        # The customers whose balances and transactions are made to disagree. A file says so
-        # only in a note, in these words.
-        notes = data.get("data_integrity") or {}
-        unreconciled |= {cid for cid, entry in notes.items() if "reconciled = false" in entry.get("note", "")}
     today = date.fromisoformat(clock["signal_date"])
     return {
         "today": today,
@@ -99,7 +110,6 @@ def _read(paths: tuple[Path, ...]) -> dict:
         "week": (today - timedelta(days=clock["signal_window_days"]), today),
         "weeks": clock["trailing_window_weeks"],
         "customers": customers,
-        "unreconciled": unreconciled,
     }
 
 
@@ -127,6 +137,40 @@ def _pct(bp: int) -> str:
 
 def _count(number: int, noun: str) -> str:
     return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
+# Bank's seeder and ledger work these out the same way, so the stand-in's payee histories are Bank's.
+
+
+def _in_proportion(total: int, weights: list[int]) -> list[int]:
+    """total in whole cents, in the proportions of the weights, the remainder on the first."""
+    amounts = [total * weight // sum(weights) for weight in weights]
+    amounts[0] += total - sum(amounts)
+    return amounts
+
+
+def _split(total: int, parts: int) -> list[int]:
+    """total in `parts` whole-cent pieces, the remainder on the last one."""
+    base = int(total / parts)
+    return [base] * (parts - 1) + [total - base * (parts - 1)]
+
+
+def _last_years_weeks(start: date, end: date) -> list[tuple[int, int]]:
+    """The (ISO year, ISO week) pairs of last year that the days start < d <= end fall in, in order."""
+    weeks = []
+    for offset in range(1, (end - start).days + 1):
+        day = start + timedelta(days=offset)
+        a_year_back = day.replace(year=day.year - 1) if (day.month, day.day) != (2, 29) else date(day.year - 1, 2, 28)
+        iso = a_year_back.isocalendar()
+        if (iso.year, iso.week) not in weeks:
+            weeks.append((iso.year, iso.week))
+    return weeks
+
+
+def _months_between(earlier: date, later: date) -> int:
+    """Whole months from earlier to later."""
+    months = (later.year - earlier.year) * 12 + later.month - earlier.month
+    return months - 1 if later.day < earlier.day else months
 
 
 class _Answer:
@@ -180,7 +224,6 @@ class _Bank:
     def __init__(self, data: dict, customer: dict, request: InvestigateRequest):
         cid, snapshot, baseline = customer["id"], customer["snapshot"]["bank"], customer["baselines"]["bank"]
         self.request, self.baseline, self.weeks, self.week = request, baseline, data["weeks"], data["week"]
-        self.unreconciled = cid in data["unreconciled"]
         self.before, self.now = snapshot["cash_week_ago_cents"], snapshot["cash_now_cents"]
         self.fall = fall = self.before - self.now
         accounts = snapshot["linked_accounts"]
@@ -228,20 +271,17 @@ class _Bank:
             records[txn] = ("bank_transaction", details)
         self.outflows = [txn for txn, event in self.events.items() if event["category"] != "income"]
         self.listed = listed = sum(self.events[txn]["amount_cents"] for txn in self.outflows)
+        self.came_in = sum(event["amount_cents"] for event in self.events.values() if event["category"] == "income")
+        # What the week's transactions add up to, and whether that is the change in cash.
+        self.net = self.came_in - listed
+        self.unreconciled = self.net != self.now - self.before
 
         self.payments, self.books = f"agg_{cid}_payments", f"agg_{cid}_reconciliation"
         if shares:
-            not_listed = max(0, fall - listed)
-            summary = {
-                "listed_count": len(self.outflows),
-                "listed_out_cents": listed,
-                "listed_share_bp": _bp(listed, fall),
-                "not_listed_cents": not_listed,
-                "not_listed_share_bp": _bp(not_listed, fall),
-            }
+            summary = {"listed_count": len(self.outflows), "listed_out_cents": listed, "listed_share_bp": _bp(listed, fall)}
             # Listed income is set out on its own, never netted against the payments.
-            if income := [event["amount_cents"] for event in self.events.values() if event["category"] == "income"]:
-                summary["listed_in_cents"] = sum(income)
+            if self.came_in:
+                summary["listed_in_cents"] = self.came_in
             by_category = {}
             for txn in self.outflows:
                 category = by_category.setdefault(self.events[txn]["category"], {"count": 0, "out_cents": 0})
@@ -255,16 +295,10 @@ class _Bank:
             summary["by_category"] = by_category
             records[self.payments] = ("payment_summary", summary)
 
-            books = {"balance_change_cents": -fall, "transactions_total_cents": -fall, "reconciled": True}
+            books = {"balance_change_cents": -fall, "transactions_total_cents": self.net, "reconciled": not self.unreconciled}
             if self.unreconciled:
-                unmatched = fall - listed
-                books = {
-                    "balance_change_cents": -fall,
-                    "transactions_total_cents": -listed,
-                    "reconciled": False,
-                    "unmatched_cents": unmatched,
-                    "unmatched_share_bp": _bp(unmatched, fall),
-                }
+                unmatched = fall + self.net
+                books |= {"unmatched_cents": unmatched, "unmatched_share_bp": _bp(unmatched, fall)}
             records[self.books] = ("balance_reconciliation", books)
 
         self.inflows = f"agg_{cid}_inflows"
@@ -303,7 +337,62 @@ class _Bank:
                     history["vs_usual_bp"] = share
             records[self.history] = ("payee_history", history)
 
+        # Every other payment whose payee was paid before has a history of its own, under its number.
+        self.histories = {}
+        for txn, earlier in self._earlier_payments(data).items():
+            amounts, event = [amount for _, amount in earlier], self.events[txn]
+            history = {"n_prior_payments": len(earlier)}
+            if min(amounts) == max(amounts):
+                history["typical_amount_cents"] = amounts[0]
+            else:
+                history |= {"typical_amount_cents_min": min(amounts), "typical_amount_cents_max": max(amounts)}
+            history["first_seen_months_ago"] = _months_between(earlier[0][0], data["today"])
+            history |= {"about": txn, "amount_cents": event["amount_cents"], "usual_top_cents": max(amounts)}
+            share = _bp(event["amount_cents"], max(amounts))
+            if event["category"] in _SET_AGAINST_THE_USUAL and share is not None:
+                history["vs_usual_bp"] = share
+            self.histories[txn] = f"{self.history}_{txn.removeprefix(f'txn_{cid}_')}"
+            records[self.histories[txn]] = ("payee_history", history)
+
         self.answer = _Answer("cash_flow", records)
+
+    def _earlier_payments(self, data: dict) -> dict[str, list[tuple[date, int]]]:
+        """Each payment of the window whose payee was paid before, and those earlier payments, oldest first, as
+        Bank's seeder writes them. The hint's vendor is not among them: its history is the hint's record."""
+        start, today = data["week"]
+        day = {txn: start + timedelta(days=1 + (n - 1) % (today - start).days) for n, txn in enumerate(self.events, 1)}
+        payee = {
+            txn: event["counterparty_kind"] if event["counterparty_kind"] in _SHARED_PAYEES else txn
+            for txn, event in self.events.items()
+        }
+        rows = [(payee[txn], day[txn], self.events[txn]["amount_cents"]) for txn in self.outflows]
+        running = [txn for txn in self.outflows if self.events[txn]["category"] == "operating"]
+
+        def running_costs(total: int, on: dict[str, date]) -> None:
+            if total and running:
+                shares = _in_proportion(total, [self.events[txn]["amount_cents"] for txn in running])
+                rows.extend((payee[txn], on[txn], amount) for txn, amount in zip(running, shares) if amount)
+
+        for back in range(1, self.weeks + 1):
+            running_costs(self.baseline.get("weekly_operating_outflow_cents", 0),
+                          {txn: day[txn] - timedelta(weeks=back) for txn in running})
+        if last_year := self.baseline.get("prior_year_same_two_weeks"):
+            weeks = _last_years_weeks(start, today)
+            for (year, week), total in zip(weeks, _split(last_year["outflow_cents"], len(weeks))):
+                running_costs(total, {txn: date.fromisocalendar(year, week, day[txn].isoweekday()) for txn in running})
+        for txn in self.outflows:
+            if every := _EVERY_WEEKS.get(self.events[txn]["category"]):
+                rows += [(payee[txn], day[txn] - timedelta(weeks=back), self.events[txn]["amount_cents"])
+                         for back in range(every, self.weeks + 1, every)]
+        found = {}
+        for txn in self.outflows:
+            # As Bank: a payment of nothing is no payment, and has no history.
+            earlier = sorted(
+                (when, amount) for to, when, amount in rows if to == payee[txn] and when < day[txn] and amount
+            )
+            if earlier and self.events[txn]["amount_cents"]:
+                found[txn] = earlier
+        return found
 
     def everything(self) -> None:
         """Every fact the side holds, in the words and order of the time before topics."""
@@ -315,20 +404,20 @@ class _Bank:
                 if self.outflows:
                     self.answer.find(
                         f"Payments listed for the window: {len(self.outflows)}, {_usd(self.listed)} in all. "
-                        "No other large payment went out.",
+                        "No other payment went out.",
                         self.payments,
                         *self.outflows,
                         confidence="medium",
                     )
                 else:
-                    self.answer.find("No large payment went out in the window.", self.balance, confidence="medium")
+                    self.answer.find("No payment went out in the window.", self.balance, confidence="medium")
             self._say_share()
             self._say_books()
         self.income()
         if self.last_year in self.records:
             self._say_last_year()
         if self.history in self.records:
-            self._say_history()
+            self._say_history(self.history)
 
     def transactions(self) -> None:
         self._say_fall()
@@ -375,12 +464,16 @@ class _Bank:
             )
         elif event["category"] == "vendor_new":
             self.answer.find(f"The payee of {txn} was never paid before.", txn)
-        elif event["category"] != "vendor_known":
-            self.answer.unknown.append("Payee history is kept for vendors only.")
         elif txn == self.with_history:
-            self._say_history()
-        else:
+            self._say_history(self.history)
+        elif txn in self.histories:
+            self._say_history(self.histories[txn])
+        elif event["category"] == "income":
+            self.answer.unknown.append("It is money coming in, not a payment.")
+        elif event["category"] == "vendor_known":
             self.answer.unknown.append("The payment history of that payee is not in the data.")
+        else:
+            self.answer.unknown.append("No earlier payment to this payee is on record.")
 
     def accounts(self) -> None:
         account = self.request.account_id
@@ -446,16 +539,12 @@ class _Bank:
 
     def _say_share(self) -> None:
         summary = self.records[self.payments][1]
+        # Money out and money in side by side: with income in the week, the payments are more than the fall.
+        came_in = f" Income of {_usd(self.came_in)} came in over the same days." if self.came_in else ""
         if summary["listed_count"]:
-            claim = (
-                f"The listed payments are {_pct(summary['listed_share_bp'])} of the fall. "
-                f"The other {_usd(summary['not_listed_cents'])} is not in this list."
-            )
+            claim = f"The listed payments are {_pct(summary['listed_share_bp'])} of the fall.{came_in}"
         else:
-            claim = (
-                f"No payment is listed for the window, so the whole fall of {_usd(summary['not_listed_cents'])} "
-                "is not in this list."
-            )
+            claim = f"No payment is listed for the window.{came_in}"
         self.answer.find(claim, self.payments)
 
     def _say_books(self) -> None:
@@ -463,7 +552,7 @@ class _Bank:
         if self.unreconciled:
             other = _usd(books["unmatched_cents"])
             self.answer.find(
-                f"The transactions in the window add up to {_usd(self.listed)}, but the balance fell by {_usd(self.fall)}. "
+                f"The transactions in the window add up to {_usd(-self.net)}, but the balance fell by {_usd(self.fall)}. "
                 f"The other {other} matches no transaction: balances and transactions do not reconcile.",
                 self.books,
                 self.balance,
@@ -471,8 +560,7 @@ class _Bank:
             self.answer.unknown.append(f"Where the other {other} went")
         else:
             self.answer.find(
-                "Balances and transactions reconcile: the transactions on record add up to the whole change. "
-                "Apart from any payment listed here, they are everyday payments and receipts, none of them large.",
+                "Balances and transactions reconcile: the transactions listed for the window add up to the whole change.",
                 self.books,
                 self.balance,
             )
@@ -485,23 +573,23 @@ class _Bank:
             self.last_year,
         )
 
-    def _say_history(self) -> None:
-        payee, history = self.baseline["payee_history_hint"], self.records[self.history][1]
+    def _say_history(self, record: str) -> None:
+        history = self.records[record][1]
         usual = (
-            _usd(payee["typical_amount_cents"])
-            if "typical_amount_cents" in payee
-            else f"{_usd(payee['typical_amount_cents_min'])} to {_usd(payee['typical_amount_cents_max'])}"
+            _usd(history["typical_amount_cents"])
+            if "typical_amount_cents" in history
+            else f"{_usd(history['typical_amount_cents_min'])} to {_usd(history['typical_amount_cents_max'])}"
         )
         self.answer.find(
-            f"The payee of that payment was paid {_count(payee['n_prior_payments'], 'time')} before over "
-            f"{payee['first_seen_months_ago']} months, usually {usual}.",
-            self.history,
+            f"The payee of that payment was paid {_count(history['n_prior_payments'], 'time')} before over "
+            f"{history['first_seen_months_ago']} months, usually {usual}.",
+            record,
         )
         if "vs_usual_bp" in history:
             self.answer.find(
                 f"This payment of {_usd(history['amount_cents'])} is {_pct(history['vs_usual_bp'])} of the most it "
                 f"was usually paid ({_usd(history['usual_top_cents'])}).",
-                self.history,
+                record,
                 history["about"],
             )
 

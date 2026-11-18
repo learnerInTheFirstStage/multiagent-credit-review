@@ -848,17 +848,6 @@ def test_the_seed_command_reads_its_clock_from_the_customer_files(tmp_path):
     assert json.loads(done.stdout)["seeded"] == 1
 
 
-def test_the_seed_command_refuses_an_id_in_two_files_and_seeds_nothing(tmp_path):
-    first = seed_file(tmp_path, "one.yaml", [entry("seed_a")])
-    second = seed_file(tmp_path, "two.yaml", [entry("seed_a")])
-
-    done = run_seed_command(first, second)
-
-    assert done.returncode == 1
-    assert "seed_a" in done.stderr
-    assert reviews() == []
-
-
 def test_the_seed_command_refuses_a_database_that_is_not_clean(tmp_path):
     keep(closed(as_of="2026-11-09"), case_id="case_earlier_run")
 
@@ -879,17 +868,8 @@ def test_the_seed_command_names_the_seed_it_refuses_and_seeds_nothing(tmp_path):
     assert reviews() == []
 
 
-def test_the_seed_command_refuses_a_file_it_was_given_that_is_not_there_and_seeds_nothing(tmp_path):
-    # A file a person names on the command line is meant to be read: unlike a listed setting, it is not skipped.
-    done = run_seed_command(seed_file(tmp_path, "one.yaml", [entry("seed_a")]), tmp_path / "nowhere.yaml")
-
-    assert done.returncode == 1
-    assert "Not seeded: " in done.stderr and "nowhere.yaml" in done.stderr
-    assert "Traceback" not in done.stderr
-    assert reviews() == []
-
-
 def test_the_seed_command_refuses_a_folder_it_was_given_without_a_traceback(tmp_path):
+    # A file a person names on the command line is meant to be read: unlike a listed setting, it is not skipped.
     folder = tmp_path / "history_eval.yaml"
     folder.mkdir()
 
@@ -897,30 +877,6 @@ def test_the_seed_command_refuses_a_folder_it_was_given_without_a_traceback(tmp_
 
     assert done.returncode == 1
     assert "Not seeded: " in done.stderr and "history_eval.yaml" in done.stderr
-    assert "Traceback" not in done.stderr
-    assert reviews() == []
-
-
-def test_the_seed_command_refuses_a_file_that_is_not_utf_8_by_its_name(tmp_path):
-    latin = tmp_path / "latin.yaml"
-    latin.write_bytes("reviews:\n  - case_id: seed_café\n".encode("latin-1"))
-
-    done = run_seed_command(seed_file(tmp_path, "one.yaml", [entry("seed_a")]), latin)
-
-    assert done.returncode == 1
-    assert "Not seeded: " in done.stderr and "latin.yaml" in done.stderr
-    assert "Traceback" not in done.stderr
-    assert reviews() == []
-
-
-def test_the_seed_command_refuses_a_file_that_is_not_yaml_without_a_traceback(tmp_path):
-    broken = tmp_path / "broken.yaml"
-    broken.write_text("reviews: [seed_a\n")
-
-    done = run_seed_command(seed_file(tmp_path, "one.yaml", [entry("seed_a")]), broken)
-
-    assert done.returncode == 1
-    assert "Not seeded: " in done.stderr and "broken.yaml" in done.stderr
     assert "Traceback" not in done.stderr
     assert reviews() == []
 

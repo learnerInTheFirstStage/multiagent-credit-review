@@ -1,17 +1,25 @@
 """Runs cases on the graph and keeps the cases table in step with it.
 
 One process is assumed. Two would both pick up an unfinished case after a restart.
+
+When Bank or Card gives nothing at all, the graph stops before that question (errors.CaseWaiting). The case then
+waits (waiting_for_data) and runs again from that question at its next retry, policy.OUTAGE_RETRY_SECONDS after
+the last attempt. Once those retries are used up, or at once when retrying cannot help (an outage of kind data),
+it goes to a person: failed, with the reason in outage_waits and no report.
 """
 
 import logging
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from langgraph.types import StateSnapshot
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
-from app import history
+from app import history, policy
+from app.agents.errors import CaseWaiting
 from app.db import SessionLocal
-from app.db.models import OPEN_STATUSES, Case, CaseStatus, Review, SignalRow
+from app.db.models import OPEN_STATUSES, Case, CaseStatus, OutageWait, Review, SignalRow
 from app.graph import facts
 
 log = logging.getLogger(__name__)
@@ -43,19 +51,27 @@ def waiting_for(snapshot: StateSnapshot) -> WaitingFor | None:
 
 
 def unfinished() -> list[str]:
-    """Every open case, oldest first.
+    """Every open case but those waiting for Bank or Card, oldest first.
 
     A restart may have left one queued or half investigated, or with a status in
-    the table that is older than what the graph has saved.
+    the table that is older than what the graph has saved. A waiting case is left to
+    retry_due: run at every start, a crash loop would use up its retries at once.
     """
     with SessionLocal() as session:
         return list(
-            session.scalars(select(Case.case_id).where(Case.status.in_(OPEN_STATUSES)).order_by(Case.created_at))
+            session.scalars(
+                select(Case.case_id)
+                .where(Case.status.in_(OPEN_STATUSES), Case.status != CaseStatus.WAITING_FOR_DATA)
+                .order_by(Case.created_at)
+            )
         )
 
 
-def run_case(graph, case_id: str) -> None:
-    """Take a case as far as it goes without a person. Safe to call on a case at any point."""
+def run_case(graph, case_id: str, now: datetime | None = None) -> None:
+    """Take a case as far as it goes without a person. Safe to call on a case at any point.
+
+    now is when an outage met in this run counts as met: the current time unless given.
+    """
     config = thread(case_id)
     try:
         snapshot = graph.get_state(config)
@@ -63,16 +79,125 @@ def run_case(graph, case_id: str) -> None:
             _set_status(case_id, CaseStatus.INVESTIGATING)
             graph.invoke({"case_id": case_id, "signal": _opening_signal(case_id)}, config)
         elif snapshot.next and waiting_for(snapshot) is None:
-            # A restart stopped it part-way. Go on from the last saved step.
+            # A restart stopped it part-way, or Bank or Card gave nothing. Go on from the last saved step.
             _set_status(case_id, CaseStatus.INVESTIGATING)
             graph.invoke(None, config)
         # Otherwise the graph is where it should be and only the table may be behind.
         status = _catch_up(graph, case_id)
+    except CaseWaiting as outage:
+        try:
+            status = _wait_or_fail(case_id, outage, now or datetime.now(UTC))
+        except Exception:  # the database is gone too. The case stays investigating; the next start picks it up.
+            log.exception("case %s: %s, and the wait could not be recorded", case_id, outage)
+            return
     except Exception:
         log.exception("case %s failed", case_id)
         status = CaseStatus.FAILED
-        _set_status(case_id, status)
+        _set_status(case_id, status, outage_over=True)  # it failed, but not for want of Bank or Card
     log.info("case %s is %s", case_id, status)
+
+
+def retry_due(graph, now: datetime | None = None, stopping: Callable[[], bool] = lambda: False) -> list[str]:
+    """Run every case waiting for Bank or Card whose retry time has come, one after another. Returns their ids.
+
+    Each case is taken first (claim), so the retry endpoint and this cannot both run it. Given now, it is also when
+    an outage met again counts as met; left out, each run reads the clock when it meets one. Once stopping() says
+    so, no further case is started: those left run at the next start.
+    """
+    with SessionLocal() as session:
+        due = list(
+            session.scalars(
+                select(Case.case_id)
+                .join(OutageWait, OutageWait.case_id == Case.case_id)
+                .where(Case.status == CaseStatus.WAITING_FOR_DATA, OutageWait.next_retry_at <= (now or datetime.now(UTC)))
+                .order_by(OutageWait.next_retry_at, Case.case_id)
+            )
+        )
+    ran = []
+    for case_id in due:
+        if stopping():
+            break
+        try:
+            if not claim(case_id, CaseStatus.WAITING_FOR_DATA):
+                continue
+            ran.append(case_id)
+            run_case(graph, case_id, now)
+        except Exception:  # one case that cannot even be marked must not keep the others waiting
+            log.exception("case %s: its retry could not be started", case_id)
+    return ran
+
+
+def claim(case_id: str, status: str) -> bool:
+    """Mark a case investigating if it still has this status. False when another run took it first."""
+    with SessionLocal() as session:
+        taken = session.execute(
+            update(Case).where(Case.case_id == case_id, Case.status == status).values(status=CaseStatus.INVESTIGATING)
+        )
+        session.commit()
+        return taken.rowcount == 1
+
+
+def _wait_or_fail(case_id: str, outage: CaseWaiting, now: datetime) -> str:
+    """Record an outage the run met: the case waits for its next retry, or fails once retrying is done.
+
+    Attempt n waits OUTAGE_RETRY_SECONDS[n-1]. The attempt after the last of them fails the case, and so does
+    the first one when retrying cannot help. A run that got past the question and met an outage at a later one
+    meets a new outage: its attempts start again.
+    """
+    with SessionLocal() as session:
+        case = session.scalar(select(Case).where(Case.case_id == case_id).with_for_update())
+        wait = session.get(OutageWait, case_id)
+        if wait is None:
+            wait = OutageWait(case_id=case_id)
+            session.add(wait)
+        if wait.asked_before != outage.asked_before:
+            wait.attempts, wait.first_seen, wait.asked_before = 0, now, outage.asked_before
+        wait.service, wait.codes, wait.kind = outage.service, ", ".join(outage.codes)[:200], outage.kind
+        wait.attempts += 1
+        delays = policy.OUTAGE_RETRY_SECONDS
+        if outage.kind == "data" or wait.attempts > len(delays):
+            wait.next_retry_at, case.status = None, CaseStatus.FAILED
+        else:
+            wait.next_retry_at = now + timedelta(seconds=delays[wait.attempts - 1])
+            case.status = CaseStatus.WAITING_FOR_DATA
+        said = describe(outage_of(wait))
+        session.commit()
+    # A refused token or a wrong URL waits for someone to fix the setup; a service that is down may come back.
+    level = logging.WARNING if outage.kind == "transient" else logging.ERROR
+    log.log(level, "case %s is %s: %s (%s)", case_id, case.status, said, outage.kind)
+    return case.status
+
+
+def outage_of(wait: OutageWait) -> dict:
+    """What the case page shows of a wait, times in UTC. SQLite gives them back without their zone."""
+
+    def utc(moment: datetime | None) -> datetime | None:
+        return moment if moment is None or moment.tzinfo else moment.replace(tzinfo=UTC)
+
+    return {
+        "service": wait.service,
+        "codes": wait.codes,
+        "kind": wait.kind,
+        "attempts": wait.attempts,
+        "first_seen": utc(wait.first_seen),
+        "next_retry_at": utc(wait.next_retry_at),
+    }
+
+
+def describe(wait: dict) -> str:
+    """The reason a person reads: "Bank Service unavailable (http_503) since 2026-11-18T10:00Z, retried 3 times"."""
+
+    def at(moment: datetime) -> str:
+        return f"{moment.astimezone(UTC):%Y-%m-%dT%H:%MZ}"
+
+    said = f"{wait['service']} unavailable ({wait['codes']}) since {at(wait['first_seen'])}"
+    retried = wait["attempts"] - 1
+    if wait["kind"] == "data" and wait["next_retry_at"] is None and retried == 0:
+        return f"{said}, not retried: retrying cannot help"
+    said += f", retried {retried} time{'' if retried == 1 else 's'}"
+    if wait["next_retry_at"] is not None:
+        said += f", next retry at {at(wait['next_retry_at'])}"
+    return said
 
 
 def _opening_signal(case_id: str) -> dict:
@@ -90,11 +215,13 @@ def _catch_up(graph, case_id: str) -> str:
     A decision can arrive the moment a run pauses. The row lock makes this write
     wait for it, and reading the graph afterwards keeps it from being overwritten.
     A case that closed while the table was behind gets its review in the same transaction.
+    A run that got here got past any outage it waited on.
     """
     with SessionLocal() as session:
         case = session.scalar(select(Case).where(Case.case_id == case_id).with_for_update())
         state = graph.get_state(thread(case_id)).values
         case.status = state["status"]
+        session.execute(delete(OutageWait).where(OutageWait.case_id == case_id))
         history.record(session, case, state, ledger=facts.ledger)
         session.commit()
         return case.status
@@ -132,7 +259,9 @@ def keep_missing_reviews(graph) -> int:
     return written
 
 
-def _set_status(case_id: str, status: str) -> None:
+def _set_status(case_id: str, status: str, *, outage_over: bool = False) -> None:
     with SessionLocal() as session:
         session.execute(update(Case).where(Case.case_id == case_id).values(status=status))
+        if outage_over:
+            session.execute(delete(OutageWait).where(OutageWait.case_id == case_id))
         session.commit()

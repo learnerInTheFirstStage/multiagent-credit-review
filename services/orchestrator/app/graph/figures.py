@@ -19,7 +19,7 @@ from app.graph import facts
 # Step 1. Ids hold digits that are not figures. Set in emphasis ("_c_010_") they are ids still.
 _IDS = re.compile(
     r"(?<![A-Za-z\d])"
-    r"(?:(?:txn|acct|bal|agg|rep|sig|hist|xs|case|seed)_[A-Za-z\d_]+|c_\d{3}|G-\d{2}[a-z]?)"
+    r"(?:(?:txn|acct|bal|agg|rep|ctx|crd|sig|hist|xs|case|seed)_[A-Za-z\d_]+|c_\d{3}|G-\d{2}[a-z]?)"
     r"(?![A-Za-z\d])"
 )
 

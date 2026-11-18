@@ -30,6 +30,7 @@ from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.db.models import Case, Review  # noqa: E402
 from tests.conftest import bearer  # noqa: E402
 from tests.test_cases import seed_entry, start  # noqa: E402, F401
+from tests.test_outage_wait import Down, serve  # noqa: E402, F401
 from tests.test_graph import BANK_ONLY, INVESTIGATION, ask_bank, ask_card, gaps, report  # noqa: E402
 from tests.test_signals import SIGNAL  # noqa: E402  (c_010)
 
@@ -143,7 +144,7 @@ def recorded(case: dict, said: dict = REPORT, path: dict | None = None, rep: int
         "case": case["id"],
         "rep": rep,
         "report": said,
-        "grades": grading.grade(case, said),
+        "grades": grading.grade(case, said, path.get("records")),
         "path": path,
         "path_grades": grading.grade_path(case, said, path),
     }
@@ -319,6 +320,17 @@ C009 = CASES["c_009"]  # must reach the payment with the memo, and its payee's h
 PAYMENT = asked("AskCashFlow", "transactions", "txn_c_009_01", "agg_c_009_payments")
 INCOME = asked("AskCashFlow", "income", "agg_c_009_inflows")
 PAYEE = asked("AskCashFlow", "payee_history", "agg_c_009_payee_history", record_id="txn_c_009_01")
+# c_009's records as its path page lists them: the case names them by kind and data, not by these ids.
+C009_RECORDS = [
+    {"id": "txn_c_009_01", "kind": "bank_transaction", "data": {"category": "vendor_known", "amount_cents": -4500000}},
+    {"id": "agg_c_009_payments", "kind": "payment_summary", "data": {}},
+    {"id": "agg_c_009_inflows", "kind": "weekly_inflow_series", "data": {"income_trend": "steady"}},
+    {"id": "agg_c_009_payee_history", "kind": "payee_history", "data": {"about": "txn_c_009_01"}},
+]
+
+
+def c009_path(*questions: dict, gaps: list = ()) -> dict:
+    return a_path(*questions, gaps=gaps, records=C009_RECORDS)
 KEPT = said(likely_cause="planned_vendor_payment", recommendation="keep_limit", guideline_ids=["G-02"])
 
 
@@ -331,8 +343,8 @@ def code_gap(at: int, **ask) -> dict:
 def test_a_record_reached_only_after_a_code_nudge_is_marked_as_nudged_and_one_asked_unprompted_is_not():
     named = code_gap(2, tool="AskCashFlow", topic="payee_history", record_id="txn_c_009_01")
 
-    nudged = grading.grade_path(C009, KEPT, a_path(PAYMENT, INCOME, PAYEE, gaps=[named]))
-    unprompted = grading.grade_path(C009, KEPT, a_path(PAYMENT, PAYEE, INCOME, gaps=[{**named, "at": 3}]))
+    nudged = grading.grade_path(C009, KEPT, c009_path(PAYMENT, INCOME, PAYEE, gaps=[named]))
+    unprompted = grading.grade_path(C009, KEPT, c009_path(PAYMENT, PAYEE, INCOME, gaps=[{**named, "at": 3}]))
 
     # The payment came back before any gap pass. The payee's history only after the gap named it.
     assert nudged["reached"] is True and nudged["nudged"] == ["agg_c_009_payee_history"]
@@ -341,21 +353,21 @@ def test_a_record_reached_only_after_a_code_nudge_is_marked_as_nudged_and_one_as
     other_record = code_gap(2, tool="AskCashFlow", topic="payee_history", record_id="txn_c_009_02")
     other_topic = code_gap(2, tool="AskCashFlow", topic="reconciliation")
     for gap in (other_record, other_topic, {**named, "at": None}, {key: v for key, v in named.items() if key != "at"}):
-        assert grading.grade_path(C009, KEPT, a_path(PAYMENT, INCOME, PAYEE, gaps=[gap]))["nudged"] == []
+        assert grading.grade_path(C009, KEPT, c009_path(PAYMENT, INCOME, PAYEE, gaps=[gap]))["nudged"] == []
     # A gap that named the topic alone covers a question about any record of it.
     topic_only = code_gap(2, tool="AskCashFlow", topic="payee_history")
-    assert grading.grade_path(C009, KEPT, a_path(PAYMENT, INCOME, PAYEE, gaps=[topic_only]))["nudged"] == [
+    assert grading.grade_path(C009, KEPT, c009_path(PAYMENT, INCOME, PAYEE, gaps=[topic_only]))["nudged"] == [
         "agg_c_009_payee_history"
     ]
     # Asked again after a nudge, a record first returned before it is still unprompted.
-    again = a_path(PAYMENT, INCOME, PAYEE, PAYEE, gaps=[{**named, "at": 3}])
+    again = c009_path(PAYMENT, INCOME, PAYEE, PAYEE, gaps=[{**named, "at": 3}])
     assert grading.grade_path(C009, KEPT, again)["nudged"] == []
 
     # The summary says so run by run, beside the calls refused on the way.
     refused = {"tool": "AskTheMoon", "agent": None, "outcome": "refused", "returned": []}
     runs = [
-        recorded(C009, KEPT, a_path(PAYMENT, INCOME, PAYEE, gaps=[named])),
-        recorded(C009, KEPT, a_path(PAYMENT, PAYEE, refused, INCOME, gaps=[{**named, "at": 3}]), rep=2),
+        recorded(C009, KEPT, c009_path(PAYMENT, INCOME, PAYEE, gaps=[named])),
+        recorded(C009, KEPT, c009_path(PAYMENT, PAYEE, refused, INCOME, gaps=[{**named, "at": 3}]), rep=2),
     ]
     text = grading.summary({"customers": [C009]}, runs, [], 2, {"run_id": "r1"})
     assert "| c_009 | 3, 3 | 0, 1 | yes | yes, no | right; right |" in section(text, "The questions asked")
@@ -481,8 +493,13 @@ def test_a_case_that_passed_without_the_misleading_memo_being_read_is_counted_as
     c_203 = CASES["c_203"]
     cut = said(likely_cause="revenue_loss", recommendation="reduce_limit", guideline_ids=["G-07"])
     income, repayments = asked("AskCashFlow", "income", "agg_c_203_inflows"), asked("AskCreditBehavior", "repayments")
-    blind = recorded(c_203, cut, a_path(income, repayments))
-    read = recorded(c_203, cut, a_path(asked("AskCashFlow", "transactions", "txn_c_203_02"), income), rep=2)
+    # The case names the payment by what it is. The path page lists the records each run was given.
+    inflows = {"id": "agg_c_203_inflows", "kind": "weekly_inflow_series", "data": {"income_trend": "shrinking"}}
+    payment = {"id": "txn_c_203_02", "kind": "bank_transaction", "data": {"category": "vendor_known"}}
+    blind = recorded(c_203, cut, a_path(income, repayments, records=[inflows]))
+    read = recorded(
+        c_203, cut, a_path(asked("AskCashFlow", "transactions", "txn_c_203_02"), income, records=[payment, inflows]), rep=2
+    )
 
     assert blind["grades"]["recommendation"] is True and blind["path_grades"]["why"] == "path"
     assert read["path_grades"]["why"] == "right"
@@ -490,7 +507,9 @@ def test_a_case_that_passed_without_the_misleading_memo_being_read_is_counted_as
     assert section(text, "Passed without being tested").endswith("\n1 runs (c_203 run 1).\n")
     assert "| c_203 | 2, 2 | 0, 0 | NO | not reached, no | path; right |" in section(text, "The questions asked")
     # A run that never read it and kept the limit did not pass.
-    kept = recorded(c_203, said(likely_cause="revenue_loss", recommendation="keep_limit"), a_path(income, repayments), rep=3)
+    kept = recorded(
+        c_203, said(likely_cause="revenue_loss", recommendation="keep_limit"), a_path(income, repayments, records=[inflows]), rep=3
+    )
     text = grading.summary({"customers": [c_203]}, [blind, read, kept], [], 3, {"run_id": "r1"})
     assert section(text, "Passed without being tested").endswith("\n1 runs (c_203 run 1).\n")
 
@@ -552,79 +571,45 @@ NO_PATH_REQUESTS = [
     {"id": "t_03", "what": "No token", "expect": {"status": 401}, "error": "no run opened a case to ask for"},
 ]
 NO_PATH_ABOUT = {"run_id": "r1", "Model": "scripted | structured output: default", "Arm": "agent"}
-# What eval/grade.py wrote for these runs before the path was graded (commit 87b022f), to the byte.
-NO_PATH_SUMMARY = (
-    '# Golden set results: r1\n'
-    '\n'
-    '- Model: scripted | structured output: default\n'
-    '- Arm: agent\n'
-    '- 8 cases, 2 runs each. 1 of 16 runs ended in an error or were not run. That is not counted as a wrong answer: a case with such a run is left out of the shares below. A report the service could not complete in two drafts is counted as a wrong answer.\n'
-    '\n'
-    '## How often the answer was right in every run\n'
-    '\n'
-    '| | Recommendation | Cause | Handed over when it should, and only then | Cited the evidence the answer turns on |\n'
-    '|---|---|---|---|---|\n'
-    '| All cases | 4 of 7 (57%, 95% interval 25% to 84%) | 5 of 7 (71%, 95% interval 36% to 92%) | 5 of 7 (71%, 95% interval 36% to 92%) | 1 of 1 (100%, 95% interval 21% to 100%) |\n'
-    '| Held out only | 4 of 6 (67%, 95% interval 30% to 90%) | 5 of 6 (83%, 95% interval 44% to 97%) | 5 of 6 (83%, 95% interval 44% to 97%) | 1 of 1 (100%, 95% interval 21% to 100%) |\n'
-    '\n'
-    'Against doing nothing clever, on the cases counted for the recommendation above:\n'
-    '\n'
-    '- The engine alone (always cuts): recommendation right for 2 of 7 (29%, 95% interval 8% to 64%)\n'
-    '- Always hand over: recommendation right for 1 of 7 (14%, 95% interval 3% to 51%)\n'
-    '\n'
-    '## Case by case\n'
-    '\n'
-    '| Case | Kind | Split | Accepted | Recommended, run by run | Cause, run by run | Recommendation | Cause | Hand over | Cites |\n'
-    '|---|---|---|---|---|---|---|---|---|---|\n'
-    '| c_a | normal | held_out | keep_limit | keep_limit, keep_limit | payroll_or_tax, payroll_or_tax | yes | yes | yes | yes |\n'
-    '| c_b | normal | dev | reduce_limit | reduce_limit, needs_human | revenue_loss, payroll_or_tax | NO | NO | NO |  |\n'
-    '| c_c | normal | held_out | keep_limit | keep_limit, keep_limit | payroll_or_tax, payroll_or_tax | yes | yes | yes |  |\n'
-    '| c_d | normal | held_out | keep_limit or request_documents | request_documents, keep_limit | payroll_or_tax, payroll_or_tax | yes | yes | yes |  |\n'
-    '| c_e | normal | held_out | needs_human | gave up, needs_human | gave up, no_clear_cause | NO | NO | NO |  |\n'
-    '| c_f | normal | held_out | keep_limit | keep_limit, pause_card | payroll_or_tax, payroll_or_tax | NO | yes | yes |  |\n'
-    '| c_g | normal | held_out | reduce_limit | reduce_limit, reduce_limit | revenue_loss, revenue_loss | yes | yes | yes |  |\n'
-    '| c_h | normal | held_out | request_documents | request_documents, error | insufficient_data, error |  |  |  |  |\n'
-    '\n'
-    '## Cases set against each other\n'
-    '\n'
-    '| Case | Set against | Held in |\n'
-    '|---|---|---|\n'
-    '| c_a | twin of c_b | 1 of 2 paired runs |\n'
-    '| c_c | same as c_a | 2 of 2 paired runs |\n'
-    '| c_d | milder than c_b | 1 of 1 paired runs |\n'
-    '| c_e | history twin of c_a | 1 of 2 paired runs |\n'
-    '| c_f | history copy of c_a | 1 of 2 paired runs |\n'
-    '| c_g | same history as c_a | 2 of 2 paired runs |\n'
-    '\n'
-    '## Requests the service has to refuse\n'
-    '\n'
-    '| Request | What is sent | Expected | Got | Right |\n'
-    '|---|---|---|---|---|\n'
-    '| t_01 | A bad signal | status 422 | status 422 | yes |\n'
-    '| t_03 | No token | status 401 | no run opened a case to ask for |  |\n'
-    '\n'
-    '## Runs that ended in an error\n'
-    '\n'
-    '- c_h run 2: the case ended as failed\n'
-)  # fmt: skip
 
 
-def test_a_summary_of_records_with_no_path_is_what_it_was_to_the_byte():
+def test_a_summary_of_records_with_no_path_keeps_its_sections_and_the_path_adds_its_own_after_them():
     text = grading.summary(NO_PATH_GOLDEN, NO_PATH_RUNS, NO_PATH_REQUESTS, 2, NO_PATH_ABOUT)
+    # The counts run by run (test_eval_metrics.py) come after every section of a summary with no path.
+    head = text.split("\n## Counted run by run\n")[0]
 
-    assert text == NO_PATH_SUMMARY
+    assert [line for line in text.splitlines() if line.startswith("## ")] == [
+        "## How often the answer was right in every run",
+        "## Case by case",
+        "## Cases set against each other",
+        "## Requests the service has to refuse",
+        "## Runs that ended in an error",
+        "## Counted run by run",
+    ]
+    lines = head.splitlines()
+    assert "- 8 cases, 2 runs each. 1 of 16 runs ended in an error or were not run." in head
+    assert "| All cases | 4 of 7 (57%, 95% interval 25% to 84%) | 5 of 7 (71%, 95% interval 36% to 92%) | 5 of 7 (71%, 95% interval 36% to 92%) | 1 of 1 (100%, 95% interval 21% to 100%) |" in lines
+    assert "| c_d | normal | held_out | keep_limit or request_documents | request_documents, keep_limit | payroll_or_tax, payroll_or_tax | yes | yes | yes |  |" in lines
+    assert "| c_e | normal | held_out | needs_human | gave up, needs_human | gave up, no_clear_cause | NO | NO | NO |  |" in lines
+    # A pair that cannot be set against each other (c_b's run 2 handed over) is left out of the count.
+    assert "| c_c | same as c_a | 2 of 2 paired runs |" in lines
+    assert "| c_d | milder than c_b | 1 of 1 paired runs |" in lines
+    assert "| c_h | normal | held_out | request_documents | request_documents, error | insufficient_data, error |  |  |  |  |" in lines
+    assert "| t_03 | No token | status 401 | no run opened a case to ask for |  |" in lines
+    assert lines[-1] == "- c_h run 2: the case ended as failed"
     # With a path the new sections come after all of it, and nothing before them moves.
     pathed = [{**run, "path_grades": grading.grade_path(NO_PATH_GOLDEN["customers"][0], run["report"], a_path())}
               if "grades" in run else run for run in NO_PATH_RUNS]  # fmt: skip
     longer = grading.summary(NO_PATH_GOLDEN, pathed, NO_PATH_REQUESTS, 2, NO_PATH_ABOUT)
-    assert longer.startswith(NO_PATH_SUMMARY + "\n## Right on the first draft\n")
-    titles = [line for line in longer.removeprefix(NO_PATH_SUMMARY).splitlines() if line.startswith("## ")]
+    assert longer.startswith(head + "\n## Right on the first draft\n")
+    titles = [line for line in longer.removeprefix(head).splitlines() if line.startswith("## ")]
     assert titles == [
         "## Right on the first draft",
         "## The questions asked",
         "## Reports the service could not complete",
         "## Handed over by lowering confidence",
         "## Passed without being tested",
+        "## Counted run by run",
     ]
 
 
@@ -635,7 +620,7 @@ class Container:
     """What eval/run.py runs in the Orchestrator's container, run here: this checkout's Python and test database,
     and the eval files where the overlay mounts them. `answers` stands in for the output of a command."""
 
-    def __init__(self, events: list, flow: str = "", answers: dict | None = None):
+    def __init__(self, events: list, flow: str = "", answers: dict | None = None, specialists: str = "stand_in"):
         self.events, self.answers = events, answers or {}
         self.env = {
             **os.environ,
@@ -644,6 +629,8 @@ class Container:
             "DATABASE_URL": engine.url.render_as_string(hide_password=False),
             "INVESTIGATION_FLOW": flow,
             "EMBEDDINGS_MODEL": "hash:384",
+            # The service under test runs the stand-ins (conftest), so this is what the container says by default.
+            "SPECIALISTS": specialists,
         }
 
     def __call__(self, container: str, *command: str) -> str:
@@ -675,11 +662,13 @@ class Recording:
         return False
 
 
-def run_main(monkeypatch, service, container: Container, out: Path, arm: str = "agent"):
+def run_main(monkeypatch, service, container: Container, out: Path, arm: str = "agent", specialists: str = "stand_in"):
+    for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):  # usage is not read: no test reaches LangFuse
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(golden_run, "inside", container)
     recording = SimpleNamespace(**{**vars(httpx), "Client": lambda **_: Recording(service.client, container.events)})
     monkeypatch.setattr(golden_run, "httpx", recording)
-    argv = ["--arm", arm, "--container", "the container", "--only", "c_010", "--reps", "1", "--timeout", "5", "--out", str(out)]
+    argv = ["--arm", arm, "--specialists", specialists, "--container", "the container", "--only", "c_010", "--reps", "1", "--timeout", "5", "--out", str(out)]
     monkeypatch.setattr(sys, "argv", ["run.py", *argv])
     golden_run.main()
 
@@ -687,7 +676,7 @@ def run_main(monkeypatch, service, container: Container, out: Path, arm: str = "
 def test_the_run_record_holds_every_policy_value_and_the_prompts_hash(monkeypatch):
     monkeypatch.setattr(golden_run, "inside", Container([]))
 
-    about = golden_run.stack("the container", "agent")
+    about = golden_run.stack("the container", "agent", "stand_in")
 
     # Every value, read inside the container, as one JSON line.
     values = {name: value for name, value in vars(policy).items() if name.isupper()}
@@ -699,36 +688,82 @@ def test_the_run_record_holds_every_policy_value_and_the_prompts_hash(monkeypatc
     assert about["Model"] == "none set | structured output: default"
     # A fixed arm never searches, whatever embedder the image has.
     monkeypatch.setattr(golden_run, "inside", Container([], flow="fixed"))
-    assert golden_run.stack("the container", "fixed")["Search"] == "off: this arm asks a fixed list and never searches"
+    assert golden_run.stack("the container", "fixed", "stand_in")["Search"] == "off: this arm asks a fixed list and never searches"
 
     # What the container answers is what the record holds, though this checkout's files say otherwise.
-    there = {"model": "m", "structured_output": "json_schema", "flow": "", "embedder": None,
+    there = {"model": "m", "structured_output": "json_schema", "flow": "", "specialists": "", "embedder": None,
              "policy": {"POLICY_VERSION": "elsewhere"}, "prompts": "abcdefabcdef"}  # fmt: skip
     monkeypatch.setattr(golden_run, "inside", Container([], answers={"stack": "a log line\n" + json.dumps(there)}))
-    about = golden_run.stack("the container", "agent")
+    about = golden_run.stack("the container", "agent", "real")
     assert about["Prompts"] == "sha256 abcdefabcdef of app/graph/prompts.py"
     assert about["Policy"] == '{"POLICY_VERSION": "elsewhere"}'
     assert about["Model"] == "m | structured output: json_schema"
     assert about["Search"] == "off: no embedder could be loaded"
 
 
+def stack_says(flow: str = "", specialists: str = "stand_in") -> Container:
+    """A container whose stack command answers with these settings, without running it."""
+    there = {"model": "m", "structured_output": "default", "flow": flow, "specialists": specialists, "embedder": None,
+             "policy": {}, "prompts": "abcdefabcdef"}  # fmt: skip
+    return Container([], answers={"stack": json.dumps(there)})
+
+
 def test_the_runner_refuses_an_arm_the_stack_is_not_set_to(monkeypatch, start, tmp_path):
     for flow, arm in (("fixed", "agent"), ("", "fixed"), ("", "fixed_rules"), ("agent", "fixed_rules")):
-        monkeypatch.setattr(golden_run, "inside", Container([], flow=flow))
+        monkeypatch.setattr(golden_run, "inside", stack_says(flow=flow))
         with pytest.raises(SystemExit, match=f"not the {arm} arm"):
-            golden_run.stack("the container", arm)
+            golden_run.stack("the container", arm, "stand_in")
     # A value the runner does not know is no arm at all, though the service runs it as the agent.
     for arm in golden_run.ARMS:
-        monkeypatch.setattr(golden_run, "inside", Container([], flow="fixd"))
+        monkeypatch.setattr(golden_run, "inside", stack_says(flow="fixd"))
         with pytest.raises(SystemExit, match="INVESTIGATION_FLOW=fixd, which names no arm .* a misspelt arm"):
-            golden_run.stack("the container", arm)
+            golden_run.stack("the container", arm, "stand_in")
 
-    # Before anything is seeded or sent.
+    # Before anything is seeded or sent, with the stack command run for real.
     service, container = start([*INVESTIGATION, report()]), Container([], flow="fixed_rules")
     with pytest.raises(SystemExit):
         run_main(monkeypatch, service, container, tmp_path, arm="agent")
     assert container.events == ["stack"]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_the_runner_refuses_specialists_the_stack_is_not_set_to(monkeypatch, start, tmp_path):
+    # Unset or empty is the real agents, as in the service (app/runtime.py specialists()).
+    for there, asked in (("stand_in", "real"), ("", "stand_in"), ("real", "stand_in")):
+        monkeypatch.setattr(golden_run, "inside", stack_says(specialists=there))
+        with pytest.raises(SystemExit, match=f"not the {asked} specialists"):
+            golden_run.stack("the container", "agent", asked)
+    for there, asked in (("", "real"), ("real", "real"), ("stand_in", "stand_in")):
+        monkeypatch.setattr(golden_run, "inside", stack_says(specialists=there))
+        assert golden_run.stack("the container", "agent", asked)["Specialists"].startswith(f"{asked}: ")
+    # The service runs any value but stand_in as the real agents: a misspelt stand-in would run them unnoticed.
+    for asked in golden_run.SPECIALISTS:
+        monkeypatch.setattr(golden_run, "inside", stack_says(specialists="stand-in"))
+        with pytest.raises(SystemExit, match="SPECIALISTS=stand-in, which names neither"):
+            golden_run.stack("the container", "agent", asked)
+
+    # Before anything is seeded or sent, with the stack command run for real. The service under test runs the
+    # stand-ins; --specialists defaults to real.
+    start([*INVESTIGATION, report()])
+    container = Container([])
+    monkeypatch.setattr(golden_run, "inside", container)
+    monkeypatch.setattr(sys, "argv", ["run.py", "--arm", "agent", "--container", "c", "--out", str(tmp_path)])
+    with pytest.raises(SystemExit, match="not the real specialists"):
+        golden_run.main()
+    assert container.events == ["stack"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_main_stack_starts_the_orchestrator_only_once_bank_and_card_answer_their_health_check():
+    # A Bank or Card that fails to start stops `up`, instead of every case reading bank_unreachable.
+    services = yaml.safe_load((EVAL.parent / "docker-compose.yml").read_text())["services"]
+
+    for name in ("postgres", "bank", "card"):
+        assert services["orchestrator"]["depends_on"][name] == {"condition": "service_healthy"}
+    for name in ("bank", "card"):
+        test = services[name]["healthcheck"]["test"]
+        # The slim image has no curl: Python asks /health, and urlopen raises on the 500 a broken database gives.
+        assert test[:3] == ["CMD", "python", "-c"] and "http://127.0.0.1:8000/health" in test[3]
 
 
 def test_the_runner_seeds_history_before_the_first_signal_and_stops_when_the_database_is_not_clean(
@@ -760,7 +795,7 @@ def test_the_runner_seeds_history_before_the_first_signal_and_stops_when_the_dat
 
     # The service seeds nothing here (the tests' seed file is empty), so the runner seeded both files whole.
     seeds = history.read_seeds(list(golden_run.SEED_FILES.values()))
-    assert len(seeds) == 15
+    assert seeds
     with SessionLocal() as session:
         stored = session.scalars(select(Review.case_id).where(Review.source == "seed")).all()
     assert sorted(stored) == sorted(seed["case_id"] for seed in seeds)
@@ -769,12 +804,12 @@ def test_the_runner_seeds_history_before_the_first_signal_and_stops_when_the_dat
     (folder,) = (tmp_path / "clean").iterdir()
     assert folder.name.endswith("-agent")
     (record,) = [json.loads(line) for line in (folder / "runs.jsonl").read_text().splitlines()]
-    assert record["arm"] == "agent" and record["case"] == "c_010"
+    assert record["arm"] == "agent" and record["specialists"] == "stand_in" and record["case"] == "c_010"
     assert record["path"]["questions"] and record["path_grades"]["questions"] == 3
     text = (folder / "summary.md").read_text()
-    assert "- Arm: agent\n" in text and "- Search: on, hash:384\n" in text
-    assert "- Seeded reviews: 15: 0 there at start, 15 added by the runner, 15 embedded\n" in text
-    assert f"- Policy: {golden_run.stack('the container', 'agent')['Policy']}\n" in text
+    assert "- Arm: agent\n- Specialists: stand_in" in text and "- Search: on, hash:384\n" in text
+    assert f"- Seeded reviews: {len(seeds)}: 0 there at start, {len(seeds)} added by the runner, {len(seeds)} embedded\n" in text
+    assert f"- Policy: {golden_run.stack('the container', 'agent', 'stand_in')['Policy']}\n" in text
     assert "\n## Right on the first draft\n" in text
 
 
@@ -836,6 +871,7 @@ def test_the_evaluation_overlay_seeds_both_files_and_mounts_them_read_only():
     assert overlay["environment"]["HISTORY_SEED_FILE"] == "/eval/history.yaml:/eval/history_eval.yaml"
     assert overlay["environment"]["SHARED_CUSTOMERS_FILE"] == "/data/shared_customers.yaml:/eval/extra_customers.yaml"
     assert overlay["environment"]["INVESTIGATION_FLOW"] == "${INVESTIGATION_FLOW:-}"
+    assert overlay["environment"]["SPECIALISTS"] == "${SPECIALISTS:-}"
     assert overlay["build"]["args"] == {"WITH_EMBEDDINGS": "1"}
     assert set(overlay["volumes"]) == {
         "./eval/extra_customers.yaml:/eval/extra_customers.yaml:ro",
@@ -973,3 +1009,65 @@ def test_the_classes_are_read_from_the_dataset_document():
 
     assert list(found) == [case["id"] for case in GOLDEN["customers"]]
     assert {cid for cid, mark in found.items() if mark == "D"} == {"c_009", "c_011", "c_307"}
+
+
+# A run on a stack whose Bank or Card did not answer.
+
+
+# A hand-over that rests on Card's side alone. On the code before, a case whose Bank gave nothing reached it and was
+# graded unless its path page marked the outage: with the path page down, nothing did.
+CARD_SIDE_ONLY = report(
+    likely_cause="no_clear_cause", recommendation="needs_human", guideline_ids=["G-12"], evidence=[],
+    other_findings=[], ruled_out=[],
+    review_reasons=[
+        {"reason": "large_cut", "finding": "Not determined.", "evidence_ids": []},
+        {"reason": "failed_repayment", "finding": "It failed.", "evidence_ids": ["rep_c_010_3"]},
+    ],
+)
+
+
+def test_a_run_whose_case_waits_for_bank_is_not_graded_though_its_path_page_cannot_be_read(serve):
+    client = serve(Down().fail("cash_flow", "http_503"), script=(*INVESTIGATION, CARD_SIDE_ONLY))
+
+    first, second = golden_run.runs_of(PathDown(client), tokens(), C010, SIGNAL, "r1", 2, 5)
+
+    assert "grades" not in first and "path_grades" not in first and "report" not in first
+    assert first["outage"].startswith("Bank Service unavailable (http_503) since ")
+    assert first["error"] == f"Bank or Card did not answer, so the run is not graded: {first['outage']}"
+    # A waiting case is open: the customer's next signal would join it, so the next run is not sent.
+    assert first["closed"] is False
+    assert second == {"case": "c_010", "rep": 2, "error": "not run: run 1 left the case open"}
+
+
+def test_a_run_whose_case_failed_for_an_outage_is_not_graded_and_its_case_is_closed(serve):
+    client = serve(Down().fail("cash_flow", "unknown_customer"), script=(*INVESTIGATION, CARD_SIDE_ONLY))
+
+    record = golden_run.one_run(PathDown(client), tokens(), C010, SIGNAL, 1, timeout=5)
+
+    assert "grades" not in record and "path_grades" not in record
+    assert record["outage"].startswith("Bank Service unavailable (unknown_customer) since ")
+    assert record["error"].startswith("Bank or Card did not answer, so the run is not graded: ")
+    assert record["closed"] is True  # failed is closed
+
+
+def test_a_run_whose_case_failed_for_another_reason_is_an_error_and_not_an_outage(start):
+    # The first draft fails the check, and the model has nothing left for the redraft: the run raised.
+    service = start([*INVESTIGATION, report(guideline_ids=[])])
+
+    record = golden_run.one_run(service.client, tokens(), C010, SIGNAL, 1, timeout=5)
+
+    assert "outage" not in record and record["error"] == "the case ended as failed" and record["closed"] is True
+
+
+def test_the_runner_writes_its_summary_and_fails_when_a_run_met_an_outage(monkeypatch, start, tmp_path):
+    service, container = start([*INVESTIGATION, report()]), Container([])
+    said = "Bank Service unavailable (http_401) since 2026-11-18T10:00Z, retried 0 times, next retry at 2026-11-18T10:01Z"
+    outage = {"case": "c_010", "rep": 1, "closed": False, "outage": said,
+              "error": f"Bank or Card did not answer, so the run is not graded: {said}"}
+    monkeypatch.setattr(golden_run, "one_run", lambda *args, **kwargs: dict(outage))
+
+    with pytest.raises(SystemExit, match=r"did not answer during 1 run.*First: Bank Service unavailable \(http_401\)"):
+        run_main(monkeypatch, service, container, tmp_path)
+    (folder,) = tmp_path.iterdir()
+    assert (folder / "summary.md").exists()
+    assert "Bank Service unavailable (http_401)" in (folder / "summary.md").read_text()

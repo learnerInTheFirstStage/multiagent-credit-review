@@ -2,17 +2,20 @@ import logging
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app import history, runner
+from app.agents.errors import OutageKind
 from app.auth import User, current_user
 from app.card_client import CardError
 from app.db import get_session
-from app.db.models import OPEN_STATUSES, Case, CaseStatus
+from app.db.models import OPEN_STATUSES, Case, CaseStatus, OutageWait
 from app.graph import facts
 
 log = logging.getLogger(__name__)
@@ -20,6 +23,8 @@ router = APIRouter()
 
 # Which roles may answer which approval step.
 MAY_DECIDE = {"analyst": ("analyst", "manager"), "manager": ("manager",)}
+# Who may run a case that waits for Bank or Card, or failed for want of them, again now.
+MAY_RETRY = ("analyst", "manager")
 # The report is shown once code has checked it, never while it is being drafted.
 # In the graph state "failed" means closed after approval: see _close_unconfirmed.
 REPORT_IS_CHECKED = ("needs_approval", "needs_manager", "done", "rejected", "failed")
@@ -36,6 +41,36 @@ class Decision(BaseModel):
     decided: Literal["keep_limit", "reduce_limit", "pause_card", "request_documents"] | None = None
 
 
+class Outage(BaseModel):
+    """Why a case waits for Bank or Card (waiting_for_data), or failed for want of them. See app/runner.py."""
+
+    service: str
+    # As the agent's service gave them, such as "http_503" or "http_401, timeout".
+    codes: str
+    kind: OutageKind
+    # Runs that met the outage, the first one included.
+    attempts: int
+    since: datetime
+    # None once the service retries no more: the case failed, and a person decides.
+    next_retry_at: datetime | None
+    message: str
+
+
+def _outage(wait: OutageWait | None) -> Outage | None:
+    if wait is None:
+        return None
+    shown = runner.outage_of(wait)
+    return Outage(
+        service=shown["service"],
+        codes=shown["codes"],
+        kind=shown["kind"],
+        attempts=shown["attempts"],
+        since=shown["first_seen"],
+        next_retry_at=shown["next_retry_at"],
+        message=runner.describe(shown),
+    )
+
+
 class CaseView(BaseModel):
     """The case page. The frontend reads this, never the graph state."""
 
@@ -46,10 +81,11 @@ class CaseView(BaseModel):
     report: dict | None
     decisions: list[dict]
     action: dict | None
+    outage: Outage | None
 
 
 class CasePath(BaseModel):
-    """How a case was investigated: what was asked, searched and checked, as ids and labels. For grading."""
+    """How a case was investigated: what was asked, searched and checked, and every record it held. For grading."""
 
     case_id: str
     flow: str | None
@@ -65,7 +101,12 @@ class CasePath(BaseModel):
     drafts: list[dict]
     # The ids of the records the case was given about the customer's earlier reviews.
     history: list[str]
+    # Every record of the case's ledger, its data raw but without text a customer or a person wrote. A grader
+    # matches what a report cites by kind and data, not by the id one specialist happens to give.
+    records: list[dict]
     handed_over_by: Literal["report", "low_confidence", "gave_up"] | None
+    # The question that met it is not among the questions: it was neither answered nor "no answer".
+    outage: Outage | None
 
 
 class CaseRow(BaseModel):
@@ -76,6 +117,7 @@ class CaseRow(BaseModel):
     status: CaseStatus
     created_at: datetime
     updated_at: datetime
+    outage: Outage | None
 
 
 class CaseList(BaseModel):
@@ -101,8 +143,13 @@ def list_cases(
     # Open cases only unless asked: otherwise old finished cases would fill the first page.
     wanted = (mine, Case.status == case_status if case_status else Case.status.in_(OPEN_STATUSES))
     total = session.scalar(select(func.count()).select_from(Case).where(*wanted))
-    rows = session.scalars(
-        select(Case).where(*wanted).order_by(Case.created_at, Case.case_id).limit(limit).offset(offset)
+    rows = session.execute(
+        select(Case, OutageWait)
+        .outerjoin(OutageWait, OutageWait.case_id == Case.case_id)
+        .where(*wanted)
+        .order_by(Case.created_at, Case.case_id)
+        .limit(limit)
+        .offset(offset)
     )
     return CaseList(
         cases=[
@@ -112,8 +159,9 @@ def list_cases(
                 status=CaseStatus(row.status),
                 created_at=row.created_at,
                 updated_at=row.updated_at,
+                outage=_outage(wait),
             )
-            for row in rows
+            for row, wait in rows
         ],
         total=total,
     )
@@ -129,7 +177,7 @@ def _case(session: Session, case_id: str, user: User, *, lock: bool = False) -> 
     return case
 
 
-def _view(case: Case, graph) -> CaseView:
+def _view(session: Session, case: Case, graph) -> CaseView:
     state, waiting = {}, None
     if graph is not None:
         snapshot = graph.get_state(runner.thread(case.case_id))
@@ -142,6 +190,7 @@ def _view(case: Case, graph) -> CaseView:
         report=state.get("report") if state.get("status") in REPORT_IS_CHECKED else None,
         decisions=state.get("decisions", []),
         action=state.get("action"),
+        outage=_outage(session.get(OutageWait, case.case_id)),
     )
 
 
@@ -152,7 +201,65 @@ def read_case(
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> CaseView:
-    return _view(_case(session, case_id, user), request.app.state.graph)
+    return _view(session, _case(session, case_id, user), request.app.state.graph)
+
+
+@router.post("/cases/{case_id}/retry", response_model=CaseView, status_code=status.HTTP_202_ACCEPTED)
+def retry(
+    case_id: str,
+    request: Request,
+    background: BackgroundTasks,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> CaseView:
+    """Run a case that waits for Bank or Card, or failed for want of them, again now: from the question that met the
+    outage, keeping everything asked before it. The run happens after the answer, which says "investigating".
+
+    It counts as one more attempt (runner._wait_or_fail): a failed case that meets the outage again fails again.
+    """
+    graph = request.app.state.graph
+    if graph is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "No model is configured, so no case can run")
+    case = _case(session, case_id, user, lock=True)
+    if user.role not in MAY_RETRY:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"The role {user.role} may not retry a case")
+    wait = session.get(OutageWait, case_id)
+    if wait is None or case.status not in (CaseStatus.WAITING_FOR_DATA, CaseStatus.FAILED):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"Case {case_id} is {case.status}. It is not waiting for Bank or Card"
+        )
+    if case.status == CaseStatus.FAILED:
+        # A failed case is closed, so the customer may have a newer one open. Reopening this one would make two.
+        other = session.scalar(
+            select(Case.case_id).where(Case.customer_id == case.customer_id, Case.status.in_(OPEN_STATUSES))
+        )
+        if other is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{case.customer_id} has another open case, {other}. Case {case_id} stays failed",
+            )
+    # Only if the status is still the one read: the retry loop may have taken the case since (SQLite has no row lock).
+    try:
+        taken = session.execute(
+            update(Case)
+            .where(Case.case_id == case_id, Case.status == case.status)
+            .values(status=CaseStatus.INVESTIGATING)
+            .execution_options(synchronize_session=False)
+        )
+        session.commit()
+    except IntegrityError:  # a signal opened a case for the customer in the meantime
+        session.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"{case.customer_id} has another open case. Case {case_id} stays failed"
+        ) from None
+    if taken.rowcount != 1:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Case {case_id} is already running again")
+    # What was written, without reading it back: a read here would open a transaction that the run, which starts
+    # before this session closes, has to wait for on SQLite.
+    set_committed_value(case, "status", CaseStatus.INVESTIGATING)
+    log.info("case %s: %s retries it after %s", case_id, user.sub, runner.describe(runner.outage_of(wait)))
+    background.add_task(runner.run_case, graph, case_id)
+    return _view(session, case, graph)
 
 
 @router.get("/cases/{case_id}/path", response_model=CasePath)
@@ -191,8 +298,26 @@ def read_path(
         gaps=gaps,
         drafts=drafts,
         history=[record["id"] for record in state.get("facts", []) if record["id"].startswith("hist_")],
+        records=[
+            {"id": record["id"], "kind": record["kind"], "data": _without_text(record["data"])}
+            for record in facts.ledger(state).values()
+        ],
         handed_over_by=handed_over_by,
+        outage=_outage(session.get(OutageWait, case.case_id)),
     )
+
+
+def _without_text(value):
+    """Data with the keys of free text taken out, at every depth. Figures keep their raw names: not facts.shown."""
+    if isinstance(value, dict):
+        return {
+            key: _without_text(item)
+            for key, item in value.items()
+            if key not in ("memo", "note") and not key.endswith("_text")
+        }
+    if isinstance(value, list):
+        return [_without_text(item) for item in value]
+    return value
 
 
 @router.post("/cases/{case_id}/decision", response_model=CaseView)
@@ -255,17 +380,20 @@ def decide(
         state = graph.invoke(resume, config, context={"approver_token": user.token})
     except CardError as error:
         log.warning("case %s: approved by %s, but Card did not carry out the action: %s", case_id, user.sub, error)
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            "The approval is recorded, but Card did not carry out the action. Send the approval again to retry",
-        ) from error
+        if error.refused:
+            # Sending the same approval again gets the same answer, so do not suggest it.
+            message = (f"The approval is recorded, but {error}. Sending it again will not change that; "
+                       "a manager can reject to close the case")
+        else:
+            message = "The approval is recorded, but Card did not carry out the action. Send the approval again to retry"
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, message) from error
 
     case.status = state["status"]
     # In the transaction that writes the status, so a closed case is never left without its review.
     history.record(session, case, state, ledger=facts.ledger)
     session.commit()
     log.info("case %s: %s by %s at the %s step, now %s", case_id, decision.decision, user.sub, step, case.status)
-    return _view(case, graph)
+    return _view(session, case, graph)
 
 
 def _close_unconfirmed(session: Session, case: Case, graph, user: User, note: str | None) -> CaseView:
@@ -288,4 +416,4 @@ def _close_unconfirmed(session: Session, case: Case, graph, user: User, note: st
     history.record(session, case, graph.get_state(config).values, ledger=facts.ledger)
     session.commit()
     log.warning("case %s: closed as failed by %s, Card never confirmed the approved action", case.case_id, user.sub)
-    return _view(case, graph)
+    return _view(session, case, graph)

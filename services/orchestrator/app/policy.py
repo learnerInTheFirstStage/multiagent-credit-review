@@ -1,6 +1,8 @@
 """The numbers and readings the credit guidelines rest on. The Orchestrator owner decides them."""
 
-POLICY_VERSION = "2026-11-16"
+# 2026-11-17: when Bank or Card gives nothing, the case waits and asks again (OUTAGE_RETRY_SECONDS), then fails with
+# the reason, instead of going to a person under G-11.
+POLICY_VERSION = "2026-11-17"
 
 EXPLAINS_BP = 5000        # "explains the fall", "the fall matches": at least half of it (G-01, G-04)
 LARGE_PART_BP = 2500      # "a large part of the fall", "the fall is a payment to": at least a quarter (G-02, G-09)
@@ -19,6 +21,10 @@ MIN_CASH_CENTS = None     # "the minimum Ramp asks for" (G-13). No number yet, s
 # The values of card_repayment.paid_since that count as "has not been paid" (G-08b).
 # "not_recorded" is the reading the owner has to rule on: the team's data does not say for c_010.
 UNPAID_MEANS = ("no", "not_recorded")
+
+# When Bank or Card gives nothing at all, the case waits and asks again: this many seconds after the first attempt,
+# then after the second, and so on. The attempt after the last one hands the case to a person as failed (app.runner).
+OUTAGE_RETRY_SECONDS = (60, 300, 900)
 
 # Readings of the policy that the owner has not ruled on. Each can be switched off on its own.
 RULES = {

@@ -21,6 +21,7 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app import policy
+from app.agents.errors import CaseWaiting, Unanswered
 from app.graph import facts, figures, needs, plans, prompts
 from app.graph.causes import CAUSE_NEEDS, CAUSES, OWN_KINDS, TOPIC_TESTS, TOPICS
 from app.graph.report import ReportDraft
@@ -94,6 +95,8 @@ class SearchPastCases(BaseModel):
 
 TOOLS = {"AskCashFlow": AskCashFlow, "AskCreditBehavior": AskCreditBehavior}
 AGENT_FOR_TOOL = {"AskCashFlow": "cash_flow", "AskCreditBehavior": "credit_behavior"}
+# The service each specialist reads, as a person is told when it gave nothing.
+SERVICE_OF = {"cash_flow": "Bank Service", "credit_behavior": "Card Service"}
 # Ids only the Orchestrator gives (1.4). A specialist's record under one would forge the case's own facts.
 _OWN_IDS = ("sig_", "hist_", "xs_")
 _FOCUS = ("record_id", "account_id")
@@ -736,6 +739,10 @@ def build_graph(
                 record_id=getattr(ask, "record_id", None),
             )
             returned = specialists[agent](request)
+            if isinstance(returned, Unanswered):
+                # Its service gave nothing at all: neither an answer nor no answer. The case stops before this
+                # question, which a later run asks again (app.runner), and nothing of this step is saved.
+                raise CaseWaiting(SERVICE_OF[agent], returned.reason, asked_before=len(state.get("asked", [])))
             # Checked again here: an answer that breaks the rules must not reach the report.
             response = InvestigateResponse.model_validate(
                 returned.model_dump() if isinstance(returned, BaseModel) else returned
@@ -745,6 +752,8 @@ def build_graph(
             _usable(response, known)
             answer["response"] = response.model_dump(mode="json")
             entry |= {"outcome": "answered", "returned": [item["id"] for item in answer["response"]["evidence"]]}
+        except CaseWaiting:
+            raise
         except Exception as error:  # a specialist that fails is "no answer", the case goes on
             log.warning("case %s: %s gave no usable answer: %s", state["case_id"], asked, error)
             answer.setdefault("error", f"No usable answer from {asked}.")

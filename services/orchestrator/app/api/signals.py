@@ -67,9 +67,9 @@ def _place(session: Session, signal: Signal) -> tuple[Case, Result]:
             )
         return session.get(Case, seen.case_id), "duplicate"
 
-    # The data files the stand-in specialists answer from are the only customer list the POC has. A case for
-    # anyone else would be investigated on no records. Reached only after may_send, so only a sender learns
-    # which ids exist. KAN-36: with the real specialists, ask Bank and Card which customers they hold.
+    # The data files are the POC's customer list: Bank and Card seed from the same files (SHARED_CUSTOMERS_YAML)
+    # that the stand-ins read, so this check needs no call to either service. A case for anyone else would be
+    # investigated on no records. Reached only after may_send, so only a sender learns which ids exist.
     # A plain 422: Starlette renamed its constant, and requirements.txt allows versions from before that.
     if signal.customer_id not in mock.customer_ids():
         raise HTTPException(422, f"customer {signal.customer_id} is not known")

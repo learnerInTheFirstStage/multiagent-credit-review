@@ -100,7 +100,9 @@ def test_the_queue_shows_a_token_only_its_own_customers_the_longest_waiting_firs
     first = queue.json()["cases"][0]
     assert first["customer_id"] == "c_010"
     assert first["status"] == "queued"
-    assert set(first) == {"case_id", "customer_id", "status", "created_at", "updated_at"}
+    # outage: why the case waits for Bank or Card, or failed for want of them (tests/test_outage_wait.py).
+    assert set(first) == {"case_id", "customer_id", "status", "created_at", "updated_at", "outage"}
+    assert first["outage"] is None
 
 
 def test_the_queue_leaves_out_closed_cases_unless_they_are_asked_for(api):
