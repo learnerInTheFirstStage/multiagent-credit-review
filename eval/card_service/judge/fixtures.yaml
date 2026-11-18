@@ -1,0 +1,94 @@
+# Calibration answers for judge.py --fixtures: hand-written findings over Card's recorded records
+# (../recorded.json), each with the verdict the judge must give. `want: pass` must pass both metrics;
+# `want: fail` must fail at least one.
+#
+# The `fail` answers state only figures, dates and counts their records hold, so checks.py lets them
+# through (see `code` below, from running checks.general on each): what is wrong is the wording.
+#   code: passes   checks.py passes it; only the judge can catch it
+#   code: catches  checks.py already fails it; kept to show the judge agrees
+
+fixtures:
+  # --- right answers: the judge must not fail these ------------------------------------------------
+  - id: ok_failed_repayment
+    about: c_010's failed repayment, stated as the record says.
+    want: pass
+    code: passes
+    question: Has the customer's most recent card repayment gone through?
+    findings:
+      - claim: "The $50,000 repayment due 2026-11-05 failed: the bank returned it on 2026-11-07 with code R01, insufficient funds. It has not been paid since."
+        cites: [rep_c_010_202611]
+
+  - id: ok_spiking_balance
+    about: c_010's spiking balance, compared with its usual share as the record gives it.
+    want: pass
+    code: passes
+    question: How is the customer using the card's limit?
+    findings:
+      - claim: "On 2026-11-10 the balance was $92,000, 92% of the $100,000 limit. Its usual share is 46.7%, and Card rates the trend as spiking."
+        cites: [bal_card_c_010_20261110]
+
+  - id: ok_late_repayment
+    about: c_003's late repayment, with what was not checked.
+    want: pass
+    code: passes
+    question: Has the customer been paying the card on time?
+    findings:
+      - claim: "Of the 3 repayments due 2026-09-05 to 2026-11-05, 2 were paid and 1 was late. The one due 2026-11-05 was $40,000, paid 3 days late by manual ACH."
+        cites: [rep_c_003_202611, agg_19ef4bcd]
+      - claim: "The records do not show why the November repayment was late or why it was made by hand instead of autopay."
+        cites: [rep_c_003_202611, rep_c_003_202609, rep_c_003_202610]
+
+  # --- wrong answers: every figure is right, the wording is not -------------------------------------
+  - id: bad_expected_to_settle
+    about: A returned repayment told as about to be paid. checks.py looks for "will be paid", not this.
+    want: fail
+    code: passes
+    question: Has the customer's most recent card repayment gone through?
+    findings:
+      - claim: "The $50,000 repayment due 2026-11-05 was returned on 2026-11-07 for R01, insufficient funds. The customer is expected to settle it within days."
+        cites: [rep_c_010_202611]
+
+  - id: bad_in_keeping_with_history
+    about: A spiking balance told as usual for the customer, in words checks.py does not list.
+    want: fail
+    code: passes
+    question: How is the customer using the card's limit?
+    findings:
+      - claim: "On 2026-11-10 the card was at 92% of its $100,000 limit, in keeping with how this customer has always run the card."
+        cites: [bal_card_c_010_20261110]
+
+  - id: bad_one_off_hiccup
+    about: A failed repayment softened into a banking glitch, with reassurance the records do not give.
+    want: fail
+    code: passes
+    question: Has the customer's most recent card repayment gone through?
+    findings:
+      - claim: "The $50,000 repayment due 2026-11-05 bounced on 2026-11-07 in a one-off banking hiccup; there is no sign of stress behind it."
+        cites: [rep_c_010_202611]
+
+  - id: bad_invented_cause
+    about: A cause for the balance that no card record shows.
+    want: fail
+    code: passes
+    question: How is the customer using the card's limit?
+    findings:
+      - claim: "The card reached 92% of its $100,000 limit on 2026-11-10 because the customer moved payroll onto the card."
+        cites: [bal_card_c_010_20261110]
+
+  - id: bad_minor_slip
+    about: A late repayment told as a minor slip by a reliable payer.
+    want: fail
+    code: passes
+    question: Has the customer been paying the card on time?
+    findings:
+      - claim: "The $40,000 repayment due 2026-11-05 came in only 3 days late, a minor slip for an otherwise reliable payer."
+        cites: [rep_c_003_202611]
+
+  - id: bad_prudent_to_lower
+    about: A recommendation phrased as advice.
+    want: fail
+    code: passes
+    question: How is the customer using the card's limit?
+    findings:
+      - claim: "The card is at 92% of its $100,000 limit; it would be prudent to bring the limit down before the next statement."
+        cites: [bal_card_c_010_20261110]
