@@ -1,14 +1,16 @@
 """Bank Service data model. Per Cash Flow PRD v0.2 "Data" section.
 
-Six tables:
+Seven tables:
+  bank_clock          — the day the data was generated for, and the window lengths (one row).
   customers           — one row per test customer.
-  counterparties      — shared pool of payees, reused across customers.
+  counterparties      — payees and payers. Shared ones (payroll, tax) and one per customer otherwise.
   linked_accounts     — customer accounts Ramp sees. Many-to-one to customer.
   daily_balances      — closing balance per account per day.
-  bank_transactions   — one row per itemised money movement in the window.
-  prior_year_weekly   — weekly inflow / outflow one year back, for the
-                        compare_to_prior_year tool (only populated where
-                        a customer's story calls for it).
+  bank_transactions   — money movements, every one of them itemised: each carries `ref`, the
+                        evidence id it is cited by, a category and a counterparty.
+  prior_year_weekly   — weekly inflow / outflow one year back: the totals of that week's
+                        transactions, for the compare_to_prior_year tool (only populated
+                        where a customer's story calls for it).
 
 Enums are stored as VARCHAR + CHECK constraint (SQLAlchemy Enum with
 native_enum=False). Values match data/shared_customers.yaml enums:.
@@ -43,6 +45,7 @@ TRANSACTION_CATEGORIES = (
     "transfer_other",
     "income",
     "other",
+    "operating",
 )
 COUNTERPARTY_KINDS = (
     "payroll_vendor",
@@ -54,12 +57,37 @@ COUNTERPARTY_KINDS = (
 LINKED_ACCOUNT_TYPES = ("checking", "savings")
 
 
+INCOME_TRENDS = ("steady", "shrinking", "stopped", "too_short_to_tell")
+# What this week's inflows are set against: the week thirteen weeks back, or the usual week.
+INFLOW_LEVELS = ("three_months_ago", "usual")
+
+
+class BankClock(Base):
+    """The scenario clock the data was generated for. One row, written by the seeder."""
+
+    __tablename__ = "bank_clock"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    signal_date: Mapped[date] = mapped_column(Date, nullable=False)
+    window_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    trailing_weeks: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class Customer(Base):
     __tablename__ = "customers"
 
     customer_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # The label the data file gives the weekly inflow series, and the level it is read against.
+    income_trend: Mapped[str] = mapped_column(
+        Enum(*INCOME_TRENDS, name="income_trend", native_enum=False, create_constraint=True),
+        nullable=False,
+    )
+    inflow_compared_with: Mapped[str | None] = mapped_column(
+        Enum(*INFLOW_LEVELS, name="inflow_level", native_enum=False, create_constraint=True),
+        nullable=True,
+    )
 
     accounts: Mapped[list["LinkedAccount"]] = relationship(back_populates="customer")
 
@@ -151,6 +179,10 @@ class BankTransaction(Base):
     counterparty_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("counterparties.id"), nullable=True
     )
+    # The evidence id the transaction is cited by (txn_<customer>_<nn> and the like, app/api/evidence.py).
+    ref: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    # The account a transfer went to, when it is known.
+    to_account: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Memos reach the model; c_009 keeps a prompt-injection string here on purpose.
     memo: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -169,6 +201,7 @@ class PriorYearWeekly(Base):
     inflow_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
     outflow_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
+    # year is the ISO year the week belongs to.
     __table_args__ = (
         PrimaryKeyConstraint("customer_id", "year", "week"),
         CheckConstraint("week BETWEEN 1 AND 53", name="week_in_range"),
