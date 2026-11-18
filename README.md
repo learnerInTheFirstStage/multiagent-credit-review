@@ -9,7 +9,7 @@ All customers and data are simulated. This project is not affiliated with Ramp.
 - **Orchestrator**: takes a review signal at `POST /signals`, investigates the case on a LangGraph graph, writes a report that code checks, pauses for the analyst and, where needed, the manager, and sends an approved action to Card. It asks the real Cash Flow and Card agents (`SPECIALISTS=stand_in` switches to stand-ins that read the data files). If Bank or Card is down, the case waits and retries, then fails with the reason. It keeps closed reviews as history and traces every model and tool call to LangFuse. See `services/orchestrator/README.md`.
 - **Bank**: seeds every customer in `data/shared_customers.yaml` and `eval/extra_customers.yaml` as a complete bank feed (every movement of the week, 13 weeks of history, last year's same weeks) and serves the Cash Flow agent's read-only tools. See `services/bank/README.md`.
 - **Card**: seeds the same customers with about 14 months of card history. `GET /snapshots` gives each customer's limit, balance and last three repayments. Its read-only tools serve the Card agent, and `POST /customers/{id}/actions` carries out an approved `reduce_limit` or `pause_card` once per approval.
-- **Evaluation**: a golden set of 27 test customers with expected answers, graded by code (`eval/`). Verified on the real model on 2026-11-17 on four cases; the full set has not been run yet.
+- **Evaluation**: a golden set of 27 test customers with expected answers, graded by code (`eval/`). On the real model on 2026-11-17, 14 of them ran once each: the recommendation was right on 13 and the cause on 11. On 2026-11-18 c_010 ran from signal to Card's action following this README: `pause_card` under G-08b, approved by the analyst and the manager, card paused. The full set has not been run yet.
 - **Auth, frontend**: skeletons. Auth answers `/health`; tokens come from `python -m app.dev_token` in the Orchestrator container. The frontend is a placeholder page.
 
 ## Architecture
@@ -32,6 +32,23 @@ Four FastAPI services, each with its own Postgres database and login role. The g
 
 All three agents run in the Orchestrator Service: the main agent and the two specialists (Cash Flow, Card), which it calls as tools in-process. Bank and Card run no model. They own the data and serve read-only analysis tools over HTTP. The stand-ins in `services/orchestrator/app/agents/mock.py` answer from the data files instead; the tests use them.
 
+## Quick start
+
+You need git, Docker and Python 3.12. A model API key is needed only to run cases (steps 3 and 4).
+
+```bash
+git clone https://github.com/lqc412/multiagent-credit-review.git
+cd multiagent-credit-review
+git checkout KAN-36-poc-complete   # until the KAN-36 pull requests are merged; after that, stay on main
+```
+
+1. Run the tests: [Run the tests](#run-the-tests). No Docker, no key. This also creates the Python environment steps 3 and 4 use.
+2. Start the stack and check the health URLs: [Run it](#run-it).
+3. Run one case on the real model, from signal to Card's action: [Run one case end to end](#run-one-case-end-to-end).
+4. Grade a few cases against the golden set: [Run the evaluation](#run-the-evaluation).
+
+The stacks of steps 2, 3 and 4 use the same ports, so run one at a time (`docker compose -p <project> down -v` stops one).
+
 ## Run it
 
 Needs Docker.
@@ -51,15 +68,22 @@ To start again with empty databases: `docker compose down -v`. A volume seeded b
 
 ### Run one case end to end
 
-This spends money on the model (about $0.50 a case). Set `LLM_MODEL`, `LLM_API_KEY` and `LLM_STRUCTURED_OUTPUT=json_schema` in `.env` (see Configuration), and the LangFuse keys if you want traces. Then, from the repository root, with the Orchestrator's test environment (see Run the tests):
+This spends money on the model (about $0.20 to $0.55 a case). Create `.env` from the example and set the model (see Configuration), and the LangFuse keys if you want traces:
+
+```bash
+cp .env.example .env
+# then in .env: LLM_MODEL=anthropic:claude-sonnet-5-5, LLM_API_KEY=<your key>, LLM_STRUCTURED_OUTPUT=json_schema
+```
+
+Then, from the repository root, with the Orchestrator's test environment (see Run the tests):
 
 ```bash
 docker compose -p e2e -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build
-services/orchestrator/.venv/bin/python scripts/e2e.py --customer c_013
+services/orchestrator/.venv/bin/python scripts/e2e.py
 docker compose -p e2e down -v
 ```
 
-It sends one customer's signal, prints the agent's questions and the checked report, approves as the analyst (and the manager when needed), and checks that Card did what the report says. Any customer in the two data files works. Options and expected results are in `scripts/README.md`.
+It sends one customer's signal (c_010 by default), prints the agent's questions and the checked report, approves as the analyst (and the manager when needed), and checks that Card did what the report says. For c_010 the report should recommend `pause_card` under G-08b, and Card's card goes from `active` to `paused`. `--customer c_009` runs another customer; any customer in the two data files works. Options and expected results are in `scripts/README.md`.
 
 ### Run the tests
 

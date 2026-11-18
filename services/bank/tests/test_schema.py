@@ -17,9 +17,10 @@ from app.db.models import (
 )
 
 
-def test_all_six_tables_exist(session):
+def test_all_seven_tables_exist(session):
     tables = set(inspect(engine).get_table_names())
     assert {
+        "bank_clock",
         "customers",
         "counterparties",
         "linked_accounts",
@@ -51,7 +52,7 @@ def test_foreign_key_from_linked_account_to_customer(session):
 
 def test_transaction_category_check_rejects_unknown_value(session):
     session.add(
-        Customer(customer_id="c_test", name="Test", created_at=datetime(2024, 1, 1))
+        Customer(customer_id="c_test", name="Test", created_at=datetime(2024, 1, 1), income_trend="steady")
     )
     session.add(
         LinkedAccount(
@@ -79,7 +80,7 @@ def test_transaction_category_check_rejects_unknown_value(session):
 
 def test_daily_balance_composite_primary_key(session):
     session.add(
-        Customer(customer_id="c_test", name="Test", created_at=datetime(2024, 1, 1))
+        Customer(customer_id="c_test", name="Test", created_at=datetime(2024, 1, 1), income_trend="steady")
     )
     session.add(
         LinkedAccount(
@@ -102,7 +103,7 @@ def test_daily_balance_composite_primary_key(session):
 
 def test_prior_year_week_in_range(session):
     session.add(
-        Customer(customer_id="c_test", name="Test", created_at=datetime(2024, 1, 1))
+        Customer(customer_id="c_test", name="Test", created_at=datetime(2024, 1, 1), income_trend="steady")
     )
     session.flush()
     session.add(
@@ -116,5 +117,42 @@ def test_prior_year_week_in_range(session):
 
 def test_counterparty_kind_check(session):
     session.add(Counterparty(display_name="x", kind="nonsense_kind"))
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def _account(session):
+    session.add(Customer(customer_id="c_test", name="Test", created_at=datetime(2024, 1, 1), income_trend="steady"))
+    session.add(
+        LinkedAccount(
+            id="acct_test",
+            customer_id="c_test",
+            type="checking",
+            opened_at=date(2024, 1, 1),
+            last_reported_at=date(2024, 1, 1),
+            active=True,
+        )
+    )
+    session.flush()
+
+
+def test_a_ref_cites_one_transaction_only(session):
+    _account(session)
+    for _ in range(2):
+        session.add(BankTransaction(account_id="acct_test", date=date(2024, 1, 1), amount_cents=-1, category="tax", ref="txn_c_test_01"))
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_every_transaction_has_a_ref(session):
+    """Every movement is listed and cited: there is no hidden row any more."""
+    _account(session)
+    session.add(BankTransaction(account_id="acct_test", date=date(2024, 1, 1), amount_cents=-1, category="operating"))
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_income_trend_check_rejects_unknown_label(session):
+    session.add(Customer(customer_id="c_bad", name="Bad", created_at=datetime(2024, 1, 1), income_trend="booming"))
     with pytest.raises(IntegrityError):
         session.flush()

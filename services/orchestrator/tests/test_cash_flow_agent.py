@@ -83,10 +83,14 @@ def test_c002_cash_summary_then_transactions_finds_unlinked_transfer():
 
     assert isinstance(result, InvestigateResponse)
     assert result.agent == "cash_flow"
-    assert len(result.findings) == 1
-    assert result.findings[0].evidence_ids == ["txn_1", "agg_abcd"]
-    # evidence pool only keeps what the surviving finding cites
-    assert {e.id for e in result.evidence} == {"txn_1", "agg_abcd"}
+    # The model's finding, after the hard fact code writes for a transfer to the customer's own account.
+    assert len(result.findings) == 2
+    assert result.findings[0].evidence_ids == ["txn_1"]
+    assert result.findings[1].evidence_ids == ["txn_1", "agg_abcd"]
+    # The evidence is what the topic's preflight fetched (cash_summary and transactions), cited or not,
+    # so the Orchestrator's rules see it whatever the model cites.
+    assert {e.id for e in result.evidence} == {
+        "txn_1", "agg_abcd", "bal_acct_c002_a_20261103", "bal_acct_c002_a_20261110"}
     assert result.suggested_next == "Check whether inflows changed."
 
 
@@ -130,9 +134,11 @@ def test_reconciliation_topic_surfaces_c012_gap():
         bank_tool_response(
             data={"balance_delta_cents": -29_000_000, "txn_sum_cents": -9_500_000,
                   "discrepancy_cents": -19_500_000, "reconciled": False},
+            # The kind and keys the Bank Service returns (the stand-in's): the claim's figures are in it.
             evidence_items=[
-                evidence("agg_rec_c012", "balance_vs_txn_reconciliation",
-                         discrepancy_cents=-19_500_000, reconciled=False),
+                evidence("agg_rec_c012", "balance_reconciliation", balance_change_cents=-29_000_000,
+                         transactions_total_cents=-9_500_000, reconciled=False,
+                         unmatched_cents=19_500_000, unmatched_share_bp=6724),
             ],
         ),
     )
@@ -151,8 +157,9 @@ def test_reconciliation_topic_surfaces_c012_gap():
         model=model,
         http=stub.client(),
     )
-    assert len(result.findings) == 1
-    assert "reconcile" in result.findings[0].claim.lower()
+    # The model's finding, and the hard fact code writes for reconciled false whatever the model says.
+    assert len(result.findings) == 2
+    assert all("reconcile" in finding.claim.lower() for finding in result.findings)
 
 
 def test_insufficient_data_returns_empty_findings_and_a_reason():
@@ -287,7 +294,9 @@ def test_claim_citing_unknown_evidence_is_dropped():
     )
     assert len(result.findings) == 1
     assert result.findings[0].claim == "A real claim."
-    assert any("txn_9999" in reason for reason in result.could_not_determine)
+    # Said, and counted: an id no tool returned is the model's text, so it is never quoted.
+    assert any("cites 1 id no tool returned" in reason for reason in result.could_not_determine)
+    assert not any("txn_9999" in reason for reason in result.could_not_determine)
 
 
 def test_claim_with_limit_verb_is_blocked():
@@ -608,10 +617,12 @@ def test_model_invoke_raising_becomes_a_could_not_determine():
             raise RuntimeError("simulated provider outage")
 
     model = _AngryModel(script=[])
+    # Bank answers (with no records): when it answers nothing at all the model is not called.
+    stub = BankStub().when("cash_summary", bank_tool_response(data={}, evidence_items=[]))
     result = cash_flow(
         InvestigateRequest.model_validate(request_payload()),
         model=model,
-        http=BankStub().client(),
+        http=stub.client(),
     )
     assert result.findings == []
     assert any("model call failed" in reason.lower() for reason in result.could_not_determine)

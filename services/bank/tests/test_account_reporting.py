@@ -1,33 +1,47 @@
-"""account_reporting endpoint tests. c_005 is the main story."""
+"""account_reporting: each linked account, when it last reported, and payments to an account that is not linked."""
 
-
-def _get(client, headers, customer, as_of="2026-11-10"):
-    return client.get(
-        f"/customers/{customer}/tools/account_reporting?as_of={as_of}",
-        headers=headers,
-    )
+from tests.conftest import call, evidence_by_id
 
 
 def test_c005_has_one_stale_and_one_fresh(client, auth_headers):
-    response = _get(client, auth_headers, "c_005")
-    assert response.status_code == 200
-    accounts = response.json()["data"]["accounts"]
-    assert len(accounts) == 2
-    by_id = {a["id"]: a for a in accounts}
-    assert by_id["acct_c005_a"]["days_stale"] == 5
-    assert by_id["acct_c005_b"]["days_stale"] == 0
+    """Regression: the kind was account_reporting_status, and staleness depended on an as_of argument."""
+    body = call(client, auth_headers, "c_005", "account_reporting").json()
+    assert body["data"] == {"account_ids": ["acct_c005_a", "acct_c005_b"]}
+    records = evidence_by_id(body)
+    assert records["acct_c005_a"] == {
+        "id": "acct_c005_a",
+        "kind": "linked_account",
+        "data": {"active": True, "days_stale": 5, "last_synced": "2026-11-05", "is_stale": True},
+    }
+    assert records["acct_c005_b"]["data"]["is_stale"] is False
 
 
-def test_evidence_matches_accounts(client, auth_headers):
-    body = _get(client, auth_headers, "c_005").json()
-    evidence_ids = {e["id"] for e in body["evidence"]}
-    account_ids = {a["id"] for a in body["data"]["accounts"]}
-    assert evidence_ids == account_ids
+def test_staleness_reads_the_service_clock_not_an_argument(client, auth_headers):
+    plain = call(client, auth_headers, "c_005", "account_reporting").json()
+    asked = call(client, auth_headers, "c_005", "account_reporting", as_of="2026-12-01").json()
+    assert asked["evidence"] == plain["evidence"]
 
 
-def test_c002_single_fresh_account(client, auth_headers):
-    body = _get(client, auth_headers, "c_002").json()
-    accounts = body["data"]["accounts"]
-    assert len(accounts) == 1
-    assert accounts[0]["days_stale"] == 0
-    assert accounts[0]["active"] is True
+def test_as_of_date_moves_the_clock(client, auth_headers, monkeypatch):
+    monkeypatch.setenv("AS_OF_DATE", "2026-11-12")
+    data = evidence_by_id(call(client, auth_headers, "c_005", "account_reporting").json())["acct_c005_b"]["data"]
+    assert (data["days_stale"], data["is_stale"]) == (2, True)
+
+
+def test_one_linked_account(client, auth_headers):
+    body = call(client, auth_headers, "c_005", "account_reporting", account_id="acct_c005_a").json()
+    assert body["data"] == {"account_id": "acct_c005_a", "linked": True}
+    assert [r["id"] for r in body["evidence"]] == ["acct_c005_a"]
+
+
+def test_an_account_that_is_not_linked_shows_what_went_to_it(client, auth_headers):
+    body = call(client, auth_headers, "c_106", "account_reporting", account_id="acct_external_new_c106").json()
+    assert body["data"] == {"account_id": "acct_external_new_c106", "linked": False, "transaction_ids": ["txn_c_106_02"]}
+    assert [r["id"] for r in body["evidence"]] == ["acct_c106_a", "txn_c_106_02"]
+    assert evidence_by_id(body)["txn_c_106_02"]["data"]["to_account"] == "acct_external_new_c106"
+
+
+def test_an_account_nothing_went_to(client, auth_headers):
+    body = call(client, auth_headers, "c_006", "account_reporting", account_id="acct_external_new_c006").json()
+    assert body["data"]["transaction_ids"] == []
+    assert [r["id"] for r in body["evidence"]] == ["acct_c006_a"]

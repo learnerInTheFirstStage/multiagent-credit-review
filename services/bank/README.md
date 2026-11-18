@@ -2,12 +2,57 @@
 
 Owner: Allen.
 
-Linked accounts, daily balances and transactions, served as read-only analysis tools. No model runs here.
+Linked accounts, daily balances and transactions, served as read-only analysis tools. No model runs here. The Cash Flow agent that calls them lives in `services/orchestrator/app/agents/cash_flow`.
 
-The Cash Flow Agent that calls these tools lives in `services/orchestrator/app/agents/cash_flow`.
+## Tool interface for the Cash Flow agent
 
-Today: `GET /health` is the only endpoint. Every start creates six tables (customers, counterparties, linked_accounts, daily_balances, bank_transactions, prior_year_weekly) and, when the database is empty, seeds the 12 customers from `data/shared_customers.yaml` (`SHARED_CUSTOMERS_YAML` overrides the path). After changing that file, run `docker compose down -v` and `docker compose up --build`, since the file is copied into the image. To seed an empty database by hand: `docker compose exec bank python -m app.db.seed`. Tests: `services/bank/tests`. Nothing calls Bank yet: the Orchestrator's stand-in Cash Flow specialist reads the YAML file directly.
+Every tool is `GET /customers/{customer_id}/tools/<name>` with a service token (role `service`, the customer in its `customers` claim). The answer is `{data, evidence}`. `evidence` holds the records, in the kinds, ids and keys the Orchestrator's rules read: the same as the stand-in Cash Flow specialist's (`services/orchestrator/app/agents/mock.py`). `data` says what was asked, which ids answer it, and in `not_available` what could not be worked out and why. Figures are in the evidence only.
 
-Next: the tasks under the "Bank Service + Cash Flow Agent" epic (KAN-5). The topics the Cash Flow Agent must answer are listed in `services/orchestrator/README.md` (Agents). The evidence kinds are `KIND_TOPIC` in `services/orchestrator/app/graph/causes.py`, and `services/orchestrator/app/agents/mock.py` returns every kind and key the checks read.
+A window is `start` and `end` (ISO dates, both optional): the cash at the end of `start` against the cash at the end of `end`, and the transactions dated after `start` up to `end`. Left out, it is the review window: the as-of date less 7 days, to the as-of date. The as-of date is `AS_OF_DATE`, or else the data file's `signal_date`. `start` equal to `end` is that one day (the cash at the end of the day before, to the end of that day); `start` after `end` is a 422; an unknown customer is a 404.
+
+| Stand-in topic | Tool | Parameters | Evidence returned |
+|---|---|---|---|
+| `transactions` | `transactions` | `start`, `end`; `category`, `min_abs_amount_cents`, `limit` (1-500, default 100) only choose which transactions are listed | `bal_{cid}` (`daily_balance`), each listed `txn_{cid}_{nn}` (`bank_transaction`), `agg_{cid}_payments` (`payment_summary`) |
+| - | `cash_summary` | `start`, `end` | `bal_{cid}`, `agg_{cid}_payments`: the same records without the list |
+| `income` | `income_trend` | none | `agg_{cid}_inflows` (`weekly_inflow_series`) |
+| `payee_history` | `payee_history` | `record_id`, required: a transaction id such as `txn_c_011_01` | the payee's history (`payee_history`) when it was paid before, whatever the payment was for, then the transaction itself |
+| `accounts` | `account_reporting` | `account_id`, optional | no id: every `acct_*` (`linked_account`). A linked id: that one. Any other id: every linked account, and each payment of the review window whose `to_account` is that id |
+| `reconciliation` | `balance_vs_txn` | `start`, `end` | `agg_{cid}_reconciliation` (`balance_reconciliation`), `bal_{cid}` |
+| `prior_year` | `prior_year_compare` | none | `agg_{cid}_prior_year` (`prior_year_comparison`) |
+
+What changed for a caller of the earlier tools: `payee_history` takes `record_id` instead of `counterparty_id`; `income_trend` no longer takes `end` or `weeks`, `account_reporting` no longer takes `as_of`, and `prior_year_compare` no longer takes `start` or `end` (each answers for the service clock; extra parameters are ignored). The window of `transactions`, `cash_summary` and `balance_vs_txn` became optional.
+
+Records and keys (cents are integers, shares are basis points rounded half up):
+
+- `bank_transaction`: `date`, `amount_cents` (negative out), `category`, `counterparty_kind`; `to_account` and `memo` only when the transaction has one (a memo is the customer's text, word for word); `share_of_fall_bp` on a payment of the review window, only when linked cash fell and every linked account reports. The share is always against the review window's fall, whichever window lists the transaction. No payee name is sent.
+- `daily_balance`: `cash_week_ago_cents`, `cash_now_cents`, `change_cents`. Linked cash on a day is the balances reported that day, so an account that stopped reporting drops out.
+- `payment_summary`: `listed_count`, `listed_out_cents`, `listed_share_bp`, `listed_in_cents` (when income is listed), `payroll_and_tax_cents` and `_share_bp` (when there is either), `by_category` (`count`, `out_cents`, `share_bp`). Only when cash fell and every account reports. Every transaction is listed, so the payments are the fall plus the income of the window: `listed_share_bp` is over 10000 wherever income came in. (`not_listed_cents` and `not_listed_share_bp` are gone: nothing is left out of the list.)
+- `balance_reconciliation`: `balance_change_cents`, `transactions_total_cents`, `reconciled` (exact, to the cent), and `unmatched_cents`, `unmatched_share_bp` when it does not reconcile. No record (no verdict) when an account is not reporting or cash did not fall.
+- `weekly_inflow_series`: `weekly_inflow_cents` (the last 7 days), `income_trend` (`steady`, `shrinking`, `stopped`, `too_short_to_tell`), `weeks` (13), and when the trend is read against a level, `compared_with` (`three_months_ago` or `usual`), that level (`weekly_inflow_3mo_ago_cents`: the oldest week; `weekly_inflow_typical_cents`: the median earlier week) and `vs_compared_bp`. `series` lists each week (`week_end`, `inflow_cents`), oldest first.
+- `payee_history`: `n_prior_payments`, `typical_amount_cents` when every earlier payment was the same, else `typical_amount_cents_min` and `_max`, `first_seen_months_ago`, `about` (the transaction id), `amount_cents`, `usual_top_cents`, and `vs_usual_bp` only about a payment to a vendor paid before (`vendor_known`): the Orchestrator's G-02 reads `vs_usual_bp` on any payee history, whatever payment it is about, so a running cost or a payroll run in line with its own history would pass for the vendor's.
+- `linked_account`: `active`, `days_stale`, `last_synced`, `is_stale`.
+- `prior_year_comparison`: `outflow_cents`, `inflow_cents` (every payment and receipt of last year's same weeks), `period_days`, `window_days`, `window_out_cents` (every payment of the review window), `window_vs_prior_out_bp`. The same kinds of movement in both years.
+
+One id, one content: a record depends only on the rows behind it and the service clock, never on the tool or its arguments. A window other than the review window gets records of its own: `bal_{cid}_{hash8}`, `agg_{cid}_payments_{hash8}`, `agg_{cid}_reconciliation_{hash8}`, carrying `start` and `end`. A payee's history is `agg_{cid}_payee_history` about the review window's first payment to a vendor paid before; about any other payment, the payment's number follows: `agg_{cid}_payee_history_{nn}` for one of the window (a running cost, a payroll run), `_p{nn}` for an earlier payment seeded from payee history (`txn_{cid}_p{nn}`), `_w{weeks back}_{nn}` and `_y{n}_{nn}` for one of the weeks before or of last year. A transaction of a week before the review window is `txn_{cid}_w{weeks back}_{nn}`, and one of the n-th of last year's weeks `txn_{cid}_y{n}_{nn}` (`y01`, `y02`), `{nn}` being the review window's transaction it recurs from: a narrowed `transactions` window lists them. `tests/test_standin_parity.py` checks every customer and topic against the stand-in, and `tests/test_evidence_ids.py` checks that no id ever carries two contents.
+
+## Data
+
+Every start refuses to run without `JWT_SECRET`, creates seven tables (bank_clock, customers, counterparties, linked_accounts, daily_balances, bank_transactions, prior_year_weekly) and, when the database is empty, seeds them from `data/shared_customers.yaml`. `SHARED_CUSTOMERS_YAML` overrides the path, and takes several files separated by `:` (the evaluation adds `eval/extra_customers.yaml`); the first file sets the clock, and a customer in two files is refused. After changing a file, run `docker compose down -v` and `docker compose up --build`, since the team's file is copied into the image (another file has to be mounted). To seed an empty database by hand: `docker compose exec bank python -m app.db.seed`. The tables changed with the tool interface above and there are no migrations: a database seeded before it needs `docker compose down -v` too.
+
+Set `AS_OF_DATE` only to the data's `signal_date` for now. The stand-in does not read it, and the seeded balances and last year's weeks are laid out around `signal_date`: another date moves the review window off the data.
+
+The seeder reads only the data, never a customer id (`app/db/seed.py` has the rules):
+
+Every row is a transaction with a ref, a category and a counterparty: there are no hidden rows. Nothing is counted in balances, the reconciliation or the weekly inflows that a tool cannot list.
+
+- Each `bank_events` entry is a transaction, `txn_{cid}_{nn}` in file order: the whole feed of the review window, the story's events and then the everyday receipts (`income`) and running costs (`operating`). Its memo is the event's `memo`; `counterparty` names its payee or payer (stored, never sent); a `note` is the file authors' comment and is not stored.
+- The window's receipts must add up to `weekly_inflow_cents`, and all its transactions to the change in cash. A file that does not add up is refused, except by the gap it names in `signal_window.intended_gap`: `account_not_reporting` (the cash of an account that stopped reporting drops out of linked cash, and nothing explains that) or `books_do_not_reconcile` (the balance falls by the gap more than the transactions).
+- `days_stale` stops an account's balances that many days before the signal date.
+- The thirteen weeks before the window repeat its everyday business, to the same payers and payees on the same weekdays, in the window's proportions: receipts follow the baselines (falling evenly from `weekly_inflow_3mo_ago_cents`, flat at `weekly_inflow_typical_cents` before this week, or flat) and running costs are `weekly_operating_outflow_cents`. The file's `income_trend` is stored as the file states it: the two figures the file gives cannot tell `stopped` from `too_short_to_tell` without a cut-off the file does not have.
+- Payroll and tax recur at their own pace over those weeks, to the same payee on the same weekday at the same amount: each payroll run of the window every two weeks before it (six earlier runs), each tax payment one quarter (13 weeks) before it.
+- `payee_history_hint` becomes earlier payments to the payee of the first payment to a known vendor, the first `first_seen_months_ago` months back. No generated row goes to the payee of any other vendor, a transfer or a new payee, so those read as never paid before. Every other payee's history is the rows above, as the stand-in works them out from the same file.
+- `prior_year_same_two_weeks` is every payment and receipt of the ISO weeks of last year the review window's days fall in: split evenly over those weeks, then generated like a week before the window, so last year's large payments (c_007's stocking-up) show as running costs: a row to the story's vendor would give it a payee history, which the rules read (G-02). Each week's totals are its `prior_year_weekly` row, which is also what says the feed holds last year's weeks.
+
+Tests: `services/bank/tests`, on SQLite by default; `BANK_TEST_DATABASE_URL` runs them on an empty, throwaway Postgres database instead (every test drops and recreates the tables). The parity test loads the stand-in from `services/orchestrator` read-only.
 
 Database: `bank`. Local port: 8002. Not routed by the gateway; only the Orchestrator calls it.
