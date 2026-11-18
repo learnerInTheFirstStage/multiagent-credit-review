@@ -102,6 +102,12 @@ def test_ids_that_hold_digits_are_not_figures():
     assert figures("_hist_seed_c_007_2025_, __G-07__, _c_010_ and *txn_c_010_01*") == {}
 
 
+def test_card_transaction_and_card_ids_are_not_figures():
+    # The Card Service names a transaction ctx_<customer>_<n> and a card crd_<customer>_<n>.
+    assert figures("ctx_c_003_00942 was declined on crd_c_010_1.") == {}
+    assert not_backed("Why was ctx_c_003_00942 declined?", set()) == []
+
+
 def test_emphasis_or_a_missing_space_does_not_hide_a_figure():
     # An underscore is markdown once the ids are gone, and a full stop is a decimal point only after a digit.
     assert figures("Roughly _90,000_ is not accounted for.") == {"n:90000": "90,000"}

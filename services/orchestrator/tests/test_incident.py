@@ -2,9 +2,15 @@
 
 In the pilot a report on c_010 said that weekly inflows of about $80,000 would make true outflows
 about $310,000, so roughly $90,000 was not accounted for. The model had worked both figures out
-itself, no record held them, and the analyst read them as findings. These tests are the part the
-report check can stop on the figures alone, on the test guidelines. What stops the incident where
-its figure happens to be a record value is the guideline, cause and gap rules, tested apart.
+itself, no record held them, and the analyst read them as findings. The bank feed then listed only
+the payments the story turns on, and hid the week's running costs.
+
+The feed now lists every movement of the week. c_010's payment summary holds the $310,000 that went
+out and the $90,000 of running costs, so the pilot's figures are record values, and the summary says
+the opposite of the pilot: nothing is missing. A draft that states them without citing that record is
+still refused for its figures, and the record is named. What stops the incident itself is the
+guideline, cause and gap rules, tested here too. The tests of a figure no record holds use figures of
+their own.
 """
 
 import functools
@@ -56,6 +62,9 @@ HAND_OVER = {
     "evidence": [],
 }
 FIGURES_REFUSED = "It states figures that are not in the evidence it cites for them: "
+# On the evaluation's signal c_010's two paid repayments are $45,000 each, as is its monthly card spend. The
+# incident's $90,000 is no record value there, so the tests of a figure a record happens to hold use $45,000.
+PILOT_AT_45K = PILOT.replace("$90,000", "$45,000")
 
 
 def redraft_brief(run: Run) -> str:
@@ -74,7 +83,7 @@ def test_a_figure_the_model_worked_out_is_refused_whatever_else_the_report_says(
 
         assert run.result["drafts"] == 2
         assert figure_line(run) == (
-            f"- {FIGURES_REFUSED}summary: $310,000, $90,000. "
+            f"- {FIGURES_REFUSED}summary: $310,000 (agg_c_010_payments shows it and is not cited there), $90,000 (agg_c_010_payments shows it and is not cited there). "
             "State only figures the cited evidence shows, exactly as shown, or leave the figure out."
         )
         assert [entry["codes"] for entry in run.result["draft_log"]] == [codes, []]
@@ -98,10 +107,11 @@ def test_a_figure_from_a_record_the_sentence_does_not_cite_is_refused_and_the_re
 
     run = Run([*INVESTIGATION, report(evidence=[short]), report()])
 
-    assert "$10,000 (agg_c_010_payments shows it and is not cited there)" in figure_line(run)
-    # Each figure is true of the case, and none is in the two payments the sentence rests on.
+    # $220,000 and $230,000 are true of the case, and neither is in the two payments the sentence rests on.
     for figure in ("$220,000", "$230,000"):
         assert f"{figure} (" in figure_line(run)
+    # Every payment of the week is listed, so no record holds a part of the fall left out: none is named.
+    assert "$10,000." in figure_line(run) and "$10,000 (" not in figure_line(run)
 
 
 def test_an_amount_written_in_cents_is_refused():
@@ -113,13 +123,14 @@ def test_an_amount_written_in_cents_is_refused():
         assert figure_line(run).startswith(f"- {FIGURES_REFUSED}other_findings 1: {written}. ")
 
 
-def test_on_the_evaluations_signal_only_the_figure_no_record_holds_is_refused():
-    """On the evaluation's signal c_010's two paid repayments are $90,000 each, and so is the
-    monthly card spend. So $90,000 is a record value there, and once the report cites one of those
-    records the figure rule has nothing to say against the incident's sentence. Only $310,000 is
-    refused. For these cases the figure rule does not stop the incident: the guideline, cause and
-    gap rules do, and test_the_90K_draft_is_refused_for_its_figures_its_guideline_and_its_cause
-    (P7) asserts that.
+def test_on_the_evaluations_signal_only_the_figure_the_cited_records_do_not_hold_is_refused():
+    """On the evaluation's signal c_010's two paid repayments are $45,000 each, and so is the
+    monthly card spend. So $45,000 is a record value there, and once the report cites one of those
+    records the figure rule has nothing to say against the incident's sentence with that figure. Only
+    $310,000 is refused, with the payment summary that holds it named. For such cases the figure rule
+    does not stop the incident: the guideline, cause and gap rules do, and
+    test_the_90K_draft_is_refused_for_its_figures_its_guideline_and_its_cause (P7) asserts that. The
+    incident's own $90,000 is in the payment summary too, which the report does not cite: refused.
     """
     today, customers = signals.customers()
     signal = signals.signal_for(customers["c_010"], today)
@@ -129,10 +140,13 @@ def test_on_the_evaluations_signal_only_the_figure_no_record_holds_is_refused():
     ]
     investigation = [*INVESTIGATION[:3], ask_card("How is the card used?", topic="card_use"), DONE, gaps()]
 
-    run = Run([*investigation, report(**PILOT_REPORT, review_reasons=cites_repayments), report()], signal=signal)
+    run = Run([*investigation, report(**{**PILOT_REPORT, "summary": PILOT_AT_45K}, review_reasons=cites_repayments),
+               report()], signal=signal)
+    pilot_run = Run([*investigation, report(**PILOT_REPORT, review_reasons=cites_repayments), report()], signal=signal)
 
-    assert {"due": "2026-09-05", "amount_cents": 9000000, "status": "paid"} in signal["snapshot"]["card"]["repayments"]
-    assert figure_line(run).startswith(f"- {FIGURES_REFUSED}summary: $310,000. ")
+    assert {"due": "2026-09-05", "amount_cents": 4500000, "status": "paid"} in signal["snapshot"]["card"]["repayments"]
+    assert figure_line(run).startswith(f"- {FIGURES_REFUSED}summary: $310,000 (agg_c_010_payments shows it and is not cited there). ")
+    assert figure_line(pilot_run).startswith(f"- {FIGURES_REFUSED}summary: $310,000 (agg_c_010_payments shows it and is not cited there), $90,000 (agg_c_010_payments shows it and is not cited there). ")
 
 
 def says_too_much(request):
@@ -159,18 +173,19 @@ def test_two_refused_drafts_hand_the_case_over_with_what_the_specialists_found_a
     assert {"claim": "The last 3 repayments, oldest first: paid, paid, failed.",
             "evidence_ids": ["rep_c_010_1", "rep_c_010_2", "rep_c_010_3"]} in found  # fmt: skip
     assert INFLOWS in found
-    # The analyst reads neither the draft's made-up figures nor a specialist's.
-    for figure in ("$90,000", "$310,000"):
-        assert figure not in str(given_up)
+    # The analyst reads neither the draft's sentence nor the specialist's made-up one. $310,000 is a record value now,
+    # what went out in the week, and reaches the analyst only in the finding that cites the record holding it.
+    assert PILOT not in str(given_up) and "$90,000" not in str(given_up)
+    assert [finding["evidence_ids"][0] for finding in found if "$310,000" in finding["claim"]] == ["agg_c_010_payments"]
     assert run.result["draft_log"][-1]["result"] == "gave_up"
 
 
 def test_on_the_evaluations_signal_a_finding_is_handed_over_only_when_the_records_it_cites_show_its_figures():
-    """$90,000 is a record value on the evaluation's signal (sig_repayments), and a date can be one too. A
+    """$45,000 is a record value on the evaluation's signal (sig_repayments), and a date can be one too. A
     finding is kept only when the records it cites itself show its figures, checked as strictly as a report."""
     today, customers = signals.customers()
     unbacked = [
-        Finding(claim="About $90,000 is not accounted for.", confidence="low", evidence_ids=["bal_c_010"]),
+        Finding(claim="About $45,000 is not accounted for.", confidence="low", evidence_ids=["bal_c_010"]),
         Finding(claim="The fall began on 2026-10-01.", confidence="low", evidence_ids=["bal_c_010"]),
     ]
 
@@ -186,7 +201,7 @@ def test_on_the_evaluations_signal_a_finding_is_handed_over_only_when_the_record
         signal=signals.signal_for(customers["c_010"], today),
     )
 
-    assert "m:90000" in figures.allowed_figures(facts.ledger(run.state).values())
+    assert "m:45000" in figures.allowed_figures(facts.ledger(run.state).values())
     assert run.result["draft_log"][-1]["result"] == "gave_up"
     kept = [finding["claim"] for finding in run.shown["report"]["other_findings"]]
     assert "A payroll run of $150,000 went out in the window." in kept
@@ -214,7 +229,7 @@ def test_the_90K_draft_is_refused_for_its_figures_its_guideline_and_its_cause():
         "The report cites no record that shows it.",
         "- It gives insufficient_data as the likely cause, but cites no record that shows it. One of these would: "
         "a linked account that is not reporting; a reconciliation that says balances and transactions do not match.",
-        f"- {FIGURES_REFUSED}summary: $310,000, $90,000. "
+        f"- {FIGURES_REFUSED}summary: $310,000 (agg_c_010_payments shows it and is not cited there), $90,000 (agg_c_010_payments shows it and is not cited there). "
         "State only figures the cited evidence shows, exactly as shown, or leave the figure out.",
     ]
     assert second["result"] == "passed"
@@ -222,30 +237,30 @@ def test_the_90K_draft_is_refused_for_its_figures_its_guideline_and_its_cause():
     assert run.shown["report"]["recommendation"] == "pause_card"
 
 
-def test_on_the_evaluations_signal_the_90K_draft_is_refused_for_its_guideline_and_its_cause_though_90K_is_a_record_there():
+def test_on_the_evaluations_signal_the_45K_draft_is_refused_for_its_guideline_and_its_cause_though_45K_is_a_record_there():
     today, customers = signals.customers()
     signal = signals.signal_for(customers["c_010"], today)
-    # sig_repayments holds the two paid repayments of $90,000 each, so citing it backs the incident's figure.
+    # sig_repayments holds the two paid repayments of $45,000 each, so citing it backs that figure.
     cites_repayments = [
         REPORT["review_reasons"][0],
         {**REPORT["review_reasons"][1], "evidence_ids": ["rep_c_010_3", "sig_repayments"]},
     ]
     investigation = [*INVESTIGATION[:3], ask_card("How is the card used?", topic="card_use"), DONE, gaps()]
-    pilot = {**PILOT_HAND_OVER, "review_reasons": cites_repayments}
-    only_90K = {**pilot, "summary": "Roughly $90,000 is not accounted for. Records and balances do not match."}
+    pilot = {**PILOT_HAND_OVER, "summary": PILOT_AT_45K, "review_reasons": cites_repayments}
+    only_45K = {**pilot, "summary": "Roughly $45,000 is not accounted for. Records and balances do not match."}
 
-    pilot_run, only_90K_run = (
+    pilot_run, only_45K_run = (
         on_the_services_guidelines([*investigation, report(**draft), report(**PAUSE_UNDER_G08B)], signal=signal)
-        for draft in (pilot, only_90K)
+        for draft in (pilot, only_45K)
     )
 
     # The pilot's summary: of its two figures only the one no record holds is refused.
     assert pilot_run.result["draft_log"][0]["codes"] == ["guideline_need", "cause", "figure"]
-    assert figure_line(pilot_run).startswith(f"- {FIGURES_REFUSED}summary: $310,000. ")
-    assert "$90,000" not in figure_line(pilot_run)
+    assert figure_line(pilot_run).startswith(f"- {FIGURES_REFUSED}summary: $310,000 (agg_c_010_payments shows it and is not cited there). ")
+    assert "$45,000" not in figure_line(pilot_run)
     # With only the figure a record holds, the figure rule has nothing to say. The draft is refused all the same.
-    assert only_90K_run.result["draft_log"][0]["codes"] == ["guideline_need", "cause"]
-    for run in (pilot_run, only_90K_run):
+    assert only_45K_run.result["draft_log"][0]["codes"] == ["guideline_need", "cause"]
+    for run in (pilot_run, only_45K_run):
         assert run.result["draft_log"][1]["result"] == "passed"
         assert run.shown["report"]["recommendation"] == "pause_card"
 
@@ -266,21 +281,23 @@ def test_a_gap_that_states_a_figure_is_dropped_and_reaches_neither_the_investiga
         "by": "model", "gaps": [kept], "asks": [], "dropped": 1, "at": 3, "ended_by": "done"
     }  # fmt: skip
     review = next(n for n, messages in enumerate(run.seen) if messages[0].content == prompts.GAPS)
+    # Its figures are record values now (the week's payments in all, and its running costs), so it is the gap
+    # itself that must reach nobody.
     for messages in run.seen[review + 1 :]:
         for message in messages:
-            assert "$90,000" not in message.content and "$310,000" not in message.content
+            assert PILOT_GAP not in message.content and "not accounted for" not in message.content
     assert run.result["check"] == {"passed": True, "problems": []}
 
 
-def test_on_the_evaluations_signal_a_gap_with_the_incidents_figure_is_dropped_though_90K_is_a_record_there():
-    """The rule is "no figure", not "no figure the ledger lacks" (2.D.3): here a record holds $90,000."""
-    only_90K = "Roughly $90,000 is not accounted for."
+def test_on_the_evaluations_signal_a_gap_with_a_figure_is_dropped_though_a_record_holds_it():
+    """The rule is "no figure", not "no figure the ledger lacks" (2.D.3): here a record holds $45,000."""
+    only_45K = "Roughly $45,000 is not accounted for."
 
     run = on_the_services_guidelines(
-        [*INVESTIGATION[:3], DONE, gaps(only_90K), report(**PAUSE_UNDER_G08B)], signal=signal_of("c_010")
+        [*INVESTIGATION[:3], DONE, gaps(only_45K), report(**PAUSE_UNDER_G08B)], signal=signal_of("c_010")
     )
 
-    assert "m:90000" in figures.allowed_figures(facts.ledger(run.state).values())
+    assert "m:45000" in figures.allowed_figures(facts.ledger(run.state).values())
     assert nudges(run) == []
     assert run.result["gap_log"] == [
         {"by": "model", "gaps": [], "asks": [], "dropped": 1, "at": 3, "ended_by": "done"}
@@ -462,14 +479,14 @@ def test_a_case_is_handed_over_for_records_that_disagree_only_when_the_reconcili
     )
 
 
-def test_a_short_list_of_payments_is_not_a_hole_in_the_books():
+def test_payments_above_the_fall_are_not_a_hole_in_the_books():
+    # Every movement of the week is listed: c_009's payments are more than its fall, because income came in.
+    above = "The payments listed are 156% of the fall."
     short_list = {
         **records_disagree(signal_of("c_009")),
-        "summary": "70% of the fall is not in the list.",
-        "evidence": [{"claim": "70% of the fall is not in the list.", "evidence_ids": ["agg_c_009_payments"]}],
-        "review_reasons": [
-            {"reason": "large_cut", "finding": "70% of the fall is not in the list.", "evidence_ids": ["agg_c_009_payments"]}
-        ],
+        "summary": above,
+        "evidence": [{"claim": above, "evidence_ids": ["agg_c_009_payments"]}],
+        "review_reasons": [{"reason": "large_cut", "finding": above, "evidence_ids": ["agg_c_009_payments"]}],
     }  # fmt: skip
     draft = call("ReportDraft", **short_list)
 
@@ -480,8 +497,8 @@ def test_a_short_list_of_payments_is_not_a_hole_in_the_books():
         signal=signal_of("c_009"),
     )  # fmt: skip
 
-    # The figure is backed: agg_c_009_payments shows the part not listed. The books are not said to disagree.
-    assert "p:70" in figures.allowed_figures([facts.ledger(run.state)["agg_c_009_payments"]])
+    # The figure is backed: agg_c_009_payments shows the share. The books are not said to disagree.
+    assert "p:156" in figures.allowed_figures([facts.ledger(run.state)["agg_c_009_payments"]])
     assert [entry["codes"] for entry in run.result["draft_log"]] == [["guideline_need", "cause"]] * 2
     assert run.result["draft_log"][-1]["result"] == "gave_up"
 

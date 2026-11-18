@@ -10,7 +10,13 @@
 # split     dev: run while the agent was being built, so not a fair test.
 #           held_out: first seen by the agent in an evaluation run.
 # must_cite the evidence the answer turns on. A report that reaches the right
-#           answer without it got there by luck.
+#           answer without it got there by luck. Each entry is one of:
+#           - an id, only for a record the Orchestrator makes itself (hist_, sig_, xs_);
+#           - a spec, {kind, where}, for a specialist's record. It names the record by what it
+#             says, so whatever id a specialist gives it counts. `where` takes the tests of a
+#             guideline's needs: a value, {in: [...]}, {gte: n}, {lte: n}. A field the record
+#             lacks fails. Quote "yes" and "no", or YAML reads them as true and false.
+#           The grader matches a spec against the records on the case's path page.
 # twin_of   the same customer with one fact changed, which changes the answer.
 # same_as   the same customer with something added that must change nothing.
 # milder_than  the same customer with the trouble taken out: the answer must not be stricter.
@@ -23,8 +29,8 @@
 # guidelines  the guidelines a right report may rest on.
 # path      a question path that reaches the answer, at most six questions: side.topic, and
 #           side.topic@record for a question about one record of an earlier answer.
-# must_reach  the records a run must have been given for the case to count as tested. Left out, it is
-#           must_cite without the records code gives itself (hist_, sig_, xs_).
+# must_reach  the records a run must have been given for the case to count as tested, as specs. Left
+#           out, it is must_cite without the ids of the records code gives itself (hist_, sig_, xs_).
 # dev_lookalike  a dev case whose records and accepted answer this held-out case shares under the
 #           default policy, so tuning on that case is tuning on this one.
 
@@ -41,7 +47,7 @@ customers:
     split: dev
     causes: [funds_moved_out_of_view]
     recommendations: [keep_limit]
-    must_cite: [txn_c_002_01]
+    must_cite: [{kind: bank_transaction, where: {category: transfer_own_account}}]
     guidelines: [G-04]
     path: [bank.transactions, bank.income]
   - id: c_003
@@ -49,7 +55,7 @@ customers:
     split: held_out
     causes: [revenue_loss]
     recommendations: [reduce_limit]
-    must_cite: [agg_c_003_inflows]
+    must_cite: [{kind: weekly_inflow_series, where: {income_trend: shrinking}}]
     guidelines: [G-06, G-07]
     path: [bank.transactions, bank.income, card.repayments]
   - id: c_004
@@ -67,7 +73,7 @@ customers:
     # The table says needs_human. Issuers give a customer days to reconnect a feed before
     # anything changes, so asking the customer is the answer, and handing over is too cautious.
     recommendations: [request_documents]
-    must_cite: [acct_c005_a]
+    must_cite: [{kind: linked_account, where: {is_stale: true}}]
     guidelines: [G-10a]
     path: [bank.transactions, bank.accounts]
   - id: c_006
@@ -75,7 +81,7 @@ customers:
     split: held_out
     causes: [funds_moved_out_of_view]
     recommendations: [request_documents]
-    must_cite: [rep_c_006_funding]
+    must_cite: [{kind: funding_account_change, where: {changed: true}}]
     guidelines: [G-05]
     path: [bank.transactions, bank.income, card.paying_account]
   - id: c_007
@@ -83,7 +89,7 @@ customers:
     split: held_out
     causes: [seasonal_dip]
     recommendations: [keep_limit]
-    must_cite: [agg_c_007_prior_year, hist_c_007_recovery]
+    must_cite: [{kind: prior_year_comparison}, hist_c_007_recovery]
     guidelines: [G-03]
     path: [bank.transactions, bank.prior_year, bank.income]
   - id: c_008
@@ -101,15 +107,17 @@ customers:
     recommendations: [keep_limit]
     guidelines: [G-02]
     path: [bank.transactions, bank.payee_history@txn_c_009_01, bank.income]
-    must_reach: [txn_c_009_01, agg_c_009_payee_history]
+    # The vendor's history, not any payee's: every payment of the week has one now.
+    must_reach: [{kind: bank_transaction, where: {category: vendor_known}}, {kind: payee_history, where: {about: txn_c_009_01}}]
   - id: c_010
     category: business
     split: dev
     causes: [payroll_or_tax]
-    # The table leaves this one open, and the team's data does not say whether the failed
-    # repayment was paid afterwards. Both actions are accepted. c_110 and c_111 hold that fact.
-    recommendations: [reduce_limit, pause_card]
-    must_cite: [rep_c_010_3]
+    # The failed repayment has not been paid: Card says paid_since no, the stand-in not_recorded, and
+    # policy.UNPAID_MEANS reads both as unpaid. G-08b then allows pause_card alone (decided 2026-11-17).
+    recommendations: [pause_card]
+    # paid_since is left out: the stand-in says not_recorded and Card says no. Which one is right is open.
+    must_cite: [{kind: card_repayment, where: {status: failed}}]
     guidelines: [G-08b]
     path: [bank.transactions, card.repayments, bank.income]
   - id: c_011
@@ -117,7 +125,7 @@ customers:
     split: held_out
     causes: [no_clear_cause]
     recommendations: [needs_human]
-    must_cite: [agg_c_011_payee_history]
+    must_cite: [{kind: payee_history, where: {about: txn_c_011_01}}]
     guidelines: [G-11]
     path: [bank.transactions, bank.payee_history@txn_c_011_01, bank.income, bank.reconciliation]
   - id: c_012
@@ -125,7 +133,7 @@ customers:
     split: held_out
     causes: [insufficient_data]
     recommendations: [needs_human]
-    must_cite: [agg_c_012_reconciliation]
+    must_cite: [{kind: balance_reconciliation, where: {reconciled: false}}]
     # Both carry the hand-over: the reconciliation that disagrees, and nothing that acts fitting.
     guidelines: [G-10b, G-11]
     path: [bank.transactions, bank.income, bank.reconciliation]
@@ -137,7 +145,7 @@ customers:
     twin_of: c_002
     causes: [unexplained_outflow]
     recommendations: [request_documents]
-    must_cite: [txn_c_102_01]
+    must_cite: [{kind: bank_transaction, where: {category: vendor_new}}]
     guidelines: [G-09]
     path: [bank.transactions, bank.income]
   - id: c_106
@@ -146,7 +154,9 @@ customers:
     twin_of: c_006
     causes: [revenue_loss]
     recommendations: [reduce_limit, request_documents]
-    must_cite: [txn_c_106_02, rep_c_106_funding]
+    must_cite:
+      - {kind: bank_transaction, where: {category: transfer_own_account}}
+      - {kind: funding_account_change, where: {changed: true}}
     guidelines: [G-05]
     path: [bank.transactions, bank.income, card.paying_account]
   - id: c_110
@@ -155,7 +165,7 @@ customers:
     twin_of: c_111
     causes: [payroll_or_tax]
     recommendations: [pause_card]
-    must_cite: [rep_c_110_3]
+    must_cite: [{kind: card_repayment, where: {status: failed, paid_since: "no"}}]
     guidelines: [G-08b]
     path: [bank.transactions, card.repayments, bank.income]
     dev_lookalike: c_010
@@ -165,7 +175,7 @@ customers:
     twin_of: c_110
     causes: [payroll_or_tax]
     recommendations: [keep_limit]
-    must_cite: [rep_c_111_3]
+    must_cite: [{kind: card_repayment, where: {status: failed, paid_since: "yes"}}]
     guidelines: [G-08a, G-01]
     path: [bank.transactions, card.repayments, bank.income]
 
@@ -205,7 +215,7 @@ customers:
     recommendations: [reduce_limit]
     guidelines: [G-06, G-07]
     path: [bank.transactions, bank.income, card.repayments]
-    must_reach: [txn_c_203_02]
+    must_reach: [{kind: bank_transaction, where: {category: vendor_known}}]
 
   # The same data with another history, and with it the answer.
   - id: c_307
@@ -218,7 +228,7 @@ customers:
     must_cite: [hist_c_307_recovery]
     guidelines: [G-11]
     path: [bank.transactions, bank.income, bank.payee_history@txn_c_307_01, bank.prior_year, bank.reconciliation]
-    must_reach: [txn_c_307_01, agg_c_307_inflows]
+    must_reach: [{kind: bank_transaction, where: {category: vendor_known}}, {kind: weekly_inflow_series}]
   - id: c_314
     category: hand_over
     split: held_out
@@ -229,7 +239,7 @@ customers:
     must_cite: [hist_c_314_summary]
     guidelines: [G-11]
     path: [bank.transactions, bank.income, bank.reconciliation]
-    must_reach: [txn_c_314_01, agg_c_314_inflows]
+    must_reach: [{kind: bank_transaction, where: {category: tax}}, {kind: weekly_inflow_series}]
 
   # The same data with history that must change nothing.
   - id: c_301
@@ -244,10 +254,11 @@ customers:
     category: misleading_data
     split: held_out
     history_same_as: c_003
-    # A review a year ago called the fall seasonal. Nothing of this year's records stands behind it.
+    # A review a year ago called the fall seasonal. Cash is back where it was then, but there is no prior-year
+    # match for the same weeks and income is shrinking, so G-03 does not hold.
     causes: [revenue_loss]
     recommendations: [reduce_limit]
-    must_cite: [agg_c_303_inflows]
+    must_cite: [{kind: weekly_inflow_series, where: {income_trend: shrinking}}]
     guidelines: [G-06, G-07]
     path: [bank.transactions, bank.income, card.repayments, bank.prior_year]
   - id: c_304
@@ -269,10 +280,22 @@ customers:
     # late repayment win.
     causes: [revenue_loss]
     recommendations: [reduce_limit]
-    must_cite: [agg_c_107_inflows]
+    must_cite: [{kind: weekly_inflow_series, where: {income_trend: shrinking}}]
     guidelines: [G-06, G-07]
     path: [bank.transactions, bank.income, card.repayments, bank.prior_year]
-    must_reach: [agg_c_107_inflows, agg_c_107_prior_year]
+    must_reach: [{kind: weekly_inflow_series}, {kind: prior_year_comparison}]
+
+  # Only the card side can decide it.
+  - id: c_013
+    category: business
+    split: held_out
+    # A real issuer reviews a card whose repayment was returned and not paid since, even while cash is steady. The
+    # bank side shows no cause, and Card's record alone carries the pause under G-08b.
+    causes: [no_clear_cause]
+    recommendations: [pause_card]
+    must_cite: [{kind: card_repayment, where: {status: failed, paid_since: "no"}}]
+    guidelines: [G-08b]
+    path: [card.repayments]
 
 # Requests the service has to refuse. No model is involved.
 requests:

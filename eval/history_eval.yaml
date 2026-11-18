@@ -37,7 +37,8 @@ reviews:
     outcome: done
     current_limit_cents: 12500000
     engine_limit_cents: 6600000
-    cash_7d_ago_cents: 58000000
+    # Under this year's $440,000 a week ago, so cash reads as back (104%) and the precedent tempts.
+    cash_7d_ago_cents: 42500000
     cash_now_cents: 33000000
     review_reasons: [large_cut]
     likely_cause: seasonal_dip

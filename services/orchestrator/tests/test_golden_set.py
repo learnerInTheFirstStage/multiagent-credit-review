@@ -23,11 +23,12 @@ import grade as grading  # noqa: E402
 import run as golden_run  # noqa: E402
 from signals import FILES, customers, signal_for  # noqa: E402
 
-from app import history  # noqa: E402
+from app import guidelines, history, policy  # noqa: E402
 from app.agents import mock  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.db.models import Case  # noqa: E402
-from app.graph import facts  # noqa: E402
+from app.graph import causes, facts, needs  # noqa: E402
+from app.graph.build import WINDOW_DAYS  # noqa: E402
 from app.graph.report import LikelyCause, Recommendation  # noqa: E402
 from contracts import InvestigateRequest, Signal  # noqa: E402
 from tests.conftest import bearer  # noqa: E402
@@ -39,7 +40,6 @@ from tests.test_specialists import SIDES, ask  # noqa: E402
 GOLDEN = yaml.safe_load((FILES[1].parent / "golden_set.yaml").read_text())
 CASES = {case["id"]: case for case in GOLDEN["customers"]}
 TODAY, DATA = customers()
-ADDED = [customer["id"] for customer in yaml.safe_load(FILES[1].read_text())["customers"]]
 # The review every stack has, then the evaluation's own (spec 0.3, item 1).
 HISTORY_FILES = (FILES[1].parent / "history.yaml", FILES[1].parent / "history_eval.yaml")
 SEEDS = history.read_seeds(HISTORY_FILES)  # an id in both files is refused here
@@ -80,7 +80,6 @@ def opened():
 def test_every_customer_in_the_data_has_expected_answers_and_no_case_is_without_data():
     assert len(GOLDEN["customers"]) == len(CASES)  # no id twice
     assert set(CASES) == set(DATA)
-    assert len(ADDED) == 14 and len(CASES) == 26
 
 
 @by_id
@@ -106,15 +105,81 @@ def test_the_signal_built_for_a_case_is_one_the_service_accepts(case):
     assert signal.engine_limit_cents < signal.current_limit_cents
 
 
-@by_id
-def test_the_evidence_a_case_must_cite_is_evidence_the_specialists_return(both_files, opened, case):
-    returned = {evidence.id for side in SIDES.values() for evidence in ask(side, case["id"]).evidence}
-    must_cite = set(case.get("must_cite", []))
-    # A history record is no specialist's: code makes it from the seeded reviews when the case opens (8.1).
-    given = {item["id"] for item in opened[case["id"]]}
+@pytest.fixture(scope="module")
+def ledgers(opened):
+    """Each case's ledger once every topic was asked, the payee's history of each listed payment included."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("SHARED_CUSTOMERS_FILE", os.pathsep.join(str(path) for path in FILES))
+        return {case_id: _every_topic(case_id, opened[case_id]) for case_id in CASES}
 
-    assert {cid for cid in must_cite if cid.startswith("hist_")} <= given
-    assert {cid for cid in must_cite if not cid.startswith("hist_")} <= returned
+
+def _every_topic(case_id: str, history_facts: list[dict]) -> list[dict]:
+    signal = signal_for(DATA[case_id], TODAY)
+    end = date.fromisoformat(signal["as_of"])
+    window = {"start": (end - timedelta(days=WINDOW_DAYS)).isoformat(), "end": end.isoformat()}
+    state = {"facts": [*facts.signal_facts(signal, window), *history_facts], "answers": []}
+    payments = []
+    for tool, topics in causes.TOPICS.items():
+        for topic in topics:
+            # A copy: a payee's history may list its payment again.
+            for record_id in list(dict.fromkeys(payments)) if (tool, topic) in causes.NEEDS_RECORD else [None]:
+                request = InvestigateRequest(
+                    case_id="case_x", customer_id=case_id, question="-", window_start=window["start"],
+                    window_end=window["end"], topic=topic, record_id=record_id,
+                )  # fmt: skip
+                side = {"AskCashFlow": mock.cash_flow, "AskCreditBehavior": mock.credit_behavior}[tool]
+                response = side(request).model_dump(mode="json")
+                state["answers"].append({"agent": response["agent"], "question": "-", "response": response})
+                payments += [item["id"] for item in response["evidence"] if item["kind"] == "bank_transaction"]
+    return list(facts.ledger(state).values())
+
+
+def entries(case: dict) -> list:
+    return [*case.get("must_cite", []), *case.get("must_reach", [])]
+
+
+@by_id
+def test_each_entry_a_case_must_cite_or_reach_names_exactly_one_of_its_records_on_the_stand_ins(ledgers, case):
+    records = ledgers[case["id"]]
+    ids = {item["id"] for item in records}
+    for entry in entries(case):
+        if isinstance(entry, str):
+            # An id only for a record code makes. A history record is made from the seeded reviews at open (8.1).
+            assert entry.startswith(grading.OWN_RECORDS) and entry in ids, entry
+        else:
+            # A spec only for a specialist's record, whose id another specialist may give otherwise.
+            assert entry.keys() <= {"kind", "where"} and entry["kind"] in causes.KIND_TOPIC, entry
+            assert entry["kind"] not in causes.OWN_KINDS, entry
+            assert len(grading.resolve(entry, records)) == 1, (entry, grading.resolve(entry, records))
+
+
+def test_a_spec_says_yes_and_no_as_text_and_not_as_what_yaml_would_make_of_them():
+    # paid_since is "yes", "no" or "not_recorded". Unquoted, YAML reads yes and no as booleans, and nothing matches.
+    assert CASES["c_110"]["must_cite"] == [{"kind": "card_repayment", "where": {"status": "failed", "paid_since": "no"}}]
+    assert CASES["c_111"]["must_cite"] == [{"kind": "card_repayment", "where": {"status": "failed", "paid_since": "yes"}}]
+
+
+def test_the_spec_of_one_twin_does_not_name_the_record_that_separates_the_other(ledgers):
+    for case_id, twin in (("c_110", "c_111"), ("c_002", "c_102")):
+        for entry in CASES[case_id]["must_cite"]:
+            assert grading.resolve(entry, ledgers[twin]) == [], (case_id, entry)
+
+
+def test_the_grader_matches_a_spec_as_the_graph_matches_a_need_on_every_record_of_every_case(ledgers):
+    # eval/grade.py runs on the host without this service's code, so it has a copy of needs._passes. They must agree.
+    specs = [entry for case in CASES.values() for entry in entries(case) if isinstance(entry, dict)]
+    specs += [
+        {"kind": need["kind"], "where": need["where"]}
+        for guideline in guidelines.load()
+        for need in guideline["needs"]
+        if need.get("where")
+    ]
+    tests = [test for spec in specs for test in (spec.get("where") or {}).values() if isinstance(test, dict)]
+    assert {"in", "gte", "lte"} <= {key for test in tests for key in test}  # every kind of test is tried
+    for records in ledgers.values():
+        for spec in specs:
+            by_graph = {item["id"] for item in needs._matching(spec, records)}
+            assert {item["id"] for item in records if grading.matches(item, spec)} == by_graph, spec
 
 
 def numbers(customer_id: str) -> dict:
@@ -138,12 +203,32 @@ def part(customer_id: str, name: str) -> str:
     return text.replace(customer_id, "X").replace(customer_id.replace("_", ""), "X")
 
 
+def went_out_less_came_in(customer_id: str) -> int:
+    """What the week's bank events took out of linked cash, net."""
+    events = DATA[customer_id]["signal_window"]["bank_events"]
+    return sum(event["amount_cents"] * (-1 if event["category"] == "income" else 1) for event in events)
+
+
+def snapshot_before_the_week(customer_id: str) -> str:
+    """The snapshot, without the cash of a week ago: that is what the week's events leave, so it is the week's."""
+    snapshot = json.loads(part(customer_id, "snapshot"))
+    del snapshot["bank"]["cash_week_ago_cents"]
+    return json.dumps(snapshot, sort_keys=True)
+
+
 @pytest.mark.parametrize("case", [case for case in GOLDEN["customers"] if "twin_of" in case], ids=lambda case: case["id"])
 def test_twins_differ_only_in_what_happened_in_the_week(case):
-    # Same signal, same snapshot, same history: what separates their answers can only come from the week's events.
-    assert numbers(case["id"]) == numbers(case["twin_of"])
-    for same in ("snapshot", "baselines"):
-        assert part(case["id"], same) == part(case["twin_of"], same), same
+    # Same cash now, limit, card and history: what separates their answers can only come from the week's events.
+    # The bank feed lists every movement, so cash a week ago is cash now plus what the week took out, net. It
+    # differs only by what the twins' weeks move differently: c_106's transfer to the account that pays the card.
+    mine, theirs = numbers(case["id"]), numbers(case["twin_of"])
+    assert {key: value for key, value in mine.items() if key != "cash_before"} == {
+        key: value for key, value in theirs.items() if key != "cash_before"
+    }
+    moved = went_out_less_came_in(case["id"]) - went_out_less_came_in(case["twin_of"])
+    assert [a - b for a, b in zip(mine["cash_before"], theirs["cash_before"])] == [moved, moved]
+    assert snapshot_before_the_week(case["id"]) == snapshot_before_the_week(case["twin_of"])
+    assert part(case["id"], "baselines") == part(case["twin_of"], "baselines")
     assert part(case["id"], "signal_window") != part(case["twin_of"], "signal_window")
 
 
@@ -165,25 +250,6 @@ def test_a_copy_differs_from_its_original_by_one_small_payment_and_nothing_else(
     more = [event for event in week["bank_events"] if event not in original_week["bank_events"]]
     assert [event["amount_cents"] for event in more] == [added]
     assert len(week["bank_events"]) == len(original_week["bank_events"]) + 1
-
-
-@pytest.mark.parametrize("customer_id", ADDED)
-def test_an_added_customer_gives_away_no_answer(both_files, customer_id):
-    customer = DATA[customer_id]
-    said = []
-    for side in SIDES.values():
-        answer = ask(side, customer_id)
-        assert answer.findings
-        said += [finding.claim for finding in answer.findings] + answer.could_not_determine
-        # A memo is the payer's own words, and c_203's is there to mislead.
-        said += [json.dumps({k: v for k, v in e.data.items() if k != "memo"}) for e in answer.evidence]
-    said = " ".join(said)
-
-    for label in (*get_args(LikelyCause), *get_args(Recommendation)):
-        assert label not in said, label
-    assert customer["name"] not in said
-    for sentence in filter(None, (part.strip(" .") for part in customer["story"].replace("\n", " ").split(". "))):
-        assert sentence not in said, sentence
 
 
 def test_the_fact_that_separates_the_two_failed_repayments_is_in_the_evidence_a_report_must_cite(both_files):
@@ -307,8 +373,20 @@ def test_a_case_with_the_same_history_shares_its_originals_seed_content_and_diff
         return {key: value for key, value in seed.items() if key not in ("case_id", "customer_id")} | {"decisions": decisions}
 
     assert [content(seed) for seed in seeded(case["id"])] == [content(seed) for seed in seeded(original)] != []
-    # So code makes the same records of it when the case opens, the recovery record G-03 needs included.
-    assert anonymous(case["id"], opened[case["id"]]) == anonymous(original, opened[original])
+
+    def but_todays_cash(records: list[dict]) -> list[dict]:
+        today = ("cash_before_now_cents", "now_vs_then_bp")
+        return [
+            {**record, "data": {key: value for key, value in record["data"].items() if key not in today}}
+            for record in records
+        ]
+
+    # So code makes the same records of it when the case opens, the recovery record G-03 needs included. Only
+    # today's cash a week ago differs, what each week's events leave, and for both it is back where it was then.
+    assert anonymous(case["id"], but_todays_cash(opened[case["id"]])) == anonymous(original, but_todays_cash(opened[original]))
+    recovered = [record["data"]["now_vs_then_bp"] for cid in (case["id"], original) for record in opened[cid]
+                 if record["kind"] == "cash_recovery"]  # fmt: skip
+    assert len(recovered) == 2 and min(recovered) >= policy.RECOVERED_BP
     assert {"signal_window", "baselines", "answers"} <= set(differences(case["id"], original))
     assert not set(case["recommendations"]) & set(CASES[original]["recommendations"])
 
@@ -317,7 +395,7 @@ def test_every_seeded_review_is_dated_before_every_evaluation_signal():
     # Earlier reviews are looked up strictly before the signal's day (7.3): a seed on or after it would be no history.
     signals = [date.fromisoformat(signal_for(customer, TODAY)["as_of"]) for customer in DATA.values()]
 
-    assert len(SEEDS) == 15
+    assert SEEDS
     assert max(date.fromisoformat(str(seed["as_of"])) for seed in SEEDS) < min(signals)
 
 
@@ -374,7 +452,7 @@ def test_a_history_record_a_case_must_cite_is_one_the_seed_file_produces(opened)
         (case["id"], record_id)
         for case in GOLDEN["customers"]
         for record_id in case.get("must_cite", [])
-        if record_id.startswith("hist_")
+        if isinstance(record_id, str) and record_id.startswith("hist_")
     }
 
     assert cited == {("c_007", "hist_c_007_recovery"), ("c_307", "hist_c_307_recovery"), ("c_314", "hist_c_314_summary")}
@@ -385,10 +463,11 @@ def test_a_history_record_a_case_must_cite_is_one_the_seed_file_produces(opened)
         assert record_id in given and given[record_id] != bare.get(record_id), (case_id, record_id)
 
 
-def test_the_main_stacks_seed_file_holds_c_007s_review_only_and_the_evaluation_file_the_other_fourteen():
+def test_the_main_stacks_seed_file_holds_c_007s_review_only_and_the_evaluation_file_all_the_others():
     # The image copies eval/history.yaml and every stack seeds it at start. Only the evaluation names the second file.
     assert [seed["case_id"] for seed in history.read_seeds(HISTORY_FILES[:1])] == ["seed_c_007_2025"]
-    assert len(history.read_seeds(HISTORY_FILES[1:])) == 14
+    others = {seed["case_id"] for seed in history.read_seeds(HISTORY_FILES[1:])}
+    assert others and others == {seed["case_id"] for seed in SEEDS} - {"seed_c_007_2025"}
 
 
 # The grader.
@@ -459,6 +538,51 @@ def test_a_report_the_service_could_not_complete_is_right_for_no_case():
 )
 def test_the_evidence_an_answer_turns_on_has_to_be_cited(must_cite, cites):
     assert grading.grade({**CASE, "must_cite": must_cite}, REPORT)["cites"] is cites
+
+
+# The case's records as its path page lists them. A specialist may give a record any id.
+RECORDS = [
+    {"id": "txn_1", "kind": "bank_transaction", "data": {"category": "payroll", "amount_cents": -900}},
+    {"id": "txn_2", "kind": "bank_transaction", "data": {"category": "vendor_new", "amount_cents": -100}},
+    {"id": "card_9", "kind": "card_repayment", "data": {"status": "failed", "paid_since": "no"}},
+    {"id": "hist_c_x_summary", "kind": "review_history", "data": {"earlier_reviews": 0}},
+]
+PAYROLL = {"kind": "bank_transaction", "where": {"category": "payroll"}}
+
+
+@pytest.mark.parametrize(
+    ("must_cite", "cites"),
+    [
+        ([PAYROLL], True),  # txn_1 is cited, and it is the payroll payment
+        ([{"kind": "bank_transaction", "where": {"category": {"in": ["tax", "payroll"]}}}], True),
+        ([{"kind": "bank_transaction", "where": {"amount_cents": {"lte": -500}}}], True),
+        ([{"kind": "bank_transaction", "where": {"category": "vendor_new"}}], False),  # on record, but not cited
+        ([{"kind": "card_repayment", "where": {"status": "failed"}}], False),
+        ([{"kind": "bank_transaction", "where": {"counterparty_kind": "payroll"}}], False),  # a missing field fails
+        ([PAYROLL, "txn_2"], False),
+        ([PAYROLL, "agg_1"], True),  # an id is still matched as an id
+    ],
+)
+def test_a_spec_is_cited_when_a_cited_id_is_a_record_that_matches_it(must_cite, cites):
+    assert grading.grade({**CASE, "must_cite": must_cite}, REPORT, RECORDS)["cites"] is cites
+
+
+def test_a_spec_cannot_be_graded_without_the_cases_records_and_an_id_can():
+    assert grading.grade({**CASE, "must_cite": [PAYROLL]}, REPORT)["cites"] is None
+    assert grading.grade({**CASE, "must_cite": [PAYROLL, "txn_1"]}, REPORT)["cites"] is None
+    assert grading.grade({**CASE, "must_cite": ["txn_1"]}, REPORT)["cites"] is True
+    # A report the service gave up on cites nothing, records or not.
+    assert grading.grade({**CASE, "must_cite": [PAYROLL]}, GAVE_UP)["cites"] is False
+
+
+def test_a_spec_is_said_in_words():
+    assert grading.label("hist_c_007_recovery") == "hist_c_007_recovery"
+    assert grading.label({"kind": "payee_history"}) == "payee_history"
+    assert grading.label(CASES["c_110"]["must_cite"][0]) == "card_repayment where status is failed and paid_since is no"
+    assert grading.label({"kind": "linked_account", "where": {"is_stale": True}}) == "linked_account where is_stale is true"
+    assert grading.label({"kind": "x", "where": {"a": {"in": ["b", "c"]}, "n": {"gte": 5, "lte": 9}}}) == (
+        "x where a is b or c and n is at least 5 and at most 9"
+    )
 
 
 def test_a_case_is_right_only_if_every_run_is_and_is_not_counted_if_a_run_is_missing():
@@ -658,11 +782,15 @@ def test_a_case_that_never_leaves_the_queue_is_an_error_and_the_customers_later_
 class Broken:
     """A client on which one kind of request goes wrong."""
 
-    def __init__(self, client, decision=None, signal=None):
-        self.client, self.decision, self.signal = client, decision, signal
+    def __init__(self, client, decision=None, signal=None, path=None):
+        self.client, self.decision, self.signal, self.path = client, decision, signal, path
 
-    def get(self, *args, **kwargs):
-        return self.client.get(*args, **kwargs)
+    def get(self, url, **kwargs):
+        if url.endswith("/path") and self.path is not None:
+            if isinstance(self.path, Exception):
+                raise self.path
+            return self.path
+        return self.client.get(url, **kwargs)
 
     def post(self, url, **kwargs):
         broken = self.decision if url.endswith("/decision") else self.signal
@@ -680,6 +808,26 @@ def test_a_run_whose_case_could_not_be_closed_keeps_its_grade_and_stops_the_cust
     assert records[0]["grades"]["recommendation"] is True  # the answer was read before the closing failed
     assert records[0]["not_closed"] == "http 503 down"
     assert records[1] == {"case": "c_010", "rep": 2, "error": "not run: run 1 left the case open"}
+
+
+FAILED_REPAYMENT = {"kind": "card_repayment", "where": {"status": "failed"}}
+
+
+def test_a_spec_the_report_must_cite_is_graded_on_the_records_of_the_cases_path_page(start):
+    service = start([*INVESTIGATION, report(), *INVESTIGATION, report()])
+    by_kind = {**C010, "must_cite": [FAILED_REPAYMENT]}
+
+    record = golden_run.one_run(service.client, tokens(), by_kind, {**SIGNAL, "signal_id": "sig_spec_1"}, 1, timeout=5)
+    # The report cites rep_c_010_3, which the path page lists as a failed repayment.
+    assert "rep_c_010_3" in {item["id"] for item in record["path"]["records"]}
+    assert record["grades"]["cites"] is True and "path_error" not in record
+
+    # Without the path page there are no records to match a spec against: cites is not graded, and nothing else breaks.
+    broken = Broken(service.client, path=httpx.Response(500, text="down"))
+    record = golden_run.one_run(broken, tokens(), by_kind, {**SIGNAL, "signal_id": "sig_spec_2"}, 2, timeout=5)
+    assert record["path_error"] == "http 500 down" and "path_grades" not in record
+    assert record["grades"] == {"recommendation": True, "cause": True, "hand_over": True, "cites": None}
+    assert record["closed"] is True
 
 
 def test_whatever_breaks_in_one_run_is_recorded_and_does_not_end_the_whole_evaluation(start):

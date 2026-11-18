@@ -18,7 +18,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "eval"), str(ROOT / "services" / "orchestrator")]
 
-from grade import LINKS  # noqa: E402
+from grade import LINKS, label, resolve  # noqa: E402
 from signals import FILES, customers, signal_for  # noqa: E402
 
 os.environ["SHARED_CUSTOMERS_FILE"] = os.pathsep.join(str(path) for path in FILES)
@@ -81,7 +81,11 @@ def reached(case: dict) -> bool:
     plan = [(step["tool"], step["args"]["topic"], None) for step in plans.FIXED_PLAN]
     _, records, asked = walk(case["id"], plan)
     returned = {evidence_id for entry in asked for evidence_id in entry["returned"]}
-    must_reach = case.get("must_reach", [cid for cid in case.get("must_cite", []) if not cid.startswith(OWN)])
+    must_reach = case.get(
+        "must_reach",
+        [entry for entry in case.get("must_cite", []) if not (isinstance(entry, str) and entry.startswith(OWN))],
+    )
+    on_record = {item["id"] for item in records}
     carried = {
         guideline_id
         for recommendation, ids in needs.permitted(loaded, records).items()
@@ -91,10 +95,19 @@ def reached(case: dict) -> bool:
     if "needs_human" in case["recommendations"]:
         carried |= set(needs.hand_over(loaded, records, asked))
     return (
-        set(must_reach) <= returned
-        and set(case.get("must_cite", [])) <= {item["id"] for item in records}
+        all(set(resolve(entry, records)) & returned for entry in must_reach)
+        and all(set(resolve(entry, records)) & on_record for entry in case.get("must_cite", []))
         and bool(carried & set(case["guidelines"]))
     )
+
+
+def named(entries: list, records: list[dict]) -> str:
+    """Each entry in words, a spec with the record it names on the stand-ins."""
+    said = []
+    for entry in entries:
+        found = "" if isinstance(entry, str) else f" ({', '.join(resolve(entry, records))} on the stand-ins)"
+        said.append(label(entry) + found)
+    return "; ".join(said)
 
 
 def every_topic(customer_id: str) -> list[tuple]:
@@ -158,16 +171,16 @@ print()
 
 for case in golden["customers"]:
     customer, asks = data[case["id"]], every_topic(case["id"])
-    state, _, _ = walk(case["id"], asks)
+    state, ledger, _ = walk(case["id"], asks)
     print(f"## {case['id']}\n")
     print(f"The one-line story (the agent never sees it): {' '.join(customer['story'].split())}\n")
     if against := linked(case):
         print(f"{against[0].upper()}{against[1:]}.\n")
     print(f"Class {classes[case['id']]}.\n")
     if "must_cite" in case:
-        print(f"The report has to cite: {', '.join(case['must_cite'])}.\n")
+        print(f"The report has to cite: {named(case['must_cite'], ledger)}.\n")
     if "must_reach" in case:
-        print(f"A run counts as tested once a question returned: {', '.join(case['must_reach'])}.\n")
+        print(f"A run counts as tested once a question returned: {named(case['must_reach'], ledger)}.\n")
     print(f"Accepted: cause {' or '.join(case['causes'])}, recommendation {' or '.join(case['recommendations'])}.\n")
     print(f"Guidelines a right report may rest on: {', '.join(case['guidelines'])}.\n")
     print(f"A question path that reaches it: {', '.join(case['path'])}.\n")

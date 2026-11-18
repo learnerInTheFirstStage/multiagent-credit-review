@@ -6,6 +6,7 @@ import pytest
 from langfuse import get_client
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
+from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from app import card_client, runner, runtime
@@ -142,6 +143,21 @@ def test_a_case_is_one_session_with_a_trace_per_run_and_every_step_in_it(langfus
     assert STEPS <= {span.name for span in langfuse.spans}
     model_calls = [span for span in langfuse.spans if dict(span.attributes).get("langfuse.observation.type") == "generation"]
     assert len(model_calls) == len(INVESTIGATION) + 1  # every question, the gap review and the report
+
+
+def test_a_model_call_is_sent_once_not_again_as_the_anthropic_sdks_own_span(langfuse):
+    # The Anthropic SDK (2.10) traces each API call itself, under its own scope and with gen_ai attributes,
+    # which LangFuse exports by default. LangChain's callback records the same call as a generation already,
+    # with the thinking tokens in its output, so the SDK's copy doubled every call, its tokens and its cost.
+    with runtime.tracing():
+        for scope, name in (("com.anthropic.sdk.python", "anthropic.messages.create"),
+                            ("some.other.genai.library", "another.model.call")):
+            with trace.get_tracer(scope).start_as_current_span(name, attributes={"gen_ai.provider.name": "anthropic"}):
+                pass
+        sent = {span.name for span in langfuse.spans}
+
+    assert "anthropic.messages.create" not in sent
+    assert "another.model.call" in sent  # LangFuse's own filter still decides for every other span
 
 
 def test_what_is_traced_holds_the_case_but_never_the_approvers_token(langfuse, monkeypatch):

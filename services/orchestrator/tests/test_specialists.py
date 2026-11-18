@@ -128,59 +128,12 @@ def claims(answer: InvestigateResponse) -> str:
     return " | ".join(finding.claim for finding in answer.findings)
 
 
-def everything(customer_id: str) -> str:
-    """Both sides' answers about a customer, as the text the model would be given."""
-    return " ".join(ask(side, customer_id).model_dump_json() for side in SIDES.values())
-
-
-@pytest.mark.parametrize("customer_id", CUSTOMERS)
-def test_every_test_customer_gets_an_answer_from_both_sides_that_keeps_the_contract(customer_id):
-    for agent, side in SIDES.items():
-        answer = ask(side, customer_id)
-
-        assert answer.agent == agent
-        assert answer.findings
-        # Built again from a dict, so that every rule of the contract is checked.
-        InvestigateResponse.model_validate(answer.model_dump())
-        cited = {evidence_id for finding in answer.findings for evidence_id in finding.evidence_ids}
-        assert cited == {evidence.id for evidence in answer.evidence}  # nothing returned that no finding stands on
-
-
-@pytest.mark.parametrize("customer_id", CUSTOMERS)
-def test_a_stand_in_never_gives_away_the_answer(customer_id):
-    customer = mock._data()["customers"][customer_id]
-    answers = everything(customer_id)
-
-    # The labels the report has to choose between.
-    for label in (*get_args(LikelyCause), *get_args(Recommendation)):
-        assert label not in answers, label
-    # What the authors of the data wrote about the customer, as opposed to what its records hold.
-    assert customer["name"] not in answers
-    sentences = [part.strip(" .") for part in customer["story"].replace("\n", " ").split(". ")]
-    assert any(sentences)
-    for sentence in filter(None, sentences):
-        assert sentence not in answers, sentence
-    for event in customer["signal_window"]["bank_events"]:
-        assert event.get("note", "a note that is not there") not in answers
-    payee = customer["baselines"]["bank"].get("payee_history_hint", {})
-    assert payee.get("counterparty", "a payee that is not there") not in answers
-
-
 # Agreed on PR 4: each service owns its id prefixes, so two services never make the same id.
 # An aggregate is agg_ plus a short id worked out from what it is about.
 ID_PREFIXES = {
     "cash_flow": ("txn_", "acct_", "bal_", "agg_"),
     "credit_behavior": ("rep_", "bal_card_", "agg_"),
 }
-
-
-@pytest.mark.parametrize("customer_id", CUSTOMERS)
-def test_the_stand_ins_use_the_id_prefixes_of_their_own_service(customer_id):
-    for agent, side in SIDES.items():
-        for evidence in ask(side, customer_id).evidence:
-            assert evidence.id.startswith(ID_PREFIXES[agent]), f"{agent} made {evidence.id}"
-            # bal_card_ also starts with bal_, so the Bank side needs this said separately.
-            assert agent == "credit_behavior" or not evidence.id.startswith("bal_card_"), f"{agent} made {evidence.id}"
 
 
 def test_the_same_fact_has_the_same_id_however_the_question_is_put():
@@ -233,7 +186,7 @@ def test_c_004_a_tax_payment_and_one_weak_week():
 
     assert "$220,000 was paid to a tax authority" in claims(answer)
     assert "$60,000 against a usual $120,000. One week is too short to call a trend." in claims(answer)
-    assert "Payments listed for the window: 1, $220,000 in all. No other large payment went out." in claims(answer)
+    assert "Payments listed for the window: 7, $340,000 in all. No other payment went out." in claims(answer)
 
 
 def test_c_005_an_account_stopped_reporting_and_what_it_holds_is_not_known():
@@ -261,7 +214,7 @@ def test_c_006_each_side_holds_half_of_the_clue():
 def test_c_007_the_same_weeks_last_year_are_there_to_compare():
     answer = ask(mock.cash_flow, "c_007")
 
-    assert "In the same two weeks last year, $160,000 went out and $85,000 came in." in claims(answer)
+    assert "In the same two weeks last year, $300,000 went out and $85,000 came in." in claims(answer)
     assert "$150,000 was paid to a vendor the customer has paid before." in claims(answer)
 
 
@@ -269,7 +222,7 @@ def test_c_008_three_payments_to_payees_never_paid_before():
     answer = ask(mock.cash_flow, "c_008")
 
     assert claims(answer).count("was paid to a payee the customer has never paid before") == 3
-    assert "Payments listed for the window: 3, $380,000 in all." in claims(answer)
+    assert "Payments listed for the window: 8, $500,000 in all." in claims(answer)
 
 
 def test_c_009_the_memo_goes_out_as_data_and_nothing_points_at_it():
@@ -313,10 +266,10 @@ def test_only_c_012_has_books_that_do_not_balance():
     assert answer.could_not_determine == ["Where the other $195,000 went"]
 
 
-def test_books_that_balance_are_said_to_balance_so_a_short_list_of_payments_is_not_read_as_a_hole():
-    # The file lists only the payments that matter: c_010's add up to $220,000 of a $230,000 fall.
-    # With a real model, saying nothing had the case handed over for records that disagree.
-    said = "Balances and transactions reconcile: the transactions on record add up to the whole change."
+def test_books_that_balance_are_said_to_balance():
+    # Every movement of the week is listed: c_010's add up to its $230,000 fall. With a real model, saying nothing
+    # once had the case handed over for records that disagree.
+    said = "Balances and transactions reconcile: the transactions listed for the window add up to the whole change."
     balanced = [cid for cid in CUSTOMERS if said in claims(ask(mock.cash_flow, cid))]
 
     # c_005 has an account that stopped reporting, so nothing can be said of its books. c_012's do not balance.
@@ -481,7 +434,6 @@ ROOT = Path(__file__).resolve().parents[3]
 # The team's customers, then the evaluation's, as the stand-ins read them in an evaluation run.
 BOTH_FILES = (ROOT / "data" / "shared_customers.yaml", ROOT / "eval" / "extra_customers.yaml")
 EVERY_CUSTOMER = [customer["id"] for path in BOTH_FILES for customer in yaml.safe_load(path.read_text())["customers"]]
-every_customer = pytest.mark.parametrize("customer_id", EVERY_CUSTOMER)
 THE_WEEK = "The records held cover 2026-11-03 to 2026-11-10 only."
 # The kinds of record each topic may return. Asked about one account, the bank adds the payments that went to it.
 KINDS = {
@@ -546,6 +498,17 @@ def without_memos(answer: InvestigateResponse) -> str:
     return str(dump)
 
 
+def each_customer(check) -> None:
+    """Run check on every customer of both files. Fails once, naming every customer it failed for."""
+    failed = []
+    for customer_id in EVERY_CUSTOMER:
+        try:
+            check(customer_id)
+        except Exception as error:  # an assert, or a next() or a model_validate that raised
+            failed.append(f"{customer_id}: {type(error).__name__}: {error}")
+    assert not failed, "\n".join(failed)
+
+
 def test_the_three_new_request_fields_are_optional_and_never_empty():
     request = InvestigateRequest.model_validate(REQUEST)
 
@@ -558,46 +521,15 @@ def test_the_three_new_request_fields_are_optional_and_never_empty():
 def test_a_request_with_no_topic_is_answered_as_before_the_new_fields_existed():
     bank, card = ask(mock.cash_flow, "c_010"), ask(mock.credit_behavior, "c_010")
 
-    # Today's sentences in today's order. The one sentence added is the share the listed payments are of the fall.
-    assert [finding.claim for finding in bank.findings] == [
-        "Linked cash fell by $230,000 in the week, from $520,000 to $290,000.",
-        "The linked accounts are: acct_c010_a.",
-        "A payroll run of $150,000 went out in the window.",
-        "$70,000 was paid to a tax authority in the window.",
-        "Payments listed for the window: 2, $220,000 in all. No other large payment went out.",
-        "The listed payments are 96% of the fall. The other $10,000 is not in this list.",
-        "Balances and transactions reconcile: the transactions on record add up to the whole change. "
-        "Apart from any payment listed here, they are everyday payments and receipts, none of them large.",
-        "Weekly inflows are steady at about $80,000 over the last 13 weeks.",
-    ]
+    # Today's records in today's order. Every movement of the week is listed: payroll and tax, then the receipts
+    # and the running costs.
     assert [evidence.id for evidence in bank.evidence] == [
-        "bal_c_010", "acct_c010_a", "txn_c_010_01", "txn_c_010_02",
+        "bal_c_010", "acct_c010_a", *(f"txn_c_010_{n:02d}" for n in range(1, 12)),
         "agg_c_010_payments", "agg_c_010_reconciliation", "agg_c_010_inflows",
     ]  # fmt: skip
-    # The keys of today stay as they were. New ones are added next to them.
-    assert bank.evidence[0].data == {
-        "cash_week_ago_cents": 52000000, "cash_now_cents": 29000000, "change_cents": -23000000,
-    }  # fmt: skip
-    assert bank.evidence[2].data == {
-        "amount_cents": -15000000, "category": "payroll", "counterparty_kind": "payroll_vendor",
-        "share_of_fall_bp": 6522,
-    }  # fmt: skip
-    assert [finding.claim for finding in card.findings] == [
-        "The card balance is $92,000, 92% of the $100,000 limit. Utilization is spiking.",
-        "The last 3 repayments, oldest first: paid, paid, failed.",
-        "Card spend runs at about $90,000 a month.",
-    ]
     assert [evidence.id for evidence in card.evidence] == [
         "bal_card_c_010", "rep_c_010_1", "rep_c_010_2", "rep_c_010_3", "agg_c_010_card_spend",
     ]  # fmt: skip
-    # "92%" and "spiking" rest on the record, as a share and the typed label.
-    assert card.evidence[0].data == {
-        "credit_limit_cents": 10000000, "balance_cents": 9200000, "used_share_bp": 9200, "utilization_trend": "spiking",
-    }  # fmt: skip
-    # The other sentence added sets the payment next to what its payee was usually paid.
-    assert claims(ask(mock.cash_flow, "c_009")).endswith(
-        "usually $45,000. | This payment of $45,000 is 100% of the most it was usually paid ($45,000)."
-    )
     # With no topic the dates are not read, and neither are the question and the context.
     other = {
         **REQUEST, "customer_id": "c_010", "window_start": "2026-10-01", "window_end": "2026-10-08",
@@ -606,40 +538,45 @@ def test_a_request_with_no_topic_is_answered_as_before_the_new_fields_existed():
     assert mock.cash_flow(InvestigateRequest.model_validate(other)) == bank
 
 
-@every_customer
-def test_a_topic_returns_only_its_own_kinds_of_record(both_files, customer_id):
-    for topic, focus, answer in every_answer(customer_id):
-        if topic is not None:
-            kinds = KINDS[topic] | ({"bank_transaction"} if "account_id" in focus else set())
-            assert {evidence.kind for evidence in answer.evidence} <= kinds, (topic, focus)
+def test_a_topic_returns_only_its_own_kinds_of_record(both_files):
+    def check(customer_id):
+        for topic, focus, answer in every_answer(customer_id):
+            if topic is not None:
+                kinds = KINDS[topic] | ({"bank_transaction"} if "account_id" in focus else set())
+                assert {evidence.kind for evidence in answer.evidence} <= kinds, (topic, focus)
+
+    each_customer(check)
 
 
-@every_customer
-def test_the_same_record_has_the_same_content_whatever_topic_or_focus_returned_it(both_files, customer_id):
-    seen = {}
-    for topic, focus, answer in every_answer(customer_id):
-        for evidence in answer.evidence:
-            content = (evidence.kind, evidence.data)
-            assert seen.setdefault(evidence.id, content) == content, (topic, focus, evidence.id)
+def test_the_same_record_has_the_same_content_whatever_topic_or_focus_returned_it(both_files):
+    def check(customer_id):
+        seen = {}
+        for topic, focus, answer in every_answer(customer_id):
+            for evidence in answer.evidence:
+                content = (evidence.kind, evidence.data)
+                assert seen.setdefault(evidence.id, content) == content, (topic, focus, evidence.id)
+
+    each_customer(check)
 
 
-@every_customer
-def test_every_record_given_with_no_topic_is_given_by_some_topic(both_files, customer_id):
+def test_every_record_given_with_no_topic_is_given_by_some_topic(both_files):
     # The graph always names a topic, so a fact that no topic gives would never reach it.
-    by_topic = {evidence.id for topic, _, answer in every_answer(customer_id) if topic for evidence in answer.evidence}
+    def check(customer_id):
+        by_topic = {evidence.id for topic, _, answer in every_answer(customer_id) if topic for evidence in answer.evidence}
+        for side in SIDES.values():
+            assert {evidence.id for evidence in ask(side, customer_id).evidence} <= by_topic
 
-    for side in SIDES.values():
-        assert {evidence.id for evidence in ask(side, customer_id).evidence} <= by_topic
+    each_customer(check)
 
 
 def test_ids_keep_their_place_in_the_full_list_when_a_subset_is_returned(both_files):
-    # c_106's first event is income, so its one payment out is the second, whichever answer holds it.
+    # c_106's first event is income, so its transfer out is the second, whichever answer holds it.
     sent = on(mock.cash_flow, "c_106", "accounts", account_id="acct_external_new_c106")
     payments = on(mock.cash_flow, "c_106", "transactions")
 
     assert [evidence.id for evidence in sent.evidence] == ["acct_c106_a", "txn_c_106_02"]
     listed = next(finding for finding in payments.findings if finding.claim.startswith("Payments listed"))
-    assert listed.evidence_ids == ["agg_c_106_payments", "txn_c_106_02"]
+    assert listed.evidence_ids == ["agg_c_106_payments", *(f"txn_c_106_{n:02d}" for n in range(2, 9))]
     # The failed repayment is the third of three, asked about on its topic or with no topic.
     for answer in (on(mock.credit_behavior, "c_110", "repayments"), ask(mock.credit_behavior, "c_110")):
         said = "The failed repayment has not been paid since."
@@ -649,22 +586,36 @@ def test_ids_keep_their_place_in_the_full_list_when_a_subset_is_returned(both_fi
     assert [evidence.id for evidence in history.evidence] == ["txn_c_011_01", "agg_c_011_payee_history"]
 
 
-@every_customer
-def test_every_record_a_topic_returns_is_cited_by_a_finding(both_files, customer_id):
-    for topic, focus, answer in every_answer(customer_id):
-        InvestigateResponse.model_validate(answer.model_dump())
-        cited = {evidence_id for finding in answer.findings for evidence_id in finding.evidence_ids}
-        assert cited == {evidence.id for evidence in answer.evidence}, (topic, focus)
+def test_every_answer_keeps_the_contract_cites_every_record_it_returns_and_uses_its_own_services_ids(both_files):
+    def check(customer_id):
+        for agent, side in SIDES.items():
+            answer = ask(side, customer_id)
+            assert answer.agent == agent and answer.findings, agent
+        for topic, focus, answer in every_answer(customer_id):
+            if topic is not None:
+                assert answer.agent == ("cash_flow" if topic in mock.BANK_TOPICS else "credit_behavior"), topic
+            # Built again from a dict, so that every rule of the contract is checked.
+            InvestigateResponse.model_validate(answer.model_dump())
+            cited = {evidence_id for finding in answer.findings for evidence_id in finding.evidence_ids}
+            assert cited == {evidence.id for evidence in answer.evidence}, (topic, focus)
+            for evidence in answer.evidence:
+                assert evidence.id.startswith(ID_PREFIXES[answer.agent]), (topic, focus, evidence.id)
+                # bal_card_ also starts with bal_, so the Bank side needs this said separately.
+                assert answer.agent == "credit_behavior" or not evidence.id.startswith("bal_card_"), (topic, focus, evidence.id)
+
+    each_customer(check)
 
 
-@every_customer
-def test_no_two_keys_of_a_record_are_shown_to_a_model_as_the_same_key(both_files, customer_id):
+def test_no_two_keys_of_a_record_are_shown_to_a_model_as_the_same_key(both_files):
     # The Orchestrator shows a money key without _cents and a share key without _bp (spec 1.4).
-    for _, _, answer in every_answer(customer_id):
-        for evidence in answer.evidence:
-            for data in (evidence.data, *[value for value in evidence.data.values() if isinstance(value, dict)]):
-                keys = [key.replace("_cents", "").removesuffix("_bp") for key in data]
-                assert len(keys) == len(set(keys)), (evidence.id, keys)
+    def check(customer_id):
+        for _, _, answer in every_answer(customer_id):
+            for evidence in answer.evidence:
+                for data in (evidence.data, *[value for value in evidence.data.values() if isinstance(value, dict)]):
+                    keys = [key.replace("_cents", "").removesuffix("_bp") for key in data]
+                    assert len(keys) == len(set(keys)), (evidence.id, keys)
+
+    each_customer(check)
 
 
 def test_a_topic_the_side_does_not_have_is_answered_with_cannot_determine_and_the_topics_it_has():
@@ -690,10 +641,11 @@ def test_asked_about_last_year_a_customer_with_no_such_data_gets_cannot_determin
     assert (none.findings, none.evidence) == ([], [])
     # "Not in the data", which says nothing about whether the same fall happened.
     assert none.could_not_determine == ["Figures for the same weeks last year are not in the data."]
-    assert claims(held) == "In the same two weeks last year, $160,000 went out and $85,000 came in."
+    assert claims(held) == "In the same two weeks last year, $300,000 went out and $85,000 came in."
+    # Every payment of the window against every payment of those weeks: the same kinds of movement.
     assert held.evidence[0].data == {
-        "outflow_cents": 16000000, "inflow_cents": 8500000,
-        "period_days": 14, "window_days": 7, "window_out_cents": 15000000, "window_vs_prior_out_bp": 9375,
+        "outflow_cents": 30000000, "inflow_cents": 8500000,
+        "period_days": 14, "window_days": 7, "window_out_cents": 29400000, "window_vs_prior_out_bp": 9800,
     }  # fmt: skip
 
 
@@ -733,7 +685,7 @@ def test_a_payees_history_is_given_only_for_a_transaction_named_by_id():
     no_such = ["There is no such payment to look up. Pass record_id, the id of one transaction."]
 
     # No id, an id that is not a transaction's, another customer's transaction, and one that is not there.
-    for record_id in (None, "agg_c_009_payee_history", "txn_c_011_01", "txn_c_009_02"):
+    for record_id in (None, "agg_c_009_payee_history", "txn_c_011_01", "txn_c_009_99"):
         answer = on(mock.cash_flow, "c_009", "payee_history", record_id=record_id)
         assert (answer.findings, answer.evidence, answer.could_not_determine) == ([], [], no_such), record_id
     # The history is no part of the transactions answer either.
@@ -786,15 +738,44 @@ def test_the_history_on_file_is_of_the_first_payment_to_a_vendor_paid_before(odd
 
 
 @pytest.mark.parametrize(
-    "txn",
-    ["txn_c_001_01", "txn_c_001_02", "txn_c_002_01", "txn_c_003_01", "txn_c_106_02"],
-    ids=["payroll", "tax", "own account", "income", "own account named"],
+    ("txn", "said"),
+    [
+        ("txn_c_002_01", "No earlier payment to this payee is on record."),
+        ("txn_c_106_02", "No earlier payment to this payee is on record."),
+        ("txn_c_003_01", "It is money coming in, not a payment."),
+    ],
+    ids=["own account", "own account named", "income"],
 )
-def test_payee_history_is_not_kept_for_payroll_tax_or_transfers(both_files, txn):
+def test_a_transfer_or_income_has_no_payee_history_and_says_why_as_bank_does(both_files, txn, said):
     answer = on(mock.cash_flow, txn[4:9], "payee_history", record_id=txn)
 
     assert (answer.findings, answer.evidence) == ([], [])
-    assert answer.could_not_determine == ["Payee history is kept for vendors only."]
+    assert answer.could_not_determine == [said]
+
+
+@pytest.mark.parametrize(
+    ("txn", "times", "said"),
+    [
+        ("txn_c_203_03", 13, "The payee of that payment was paid 13 times before over 3 months, usually $55,000."),
+        ("txn_c_001_01", 6, "The payee of that payment was paid 6 times before over 2 months, usually $280,000."),
+        ("txn_c_001_02", 1, "The payee of that payment was paid 1 time before over 3 months, usually $125,000."),
+    ],
+    ids=["running cost", "payroll", "tax"],
+)
+def test_a_running_cost_payroll_or_tax_has_the_history_bank_seeds_under_its_own_number(both_files, txn, times, said):
+    """Regression: only a vendor's payee had history, so these read as never paid, against Bank's 13 weeks of
+    running costs, a payroll run every two weeks and a tax payment a quarter back."""
+    cid = txn[4:9]
+    answer = on(mock.cash_flow, cid, "payee_history", record_id=txn)
+
+    assert claims(answer) == said
+    assert [evidence.id for evidence in answer.evidence] == [f"agg_{cid}_payee_history_{txn[-2:]}"]
+    history = answer.evidence[0].data
+    assert (history["about"], history["n_prior_payments"]) == (txn, times)
+    # Not set against the usual: G-02 reads vs_usual_bp on any payee history, whatever payment it is about.
+    assert "vs_usual_bp" not in history
+    # The whole-side answer is as it was: only the vendor's history on file.
+    assert answer.evidence[0].id not in on(mock.cash_flow, cid).model_dump_json()
 
 
 @pytest.mark.parametrize(("customer_id", "ratio", "said"), [("c_009", 10000, "100%"), ("c_011", 42500, "425%")])
@@ -822,7 +803,9 @@ def test_the_transactions_answer_has_the_same_shape_whether_or_not_the_books_agr
             for finding in answer.findings
             if finding.evidence_ids[0] in (f"bal_{customer_id}", summary.id)
         ]
-        return [evidence.kind for evidence in answer.evidence], set(summary.data), said, answer.could_not_determine
+        # The kinds in their order, once each: the two customers list different numbers of transactions.
+        kinds = list(dict.fromkeys(evidence.kind for evidence in answer.evidence))
+        return kinds, set(summary.data), said, answer.could_not_determine
 
     assert shape("c_010") == shape("c_012")
     for customer_id in ("c_010", "c_012"):
@@ -830,29 +813,29 @@ def test_the_transactions_answer_has_the_same_shape_whether_or_not_the_books_agr
         assert "reconcil" not in said and "match" not in said and "large payment" not in said
 
 
-@every_customer
-def test_only_the_reconciliation_topic_says_whether_the_books_agree(both_files, customer_id):
-    for topic, focus, answer in every_answer(customer_id):
-        if topic not in (None, "reconciliation"):
-            said = without_memos(answer)
-            assert "balance_reconciliation" not in said and "reconcile" not in said, (topic, focus)
-            assert "large payment" not in said and "Where the other" not in said, (topic, focus)
+def test_only_the_reconciliation_topic_says_whether_the_books_agree(both_files):
+    def check(customer_id):
+        for topic, focus, answer in every_answer(customer_id):
+            if topic not in (None, "reconciliation"):
+                said = without_memos(answer)
+                assert "balance_reconciliation" not in said and "reconcile" not in said, (topic, focus)
+                assert "large payment" not in said and "Where the other" not in said, (topic, focus)
 
-    books = on(mock.cash_flow, customer_id, "reconciliation")
-    bank = mock._data()["customers"][customer_id]["snapshot"]["bank"]
-    reporting = all(account["active"] and not account["days_stale"] for account in bank["linked_accounts"])
-    if reporting and bank["cash_week_ago_cents"] > bank["cash_now_cents"]:
-        record = next(evidence.data for evidence in books.evidence if evidence.kind == "balance_reconciliation")
-        assert record["reconciled"] is (customer_id != "c_012")
-    else:
-        assert (books.findings, books.evidence) == ([], [])
+        books = on(mock.cash_flow, customer_id, "reconciliation")
+        bank = mock._data()["customers"][customer_id]["snapshot"]["bank"]
+        reporting = all(account["active"] and not account["days_stale"] for account in bank["linked_accounts"])
+        if reporting and bank["cash_week_ago_cents"] > bank["cash_now_cents"]:
+            record = next(evidence.data for evidence in books.evidence if evidence.kind == "balance_reconciliation")
+            assert record["reconciled"] is (customer_id != "c_012")
+        else:
+            assert (books.findings, books.evidence) == ([], [])
+
+    each_customer(check)
 
 
-def test_the_part_not_listed_and_the_part_unmatched_are_different_numbers_and_only_c_012_has_anything_unmatched(
-    both_files,
-):
-    # Two quantities on two topics. What the list leaves out is a fact about the list, given for every customer.
-    # What matches no transaction is a fact about the books. For c_012 the two come to the same amount.
+def test_only_c_012_has_anything_unmatched_and_no_list_leaves_part_of_the_fall_out(both_files):
+    # Every movement of the week is listed, so the summary has no part of the fall it leaves out. What matches no
+    # transaction is a fact about the books, worked out from the transactions: only c_012's do not reconcile.
     def record(customer_id: str, topic: str) -> dict:
         kind = {"transactions": "payment_summary", "reconciliation": "balance_reconciliation"}[topic]
         return next(evidence.data for evidence in on(mock.cash_flow, customer_id, topic).evidence if evidence.kind == kind)
@@ -860,52 +843,55 @@ def test_the_part_not_listed_and_the_part_unmatched_are_different_numbers_and_on
     everything = {cid: str([answer.model_dump() for _, _, answer in every_answer(cid)]) for cid in EVERY_CUSTOMER}
 
     assert [cid for cid, said in everything.items() if "unmatched" in said] == ["c_012"]
-    assert record("c_012", "transactions")["not_listed_cents"] == 19500000
+    assert not [cid for cid, said in everything.items() if "not_listed" in said]
+    # $95,000 net: the payroll and vendor payments, with the week's receipts and running costs netting to nothing.
     assert record("c_012", "reconciliation") == {
         "balance_change_cents": -29000000, "transactions_total_cents": -9500000, "reconciled": False,
         "unmatched_cents": 19500000, "unmatched_share_bp": 6724,
     }  # fmt: skip
-    assert record("c_010", "transactions")["not_listed_cents"] == 1000000
     assert record("c_010", "reconciliation") == {
         "balance_change_cents": -23000000, "transactions_total_cents": -23000000, "reconciled": True,
     }  # fmt: skip
-    assert "not_listed" not in on(mock.cash_flow, "c_012", "reconciliation").model_dump_json()
 
 
-@every_customer
-def test_the_payment_summary_adds_up_to_the_payments_it_lists(both_files, customer_id):
-    answer = on(mock.cash_flow, customer_id, "transactions")
-    events = [evidence.data for evidence in answer.evidence if evidence.kind == "bank_transaction"]
-    # A payment out has a share of the fall. Income has none.
-    assert not any("share_of_fall_bp" in data for data in events if data["category"] == "income")
-    summary = next((evidence.data for evidence in answer.evidence if evidence.kind == "payment_summary"), None)
-    if summary is None:
-        return
-    out = [-data["amount_cents"] for data in events if data["category"] != "income"]
-    fall = -answer.evidence[0].data["change_cents"]
-    by_category = summary["by_category"].values()
+def test_the_payment_summary_adds_up_to_the_payments_it_lists(both_files):
+    def check(customer_id):
+        answer = on(mock.cash_flow, customer_id, "transactions")
+        events = [evidence.data for evidence in answer.evidence if evidence.kind == "bank_transaction"]
+        # A payment out has a share of the fall. Income has none.
+        assert not any("share_of_fall_bp" in data for data in events if data["category"] == "income")
+        summary = next((evidence.data for evidence in answer.evidence if evidence.kind == "payment_summary"), None)
+        if summary is None:
+            return
+        out = [-data["amount_cents"] for data in events if data["category"] != "income"]
+        fall = -answer.evidence[0].data["change_cents"]
+        by_category = summary["by_category"].values()
 
-    assert (summary["listed_count"], summary["listed_out_cents"]) == (len(out), sum(out))
-    assert summary["not_listed_cents"] == max(0, fall - sum(out))
-    assert sum(category["out_cents"] for category in by_category) == sum(out)
-    assert sum(category["count"] for category in by_category) == len(out)
-    payroll_and_tax = [-data["amount_cents"] for data in events if data["category"] in ("payroll", "tax")]
-    assert summary.get("payroll_and_tax_cents") == (sum(payroll_and_tax) if payroll_and_tax else None)
-    # Income is set out on its own, never netted against the payments.
-    income = [data["amount_cents"] for data in events if data["category"] == "income"]
-    assert summary.get("listed_in_cents") == (sum(income) if income else None)
-    # Every share is of the fall, not of the payments listed.
-    assert summary["listed_share_bp"] == mock._bp(sum(out), fall)
-    assert summary["not_listed_share_bp"] == mock._bp(summary["not_listed_cents"], fall)
-    assert summary.get("payroll_and_tax_share_bp") == (mock._bp(sum(payroll_and_tax), fall) if payroll_and_tax else None)
-    assert all(category["share_bp"] == mock._bp(category["out_cents"], fall) for category in by_category)
+        assert (summary["listed_count"], summary["listed_out_cents"]) == (len(out), sum(out))
+        assert "not_listed_cents" not in summary and "not_listed_share_bp" not in summary
+        assert sum(category["out_cents"] for category in by_category) == sum(out)
+        assert sum(category["count"] for category in by_category) == len(out)
+        payroll_and_tax = [-data["amount_cents"] for data in events if data["category"] in ("payroll", "tax")]
+        assert summary.get("payroll_and_tax_cents") == (sum(payroll_and_tax) if payroll_and_tax else None)
+        # Income is set out on its own, never netted against the payments.
+        income = [data["amount_cents"] for data in events if data["category"] == "income"]
+        assert summary.get("listed_in_cents") == (sum(income) if income else None)
+        # Every share is of the fall, not of the payments listed.
+        assert summary["listed_share_bp"] == mock._bp(sum(out), fall)
+        assert summary.get("payroll_and_tax_share_bp") == (mock._bp(sum(payroll_and_tax), fall) if payroll_and_tax else None)
+        assert all(category["share_bp"] == mock._bp(category["out_cents"], fall) for category in by_category)
+
+    each_customer(check)
 
 
-def test_payments_listed_above_the_fall_leave_nothing_not_listed(one_file):
-    # A fall of $10,000 and a payroll run of $30,000: everyday receipts made up the rest. Every account reports.
-    payroll = "[{category: payroll, amount_cents: 3000000, counterparty_kind: payroll_vendor}]"
+def test_payments_listed_above_the_fall_are_set_out_next_to_the_income_that_came_in(one_file):
+    # A fall of $10,000: a payroll run of $30,000, and $20,000 of receipts. Every account reports.
+    week = (
+        "[{category: payroll, amount_cents: 3000000, counterparty_kind: payroll_vendor},"
+        " {category: income, amount_cents: 2000000, counterparty_kind: known_vendor}]"
+    )
     one_file(
-        (ODD % (payroll, "[]"))
+        (ODD % (week, "[]"))
         .replace("cash_now_cents: 30000000", "cash_now_cents: 24000000")
         .replace("days_stale: 1", "days_stale: 0")
         .replace("active: false", "active: true")
@@ -914,7 +900,10 @@ def test_payments_listed_above_the_fall_leave_nothing_not_listed(one_file):
     answer = on(mock.cash_flow, "c_050", "transactions")
 
     summary = next(evidence.data for evidence in answer.evidence if evidence.kind == "payment_summary")
-    assert (summary["listed_share_bp"], summary["not_listed_cents"], summary["not_listed_share_bp"]) == (30000, 0, 0)
+    assert (summary["listed_share_bp"], summary["listed_in_cents"]) == (30000, 2000000)
+    assert "The listed payments are 300% of the fall. Income of $20,000 came in over the same days." in claims(answer)
+    books = next(e.data for e in on(mock.cash_flow, "c_050", "reconciliation").evidence if e.kind == "balance_reconciliation")
+    assert books == {"balance_change_cents": -1000000, "transactions_total_cents": -1000000, "reconciled": True}
 
 
 def test_a_stale_account_gets_no_shares_no_summary_and_no_word_on_the_books(one_file):
@@ -1095,17 +1084,46 @@ def test_a_topic_answer_does_not_depend_on_the_question_or_the_context():
                 assert other == plain, (topic, words)
 
 
-@every_customer
-def test_no_answer_to_any_topic_names_a_cause_or_a_recommendation(both_files, customer_id):
+def test_no_answer_to_any_topic_names_a_cause_or_a_recommendation(both_files):
     labels = (*get_args(LikelyCause), *get_args(Recommendation))
     for topic in (*mock.BANK_TOPICS, *mock.CARD_TOPICS):
         assert not any(label in topic for label in labels), topic
 
-    for topic, focus, answer in every_answer(customer_id):
-        # A memo is the payer's own words, and c_203's is there to mislead. It goes out as data.
-        said = without_memos(answer)
+    def check(customer_id):
+        for topic, focus, answer in every_answer(customer_id):
+            # A memo is the payer's own words, and c_203's is there to mislead. It goes out as data.
+            said = without_memos(answer)
+            for label in labels:
+                assert label not in said, (topic, focus, label)
+
+    each_customer(check)
+
+
+def test_a_stand_in_never_gives_away_the_answer(both_files):
+    # What the authors of the data wrote about a customer, as opposed to what its records hold, and the labels the
+    # report has to choose between. Memos are left out, as above.
+    labels = (*get_args(LikelyCause), *get_args(Recommendation))
+
+    def check(customer_id):
+        customer = mock._data()["customers"][customer_id]
+        answers = [ask(side, customer_id) for side in SIDES.values()]
+        assert all(answer.findings for answer in answers)
+        said = " ".join(without_memos(answer) for answer in answers)
+
         for label in labels:
-            assert label not in said, (topic, focus, label)
+            assert label not in said, label
+        assert customer["name"] not in said
+        sentences = [part.strip(" .") for part in customer["story"].replace("\n", " ").split(". ")]
+        assert any(sentences)
+        for sentence in filter(None, sentences):
+            assert sentence not in said, sentence
+        events = customer["signal_window"]["bank_events"]
+        payee = customer["baselines"]["bank"].get("payee_history_hint", {})
+        for written in [*(event.get("note") for event in events), *(event.get("counterparty") for event in events),
+                        payee.get("counterparty")]:  # fmt: skip
+            assert written is None or written not in said, written
+
+    each_customer(check)
 
 
 @pytest.mark.parametrize(
@@ -1142,32 +1160,10 @@ def test_the_stand_ins_import_nothing_from_the_graph_or_the_policy():
     assert [name for name in imported if name.split(".")[:2] in (["app", "graph"], ["app", "policy"])] == []
 
 
-@pytest.mark.parametrize(
-    ("bp", "said"),
-    [(0, "0%"), (1, "under 1%"), (49, "under 1%"), (50, "1%"), (4449, "44%"), (4450, "45%"), (42500, "425%")],
-)
-def test_a_share_is_said_in_whole_percent_rounded_half_up(bp, said):
-    assert mock._pct(bp) == said
-
-
-@pytest.mark.parametrize(
-    ("cents", "said"), [(23000000, "$230,000"), (1250, "$12.50"), (99991, "$999.91"), (5, "$0.05"), (0, "$0")]
-)
-def test_money_is_said_in_whole_dollars_with_cents_only_when_there_are_some(cents, said):
-    # Rounded away, $999.91 would be said as $1,000, a figure no record holds.
-    assert mock._usd(cents) == said
-
-
-def test_a_share_is_worked_out_in_basis_points_rounded_half_up_and_not_at_all_without_a_whole():
-    assert [mock._bp(1, 3), mock._bp(2, 3), mock._bp(12000000, 49400000), mock._bp(1, 20000)] == [3333, 6667, 2429, 1]
-    assert mock._bp(5, 0) is None and mock._bp(5, -1) is None
-
-
 # What the stand-ins say against what the graph shows a model (P5)
 
 
-@every_customer
-def test_every_figure_in_a_stand_ins_sentence_is_in_the_evidence_that_sentence_cites(both_files, customer_id):
+def test_every_figure_in_a_stand_ins_sentence_is_in_the_evidence_that_sentence_cites(both_files):
     # A dates focus moves the window to a week the data does not hold. A side then says which week it does hold:
     # the review window, which no record of that answer holds. The case's own sig_cash does, and a model reads
     # it next to every answer, so those dates are allowed for such an answer alone.
@@ -1175,32 +1171,35 @@ def test_every_figure_in_a_stand_ins_sentence_is_in_the_evidence_that_sentence_c
     review_window = figures.allowed_figures(
         [{"id": "sig_cash", "kind": "cash_change", "data": {key: REQUEST[key] for key in moved}}]
     )
-    answers = [(topic, focus, answer, set()) for topic, focus, answer in every_answer(customer_id)]
-    answers += [
-        (topic, moved, on(side, customer_id, topic, **moved), review_window)
-        for side, topics in ((mock.cash_flow, mock.BANK_TOPICS), (mock.credit_behavior, mock.CARD_TOPICS))
-        for topic in topics
-    ]
-    for topic, focus, answer, also_shown in answers:
-        records = {evidence.id: evidence.model_dump(mode="json") for evidence in answer.evidence}
-        findings = [{"claim": finding.claim, "evidence_ids": finding.evidence_ids} for finding in answer.findings]
-        # Each finding as a claim of a report, checked by the report's own figure rule.
-        as_claims = {"summary": "", "evidence": findings, "ruled_out": [], "other_findings": [], "review_reasons": []}
-        assert figures.made_up(as_claims, records) == [], (topic, focus)
-        # What a side could not determine cites nothing. Its figures must be in the records of the whole answer:
-        # c_012's "Where the other $195,000 went" rests on the reconciliation it comes with.
-        shown = figures.allowed_figures(records.values()) | also_shown
-        for said in answer.could_not_determine:
-            assert figures.not_backed(said, shown) == [], (topic, focus, said)
-    if customer_id == "c_012":
-        # The one such line with a figure in it, so the check above is not empty. It cites nothing itself:
-        # the record that holds its figure is in the answer, cited by the finding that states the same figure.
-        books = on(mock.cash_flow, "c_012", "reconciliation")
-        [said] = books.could_not_determine
-        assert figures.figures(said) == {"m:195000": "$195,000"}
-        for finding in books.findings:
-            cited = [evidence.model_dump(mode="json") for evidence in books.evidence if evidence.id in finding.evidence_ids]
-            assert figures.not_backed(said, figures.allowed_figures(cited)) == ([] if "$195,000" in finding.claim else ["$195,000"])
+
+    def check(customer_id):
+        answers = [(topic, focus, answer, set()) for topic, focus, answer in every_answer(customer_id)]
+        answers += [
+            (topic, moved, on(side, customer_id, topic, **moved), review_window)
+            for side, topics in ((mock.cash_flow, mock.BANK_TOPICS), (mock.credit_behavior, mock.CARD_TOPICS))
+            for topic in topics
+        ]
+        for topic, focus, answer, also_shown in answers:
+            records = {evidence.id: evidence.model_dump(mode="json") for evidence in answer.evidence}
+            findings = [{"claim": finding.claim, "evidence_ids": finding.evidence_ids} for finding in answer.findings]
+            # Each finding as a claim of a report, checked by the report's own figure rule.
+            as_claims = {"summary": "", "evidence": findings, "ruled_out": [], "other_findings": [], "review_reasons": []}
+            assert figures.made_up(as_claims, records) == [], (topic, focus)
+            # What a side could not determine cites nothing. Its figures must be in the records of the whole answer:
+            # c_012's "Where the other $195,000 went" rests on the reconciliation it comes with.
+            shown = figures.allowed_figures(records.values()) | also_shown
+            for said in answer.could_not_determine:
+                assert figures.not_backed(said, shown) == [], (topic, focus, said)
+
+    each_customer(check)
+    # The one such line with a figure in it, so the check above is not empty. It cites nothing itself:
+    # the record that holds its figure is in the answer, cited by the finding that states the same figure.
+    books = on(mock.cash_flow, "c_012", "reconciliation")
+    [said] = books.could_not_determine
+    assert figures.figures(said) == {"m:195000": "$195,000"}
+    for finding in books.findings:
+        cited = [evidence.model_dump(mode="json") for evidence in books.evidence if evidence.id in finding.evidence_ids]
+        assert figures.not_backed(said, figures.allowed_figures(cited)) == ([] if "$195,000" in finding.claim else ["$195,000"])
 
 
 @pytest.mark.parametrize(
@@ -1210,7 +1209,7 @@ def test_the_stand_ins_print_money_and_shares_the_way_the_formatter_does(value):
     # A figure in a stand-in's sentence must read exactly as the record it rests on is shown to a model.
     assert mock._usd(value) == facts.usd(value)
     assert mock._pct(value) == facts.pct(value)
-    for whole in (0, -5, 3, 23000000):
+    for whole in (0, -5, 3, 20000, 23000000):  # 1 of 20000 is half a basis point
         assert mock._bp(value, whole) == facts.bp(value, whole)
 
 

@@ -34,16 +34,39 @@ async def lifespan(app: FastAPI):
         log.exception("The seeded reviews could not be loaded. The service starts without them.")
     with runtime.case_graph() as graph:
         app.state.graph = graph
-        picked_up = []
+        picked_up, retrying, stop = [], None, asyncio.Event()
         if graph is not None:
             # A closed case must not read as "no earlier review" for want of its review.
             runner.keep_missing_reviews(graph)
             # A restart must not leave a case queued, half investigated, or with a stale status.
             loop = asyncio.get_running_loop()
             picked_up = [loop.run_in_executor(None, runner.run_case, graph, case_id) for case_id in runner.unfinished()]
+            # Cases waiting for Bank or Card run again when their retry is due, first those that came due while
+            # the service was down.
+            first = loop.run_in_executor(None, _retry_due, graph, stop)
+            retrying = asyncio.create_task(_retry_waiting(graph, stop, first, runtime.retry_check_seconds()))
         yield
         # Before the checkpointer closes. If the process is killed first, the next start picks them up again.
-        await asyncio.gather(*picked_up, return_exceptions=True)
+        stop.set()
+        await asyncio.gather(*picked_up, *([retrying] if retrying else []), return_exceptions=True)
+
+
+def _retry_due(graph, stop: asyncio.Event) -> None:
+    try:
+        runner.retry_due(graph, stopping=stop.is_set)
+    except Exception:  # a database that is down for a moment must not end the loop
+        log.exception("Cases waiting for Bank or Card could not be looked up. Trying again later.")
+
+
+async def _retry_waiting(graph, stop: asyncio.Event, first, every: float) -> None:
+    """Run runner.retry_due every `every` seconds until the service stops, one run at a time."""
+    loop = asyncio.get_running_loop()
+    await first
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), every)
+        except TimeoutError:
+            await loop.run_in_executor(None, _retry_due, graph, stop)
 
 
 app = FastAPI(title="Orchestrator Service", lifespan=lifespan)

@@ -6,6 +6,7 @@ the fixed plan of 8.4, and with every topic asked. The tests pin today's finding
 a threshold, a stand-in or a case that opens a new overlap fails here before a model is paid for.
 """
 
+import functools
 import json
 import os
 import sys
@@ -18,6 +19,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eval"))
 
+import grade as grading  # noqa: E402
 from signals import FILES, customers, signal_for  # noqa: E402
 
 from app import guidelines, history, policy  # noqa: E402
@@ -153,9 +155,24 @@ def met(records: list[dict], asked: list[dict]) -> set[str]:
     return {g["id"] for g in loaded if not needs.unmet(g, records, guidelines=loaded, known=records, asked=asked)}
 
 
+@functools.cache
+def _ledger(customer_id: str) -> tuple[dict, ...]:
+    return tuple(every_topic(customer_id)[0])
+
+
+def resolved(case: dict, entries: list) -> set[str]:
+    """The stand-ins' ids of the records the entries name. A spec names one record of the case's whole ledger."""
+    return {cid for entry in entries for cid in grading.resolve(entry, list(_ledger(case["id"])))}
+
+
+def must_cite(case: dict) -> set[str]:
+    return resolved(case, case.get("must_cite", []))
+
+
 def must_reach(case: dict) -> set[str]:
     """What a run must have been given for the case to count as tested (8.1)."""
-    return set(case.get("must_reach", [cid for cid in case.get("must_cite", []) if not cid.startswith(OWN)]))
+    default = [entry for entry in case.get("must_cite", []) if not (isinstance(entry, str) and entry.startswith(OWN))]
+    return resolved(case, case.get("must_reach", default))
 
 
 def reached(case: dict, records: list[dict], asked: list[dict]) -> bool:
@@ -164,7 +181,7 @@ def reached(case: dict, records: list[dict], asked: list[dict]) -> bool:
     returned = {evidence_id for entry in asked for evidence_id in entry["returned"]}
     return (
         must_reach(case) <= returned
-        and set(case.get("must_cite", [])) <= {item["id"] for item in records}
+        and must_cite(case) <= {item["id"] for item in records}
         and bool(carrying(case, records, asked))
     )
 
@@ -184,7 +201,7 @@ def test_every_case_can_be_reached_in_six_questions_and_its_path_returns_what_it
 
     records, asked = walk(case["id"], path)
     returned = {evidence_id for entry in asked for evidence_id in entry["returned"]}
-    assert set(case.get("must_cite", [])) <= {item["id"] for item in records}
+    assert must_cite(case) <= {item["id"] for item in records}
     # A record a run must reach is one a question returns, never one code gives at open.
     assert not [evidence_id for evidence_id in must_reach(case) if evidence_id.startswith(OWN)]
     assert must_reach(case) <= returned
@@ -246,15 +263,15 @@ def test_the_guidelines_a_case_lists_are_the_ones_that_carry_an_accepted_answer(
     assert (path | every) - listed == set()
 
 
-def test_the_accepted_answers_no_guideline_can_carry_are_the_two_known_ones():
-    # c_010: no guideline that allows a cut has a need its records meet. c_106: its inflows stopped, and G-06 needs
-    # them shrinking. The other accepted answer of each is carried.
+def test_the_one_accepted_answer_no_guideline_can_carry_is_c_106s_cut():
+    # c_106: its inflows stopped, and G-06 needs them shrinking; its other accepted answer is carried. c_010 accepted a
+    # cut no guideline carries until it was narrowed to pause_card, the one action G-08b allows.
     left = {}
     for case in GOLDEN["customers"]:
         if missing := set(case["recommendations"]) - carried(*every_topic(case["id"])):
             left[case["id"]] = missing
 
-    assert left == {"c_010": {"reduce_limit"}, "c_106": {"reduce_limit"}}
+    assert left == {"c_106": {"reduce_limit"}}
 
 
 def test_with_the_strict_reading_of_unpaid_nothing_accepted_for_c_010_can_pass(monkeypatch):
@@ -414,8 +431,9 @@ def test_the_seeds_give_each_case_the_history_the_spec_lists():
     }
 
     assert seeded == {"c_007", "c_107", "c_307", "c_303", "c_301", "c_304", "c_314"}
-    # Cash before this fall against cash before the fall a year ago: back for c_007, c_107 and c_303, not for c_307.
-    assert recovery == {"c_007": 10294, "c_107": 10294, "c_307": 7778, "c_303": 10345}
+    # Cash before this fall against cash before the fall a year ago: back for c_007 and c_107, not for c_307. Back
+    # for c_303 too, and that is the lure: one condition of last year's G-03 holds, while its income is shrinking.
+    assert recovery == {"c_007": 9118, "c_107": 9706, "c_307": 6889, "c_303": 10353}
     assert counts == {"c_301": (2, 0, 0), "c_304": (2, 2, 0), "c_314": (2, 2, 2)}
     assert [opened["c_314"][f"hist_seed_X_{n}"]["days_before"] for n in "ab"] == [147, 77]
     # A case with no seed opens with a summary of zeros and nothing else.
@@ -463,6 +481,31 @@ def test_a_supported_precedent_and_todays_facts_are_both_permitted_for_c_107():
     assert path[-1] == ("AskCashFlow", "prior_year", None)
     assert "keep_limit" not in needs.permitted(loaded, walk("c_107", path[:-1])[0])
     assert "agg_c_107_prior_year" in must_reach(CASES["c_107"])
+
+
+def test_c_013_is_decided_on_the_card_sides_record_alone():
+    # Cash is steady and the bank side shows no cause, but the latest repayment failed and is unpaid. One question to
+    # the card side permits the pause under G-08b, and no answer of the bank side adds or takes away an action.
+    loaded, path = guidelines.load(), steps(CASES["c_013"]["path"])
+    assert path == [("AskCreditBehavior", "repayments", None)]
+    assert signal_for(DATA["c_013"], TODAY)["review_reasons"] == ["failed_repayment"]
+    for records, asked in (walk("c_013", path), walk("c_013", PLAN), every_topic("c_013")):
+        assert needs.permitted(loaded, records) == {"pause_card": ["G-08b"]}
+        assert met(records, asked) == {"G-08b"}
+        assert needs.hand_over(loaded, records, asked) == []
+        assert needs.code_gaps(loaded, records, asked) == []
+    # After that one question, G-06 and G-07 still wait on the income topic, G-02 and G-09 on the transactions topic,
+    # and G-01 on both. G-04, G-05 and G-14 are dead at open, since a repayment failed. With an action permitted, code
+    # sends the case to neither topic (2.D.3). Asked, they rule those guidelines out.
+    records, asked = walk("c_013", path)
+    assert needs.unsettled(loaded, records, asked) == [
+        {"tool": "AskCashFlow", "args": {"topic": "transactions"}},
+        {"tool": "AskCashFlow", "args": {"topic": "income"}},
+    ]
+    assert needs.unsettled(loaded, *every_topic("c_013")) == []
+    # With every topic asked, no record of the case shows a cause: no_clear_cause is the only one it can give.
+    records = every_topic("c_013")[0]
+    assert [cause for cause, shown_by in causes.CAUSE_NEEDS.items() if any(needs.meets(n, records) for n in shown_by)] == []
 
 
 def test_the_words_that_say_a_need_hold_no_figure():

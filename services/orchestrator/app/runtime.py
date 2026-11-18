@@ -8,14 +8,17 @@ from contextlib import contextmanager
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
-from langfuse import Langfuse
+from langfuse import Langfuse, is_default_export_span
 from langfuse.langchain import CallbackHandler
+from opentelemetry.sdk.trace import ReadableSpan
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from app import card_client, guidelines, history, retrieval
 from app.agents import mock
+from app.agents.card_service import card_service
+from app.agents.cash_flow import cash_flow
 from app.db import engine
 from app.graph import build_graph, plans
 
@@ -41,8 +44,7 @@ def case_graph() -> Iterator:
     with postgres_checkpointer() as checkpointer, tracing() as callbacks:
         graph = build_graph(
             model=model,
-            # Stand-ins until the real specialists can be called (KAN-36).
-            specialists={"cash_flow": mock.cash_flow, "credit_behavior": mock.credit_behavior},
+            specialists=specialists(),
             load_guidelines=guidelines.load,
             carry_out=card_client.carry_out,
             checkpointer=checkpointer,
@@ -54,6 +56,15 @@ def case_graph() -> Iterator:
             follow_gaps=flow == "fixed_rules",
         )
         yield graph.with_config({"callbacks": callbacks})
+
+
+def specialists() -> dict:
+    """The specialists the graph asks (KAN-36): the real agents, which call Bank and Card, unless
+    SPECIALISTS=stand_in, which answers from the data files with no service and no model (the evaluation's
+    stand-in arm and offline runs)."""
+    if os.environ.get("SPECIALISTS") == "stand_in":
+        return {"cash_flow": mock.cash_flow, "credit_behavior": mock.credit_behavior}
+    return {"cash_flow": cash_flow, "credit_behavior": card_service}
 
 
 def _flow() -> str:
@@ -68,6 +79,26 @@ def _flow() -> str:
     return "agent"
 
 
+RETRY_CHECK_DEFAULT = 15.0
+
+
+def retry_check_seconds() -> float:
+    """How often the service looks for cases whose retry after a Bank or Card outage is due (OUTAGE_CHECK_SECONDS,
+    default 15). A value that is not a positive number of seconds is the default, with one warning: the loop must
+    neither end nor spin. The retry delays themselves are policy.OUTAGE_RETRY_SECONDS."""
+    setting = os.environ.get("OUTAGE_CHECK_SECONDS")
+    if not setting:
+        return RETRY_CHECK_DEFAULT
+    try:
+        seconds = float(setting)
+    except ValueError:
+        seconds = 0.0
+    if seconds > 0 and seconds != float("inf"):
+        return seconds
+    log.warning("OUTAGE_CHECK_SECONDS %s is not a positive number of seconds. %s is used.", setting, RETRY_CHECK_DEFAULT)
+    return RETRY_CHECK_DEFAULT
+
+
 def history_seed_files() -> list[str]:
     """The files the service seeds closed reviews from at start.
 
@@ -76,6 +107,20 @@ def history_seed_files() -> list[str]:
     """
     named = [path for path in os.environ.get("HISTORY_SEED_FILE", "").split(":") if path]
     return named or [HISTORY_SEED_DEFAULT]
+
+
+_ANTHROPIC_SDK_SCOPE = "com.anthropic.sdk.python"
+
+
+def _exported(span: ReadableSpan) -> bool:
+    """LangFuse's own choice, less the Anthropic SDK's span of each API call.
+
+    The SDK traces every call itself, and LangChain's callback records the same call as a generation, with
+    the thinking tokens in its output as they are billed. Sending both counted every call, its tokens and its
+    cost twice.
+    """
+    scope = span.instrumentation_scope.name if span.instrumentation_scope else ""
+    return scope != _ANTHROPIC_SDK_SCOPE and is_default_export_span(span)
 
 
 @contextmanager
@@ -93,7 +138,7 @@ def tracing() -> Iterator[list]:
         yield []
         return
     # The client comes first: a handler made for a key that has no client yet is switched off.
-    client = Langfuse()  # reads the three LANGFUSE_ settings itself
+    client = Langfuse(should_export_span=_exported)  # reads the three LANGFUSE_ settings itself
     handler = CallbackHandler(public_key=public_key)
     try:
         yield [handler]

@@ -12,6 +12,8 @@ class CaseStatus(StrEnum):
 
     QUEUED = "queued"
     INVESTIGATING = "investigating"
+    # Bank or Card gave nothing at all. The case runs again from that question at its next retry (OutageWait).
+    WAITING_FOR_DATA = "waiting_for_data"
     NEEDS_APPROVAL = "needs_approval"
     NEEDS_MANAGER = "needs_manager"
     DONE = "done"
@@ -22,6 +24,7 @@ class CaseStatus(StrEnum):
 OPEN_STATUSES = (
     CaseStatus.QUEUED,
     CaseStatus.INVESTIGATING,
+    CaseStatus.WAITING_FOR_DATA,
     CaseStatus.NEEDS_APPROVAL,
     CaseStatus.NEEDS_MANAGER,
 )
@@ -64,6 +67,25 @@ class SignalRow(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class OutageWait(Base):
+    """Why a case stopped for want of Bank or Card, since when, how often it was tried, and when it runs again.
+
+    Kept while the case waits (waiting_for_data), and after it failed for the outage (next_retry_at is then None),
+    so the case page can say why. Removed once a run gets past the outage, or fails for another reason.
+    """
+
+    __tablename__ = "outage_waits"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.case_id"), primary_key=True)
+    service: Mapped[str] = mapped_column(String(32))  # "Bank Service" or "Card Service"
+    codes: Mapped[str] = mapped_column(String(200))  # the outage codes, as "http_503, timeout"
+    kind: Mapped[str] = mapped_column(String(16))  # transient, configuration or data (errors.OutageKind)
+    attempts: Mapped[int] = mapped_column()  # runs that met the outage, the first one included
+    asked_before: Mapped[int] = mapped_column()  # questions recorded before the one that met it (CaseWaiting)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class Review(Base):
