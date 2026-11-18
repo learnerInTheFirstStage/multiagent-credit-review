@@ -39,7 +39,7 @@ You need git, Docker and Python 3.12. A model API key is needed only to run case
 ```bash
 git clone https://github.com/lqc412/multiagent-credit-review.git
 cd multiagent-credit-review
-git checkout KAN-36-poc-complete
+git checkout KAN-36-poc-complete   # until the KAN-36 pull requests are merged; after that, stay on main
 ```
 
 1. Run the tests: [Run the tests](#run-the-tests). No Docker, no key. This also creates the Python environment steps 3 and 4 use.
