@@ -3,7 +3,9 @@
 Expected numbers come from that file, so the tests follow it when it changes.
 """
 
+import copy
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
@@ -11,15 +13,25 @@ from sqlalchemy import func, select
 from app.db.models import CardTransaction, CreditLimit, Customer, Repayment
 from app.db.seed import HISTORY_CAP_SHARE, SPEND_JITTER, cycles, generate, load, seed, seed_if_empty
 
+ROOT = Path(__file__).resolve().parents[3]
+BOTH_FILES = f"{ROOT / 'data' / 'shared_customers.yaml'}:{ROOT / 'eval' / 'extra_customers.yaml'}"
 DATA = load()
 AS_OF = date.fromisoformat(DATA["clock"]["signal_date"])
 CUSTOMERS = {c["id"]: c for c in DATA["customers"]}
+ALL_CUSTOMERS = {c["id"]: c for c in load(BOTH_FILES)["customers"]}
 STATUS = {"paid": "COMPLETED", "late": "COMPLETED", "failed": "RETURNED"}
 
 
 @pytest.fixture
 def seeded(session):
     seed(session)
+    return session
+
+
+@pytest.fixture
+def seeded_all(session):
+    """Every customer in the team's file and the evaluation's."""
+    seed(session, BOTH_FILES)
     return session
 
 
@@ -143,16 +155,86 @@ def test_a_statement_is_the_sum_of_its_cycles_spend(seeded):
             assert spent == rep.statement_balance_cents == rep.amount_cents, (cid, rep.repayment_id)
 
 
-def test_monthly_spend_follows_the_files_baseline_unless_the_limit_caps_it(seeded):
-    for cid, c in CUSTOMERS.items():
+def test_the_ledger_invariants_hold_for_all_26_customers(seeded_all):
+    for cid, c in ALL_CUSTOMERS.items():
+        card = c["snapshot"]["card"]
+        balances = _balances(seeded_all, cid)
+        assert balances[AS_OF] == round(card["credit_limit_cents"] * card["utilization_pct"]), cid
+        assert max(balances.values()) <= card["credit_limit_cents"], cid
+        for rep in seeded_all.scalars(select(Repayment).where(Repayment.customer_id == cid)):
+            spent = seeded_all.scalar(
+                select(func.sum(CardTransaction.amount_cents)).where(
+                    CardTransaction.customer_id == cid,
+                    CardTransaction.state != "DECLINED",
+                    func.date(CardTransaction.authorized_at) >= rep.statement_period_start.isoformat(),
+                    func.date(CardTransaction.authorized_at) <= rep.statement_period_end.isoformat(),
+                )
+            )
+            assert spent == rep.statement_balance_cents == rep.amount_cents, (cid, rep.repayment_id)
+
+
+def test_older_cycles_spend_the_files_monthly_give_or_take_the_jitter(seeded_all):
+    for cid, c in ALL_CUSTOMERS.items():
         monthly = c["baselines"]["card"]["monthly_card_spend_cents"]
-        cap = HISTORY_CAP_SHARE * c["snapshot"]["card"]["credit_limit_cents"]
         # The cycles before the last three, which no event moves.
-        for rep in seeded.scalars(select(Repayment).where(Repayment.customer_id == cid).order_by(Repayment.due_date)).all()[:-3]:
-            if monthly <= cap:
-                assert abs(rep.amount_cents - monthly) <= SPEND_JITTER * monthly + 1, (cid, rep.repayment_id)
-            else:
-                assert rep.amount_cents <= cap, (cid, rep.repayment_id)
+        rows = seeded_all.scalars(select(Repayment).where(Repayment.customer_id == cid, ~Repayment.repayment_id.like("%_r1"))
+                                  .order_by(Repayment.due_date)).all()
+        for rep in rows[:-3]:
+            assert abs(rep.amount_cents - monthly) <= SPEND_JITTER * monthly + 1, (cid, rep.repayment_id)
+
+
+def test_the_last_three_statements_are_exactly_the_files_amounts(seeded_all):
+    # The signal's rule: the monthly spend, except a late or failed last one, which has its event's amount.
+    for cid, c in ALL_CUSTOMERS.items():
+        monthly = c["baselines"]["card"]["monthly_card_spend_cents"]
+        statuses = c["snapshot"]["card"]["last_3_repayments"]
+        events = {e["kind"]: e for e in c["signal_window"].get("card_events") or []}
+        expected = [monthly] * 3
+        if f"{statuses[-1]}_repayment" in events:
+            expected[-1] = events[f"{statuses[-1]}_repayment"]["amount_cents"]
+        rows = seeded_all.scalars(select(Repayment).where(Repayment.customer_id == cid, ~Repayment.repayment_id.like("%_r1"))
+                                  .order_by(Repayment.due_date)).all()
+        assert [r.amount_cents for r in rows[-3:]] == expected, cid
+
+
+def test_an_event_for_a_repayment_that_is_not_the_latest_is_an_error():
+    # The signal gives an event's amount to the latest repayment only. An event about an earlier one (its amount,
+    # repaid_after_days, still_unpaid) has nowhere to go, and is refused rather than dropped.
+    for cid, statuses in (("c_010", ["paid", "failed", "paid"]), ("c_111", ["failed", "paid", "paid"]),
+                          ("c_003", ["late", "paid", "paid"])):
+        c = copy.deepcopy(ALL_CUSTOMERS[cid])
+        c["snapshot"]["card"]["last_3_repayments"] = statuses
+        with pytest.raises(ValueError) as error:
+            generate(c, AS_OF)
+        assert cid in str(error.value) and "latest" in str(error.value), cid
+
+
+def test_an_earlier_late_or_failed_repayment_without_an_event_is_the_monthly_spend():
+    c = copy.deepcopy(CUSTOMERS["c_003"])
+    c["snapshot"]["card"]["last_3_repayments"] = ["failed", "paid", "late"]
+    monthly = c["baselines"]["card"]["monthly_card_spend_cents"]
+
+    repayments = generate(c, AS_OF)["repayments"][-3:]
+
+    assert [(r["status"], r["amount_cents"]) for r in repayments] == [
+        ("RETURNED", monthly), ("COMPLETED", monthly), ("COMPLETED", 4_000_000),
+    ]
+
+
+def test_every_customer_spends_within_the_share_of_its_limit_a_ledger_can_carry():
+    for cid, c in ALL_CUSTOMERS.items():
+        card = c["snapshot"]["card"]
+        assert c["baselines"]["card"]["monthly_card_spend_cents"] <= HISTORY_CAP_SHARE * card["credit_limit_cents"], cid
+
+
+def test_a_monthly_spend_too_high_for_the_limit_is_an_error_not_a_silent_cap():
+    c = copy.deepcopy(CUSTOMERS["c_001"])
+    limit = c["snapshot"]["card"]["credit_limit_cents"]
+    c["baselines"]["card"]["monthly_card_spend_cents"] = limit // 2
+    with pytest.raises(ValueError) as error:
+        generate(c, AS_OF)
+    message = str(error.value)
+    assert "c_001" in message and str(limit // 2) in message and str(limit) in message
 
 
 def test_only_the_stressed_customers_are_declined_at_the_limit(seeded):

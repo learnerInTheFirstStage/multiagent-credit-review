@@ -16,8 +16,9 @@ Card checks everything again, whatever the Orchestrator already checked:
   a manager decides. Any other reduction needs the analyst step, which an analyst or a manager
   decides. A manager's approval also covers an action that needed only the analyst's.
 - Each approval is applied once. The receipt is written in the same transaction as the change,
-  keyed by approval_id. A retry of the same approval gets the stored receipt back
-  (status already_applied) and changes nothing; the same approval_id with another action is a 409.
+  keyed by approval_id, and looked up only after the customer row is locked. A retry of the same
+  approval by the same approver gets the stored receipt back (status already_applied) and changes
+  nothing; the same approval_id with another action or another approver is a 409.
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ class ActionRequest(BaseModel):
 
     type: Literal["reduce_limit", "pause_card"]
     # The new limit, for reduce_limit only.
-    limit_cents: int | None = Field(default=None, ge=0, strict=True)
+    limit_cents: int | None = Field(default=None, ge=1, strict=True)  # 0 would leave utilization undefined
     case_id: str = Field(pattern=r"^case_[A-Za-z0-9_-]{1,56}$")
     customer_id: str = Field(pattern=r"^c_[0-9]{3}$")
     approved_by: str = Field(min_length=1, max_length=128)
@@ -95,8 +96,9 @@ def _receipt(row: AppliedAction, status_: str) -> Receipt:
 
 
 def _same(row: AppliedAction, body: ActionRequest) -> bool:
-    return (row.type, row.limit_cents, row.case_id, row.customer_id) == (
-        body.type, body.limit_cents, body.case_id, body.customer_id)
+    # approved_by too: only the approver's own retry gets the receipt (who approved, when) back.
+    return (row.type, row.limit_cents, row.case_id, row.customer_id, row.approved_by) == (
+        body.type, body.limit_cents, body.case_id, body.customer_id, body.approved_by)
 
 
 def _retry(row: AppliedAction, body: ActionRequest) -> Receipt:
@@ -126,22 +128,24 @@ def act(
         raise refused(status.HTTP_403_FORBIDDEN, "forbidden", f"This token does not cover customer {customer_id}")
     if body.approved_by != caller.sub:
         raise refused(status.HTTP_403_FORBIDDEN, "forbidden", "approved_by is not the person this token belongs to")
-
-    if (done := session.get(AppliedAction, body.approval_id)) is not None:
-        return _retry(done, body)
+    # Before any receipt is looked up: a stored receipt goes back only to a caller who may give this approval.
+    if caller.role not in MAY_DECIDE[body.step]:
+        raise refused(status.HTTP_403_FORBIDDEN, "forbidden", f"The role {caller.role} may not approve the {body.step} step")
 
     # Locked until commit on Postgres, so two approvals for one customer apply one after the other.
     customer = session.scalars(select(Customer).where(Customer.customer_id == customer_id).with_for_update()).first()
     if customer is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, {"error": "not_found", "message": f"Unknown customer {customer_id}"})
+    # Looked up under the lock: a copy that waited for it sees the receipt the first copy committed
+    # (READ COMMITTED), not the limit that copy already lowered.
+    if (done := session.get(AppliedAction, body.approval_id)) is not None:
+        return _retry(done, body)
 
     current = customer.credit_limit_cents
     if body.type == "reduce_limit" and body.limit_cents >= current:
         raise HTTPException(422, {"error": "invalid_request",
                                   "message": f"limit_cents {body.limit_cents} is not below the current limit {current}"})
     needed = "manager" if _needs_manager(body, current) else "analyst"
-    if caller.role not in MAY_DECIDE[body.step]:
-        raise refused(status.HTTP_403_FORBIDDEN, "forbidden", f"The role {caller.role} may not approve the {body.step} step")
     if STEP_RANK[body.step] < STEP_RANK[needed]:
         raise refused(status.HTTP_403_FORBIDDEN, "forbidden",
                       "A card pause or a cut of more than half the limit needs the manager's approval")

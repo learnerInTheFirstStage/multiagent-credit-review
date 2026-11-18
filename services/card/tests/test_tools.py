@@ -229,6 +229,36 @@ def test_the_same_id_has_the_same_content_whichever_call_returns_it(tools):
                 assert before == item, item["id"]
 
 
+def test_transactions_summary_keeps_its_content_whatever_the_limit(tools):
+    # The same filters with another page size: the summary id may be shared, its content must be too.
+    window = {"start": "2026-10-11", "end": "2026-11-10"}
+    small, large = (tools("c_003", "transactions", limit=n, **window).json() for n in (5, 50))
+    large_by_id = {e["id"]: e for e in large["evidence"]}
+    for item in small["evidence"]:
+        if item["id"] in large_by_id:
+            assert large_by_id[item["id"]] == item, item["id"]
+    # The page fields stay in the answer, outside the record.
+    assert (small["data"]["shown"], small["data"]["truncated"]) == (5, True)
+    summary = next(e for e in small["evidence"] if e["id"] == small["data"]["summary_id"])
+    assert "shown" not in summary["data"] and "truncated" not in summary["data"]
+
+
+def test_paying_account_record_is_the_same_for_every_count(tools):
+    for cid in ("c_006", "c_010", NEW):
+        records = []
+        for count in range(2, 14):
+            body = tools(cid, "paying_account", count=count).json()
+            [record] = [e for e in body["evidence"] if e["kind"] == "funding_account_change"]
+            assert record["id"] == f"rep_{cid}_funding" == body["data"]["change_id"]
+            assert "repayments_compared" not in record["data"] and "repayment_ids" not in record["data"]
+            records.append(record)
+        assert all(r == records[0] for r in records), cid
+    c006 = tools("c_006", "paying_account", count=2).json()
+    [record] = [e for e in c006["evidence"] if e["kind"] == "funding_account_change"]
+    assert record["data"] == {"changed": True, "from": "acct_c006_a", "to": "acct_external_new_c006",
+                              "changed_on": "2026-09-20"}
+
+
 def test_aggregate_ids_change_with_the_question(tools):
     a = tools("c_010", "repayments", count=3).json()["data"]["summary_id"]
     b = tools("c_010", "repayments", count=4).json()["data"]["summary_id"]
@@ -241,3 +271,15 @@ def test_evidence_kinds_are_the_ones_the_orchestrator_reads(tools):
     for tool in ("repayments", "paying_account", "utilization", "spend_by_cycle"):
         kinds |= {e["kind"] for e in tools("c_010", tool).json()["evidence"]}
     assert {"card_repayment", "funding_account_change", "card_balance", "card_spend_series"} <= kinds
+
+
+def test_a_time_reads_the_same_from_sqlite_and_postgres():
+    # SQLite returns a naive UTC datetime, Postgres an aware one in the session's zone (seen: New York).
+    from datetime import datetime, timedelta, timezone
+
+    from app.api.evidence import plain
+
+    naive = datetime(2026, 11, 6, 17, 54)
+    utc = naive.replace(tzinfo=timezone.utc)
+    new_york = utc.astimezone(timezone(timedelta(hours=-5)))
+    assert plain(naive) == plain(utc) == plain(new_york) == "2026-11-06T17:54:00+00:00"

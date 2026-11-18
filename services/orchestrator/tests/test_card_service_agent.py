@@ -46,8 +46,11 @@ def test_c010_findings_cite_what_the_tools_returned():
         ("On 2026-11-10 the card balance was $92,000, 92% of the $100,000 limit, and utilization is spiking.", [BALANCE]),
         ("The repayment due 2026-11-05 for $50,000 failed (R01, insufficient funds) and has not been paid since.", [FAILED]),
     )])
-    assert [f.evidence_ids for f in response.findings] == [[BALANCE], [FAILED]]
-    assert [e.id for e in response.evidence] == [BALANCE, FAILED]
+    # The model's two findings, then code's own statement of the failed repayment (a hard fact).
+    assert [f.evidence_ids for f in response.findings] == [[BALANCE], [FAILED], [FAILED]]
+    # The cited records first, then every other record preflight fetched.
+    assert [e.id for e in response.evidence][:2] == [BALANCE, FAILED]
+    assert {"agg_b640a9b7", "rep_c_010_202609"} <= {e.id for e in response.evidence}
     # The evidence is the records as Card returned them, not anything the model wrote.
     failed = next(e for e in response.evidence if e.id == FAILED)
     assert failed.kind == "card_repayment" and failed.data["paid_since"] == "no" and failed.data["status"] == "failed"
@@ -88,11 +91,11 @@ def test_the_model_can_drill_down_with_more_tools():
     response, stub, _ = run("c_003", [
         [("card_spend_breakdown", {"start": "2026-10-11", "end": "2026-11-10", "by": "category"})],
         [("card_transactions", {"start": "2026-10-11", "end": "2026-11-10", "state": "declined", "limit": 5})],
-        answer(("Spend in the cycle was 88.9% above the customer's usual.", ["agg_af9486b9"]),
-               ("An authorization was declined at the business limit on 2026-11-06.", ["ctx_c_003_00942"])),
+        answer(("Spend in the cycle was 91% above the customer's usual.", ["agg_af9486b9"]),
+               ("An authorization was declined at the business limit on 2026-11-06.", ["ctx_c_003_00889"])),
     ], topic="card_use")
     assert stub.tools_called() == ["utilization", "spend_by_cycle", "spend_breakdown", "transactions"]
-    assert {"agg_af9486b9", "ctx_c_003_00942"} <= cited(response)
+    assert {"agg_af9486b9", "ctx_c_003_00889"} <= cited(response)
 
 
 # --- checks on the draft ---------------------------------------------------------------------------
@@ -105,7 +108,8 @@ def test_an_invented_id_is_repaired_once_then_dropped():
     ], topic="card_use")
     assert model.step == 2  # one repair round
     assert all("made_up" not in i for i in cited(response))
-    assert any("cites ids no tool returned" in reason for reason in response.could_not_determine)
+    assert any("cites 1 id no tool returned" in reason for reason in response.could_not_determine)
+    assert not any("made_up" in reason for reason in response.could_not_determine)
 
 
 def test_a_repair_that_fixes_the_finding_is_accepted():
@@ -123,7 +127,9 @@ def test_a_figure_the_records_do_not_hold_is_dropped():
         answer(("The card balance was $95,000, 95% of the limit.", [BALANCE])),
     ], topic="card_use")
     assert not any("$95,000" in f.claim for f in response.findings)
-    assert any("$95,000" in reason for reason in response.could_not_determine)
+    assert any("do not hold" in reason for reason in response.could_not_determine)
+    # The figure no record holds is not repeated to the Orchestrator, even in the reason.
+    assert not any("$95,000" in reason for reason in response.could_not_determine)
 
 
 def test_rounded_figures_from_the_records_pass():

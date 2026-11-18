@@ -57,7 +57,7 @@ def test_the_graph_has_the_named_steps():
 def test_a_model_run_goes_preflight_investigate_tools_check_finalize():
     path = steps_of("c_003", [
         [("card_spend_breakdown", {"start": "2026-10-11", "end": "2026-11-10", "by": "category"})],
-        answer(("Spend in the cycle was 88.9% above the customer's usual.", ["agg_af9486b9"])),
+        answer(("Spend in the cycle was 91% above the customer's usual.", ["agg_af9486b9"])),
     ], topic="card_use")
     assert path == ["preflight", "investigate", "tools", "investigate", "check", "finalize"]
 

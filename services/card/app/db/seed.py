@@ -1,4 +1,4 @@
-"""Seed the Card database from data/shared_customers.yaml.
+"""Seed the Card database from data/shared_customers.yaml (or several files, see load()).
 
 Idempotent: seed_if_empty(session) only runs when the customers table is empty.
 Deterministic: the same file always gives the same rows and the same ids.
@@ -9,7 +9,9 @@ table" numbers):
   - the balance on signal_date: round(credit_limit_cents * utilization_pct), so the
     utilization a tool works out from the rows is the file's to the basis point;
   - last_3_repayments: the statements due on the 5th of the last three months, in order;
-  - a late or failed repayment's amount, from signal_window.card_events;
+  - the amounts of the last three repayments, by the rule the evaluation's signal uses
+    (eval/signals.py): monthly_card_spend_cents, except that the latest one, when late or
+    failed, has its event's amount from signal_window.card_events;
   - c_006's paying account (data_integrity): the first of the last three repayments
     comes from acct_c006_a, the last two from acct_external_new_c006.
 
@@ -22,12 +24,15 @@ How the ledger works:
     2026-10-11 to 2026-11-10, and the statements due Sep 5, Oct 5 and Nov 5 are the last
     three repayments.
   - The balance is everything authorized and not declined, less every completed
-    repayment. A failed (RETURNED) repayment leaves its statement owed. A late one is
-    paid by hand three days after the due date.
-  - Each closed cycle's spend is the customer's monthly_card_spend_cents, a few percent
-    either way, but never more than HISTORY_CAP_SHARE of the limit: a statement that is
-    still owed sits on top of the next cycle's spend, and at a higher share the balance
-    would pass the limit. This cap binds for c_003, c_004, c_010 and c_012 (see the README).
+    repayment. A failed (RETURNED) repayment leaves its statement owed, unless its event
+    says repaid_after_days: then a second row for the statement, rep_{cid}_{YYYYMM}_r1,
+    pays it by hand that many days after the return. A late one is paid by hand three
+    days after the due date.
+  - Each closed cycle before the last three spends the customer's monthly_card_spend_cents,
+    a few percent either way; the last three spend exactly their repayment's amount.
+  - A statement that is still owed sits on top of the next cycle's spend, so a monthly
+    spend above HISTORY_CAP_SHARE of the limit could take the balance past it. Such a
+    customer is an error, not quietly spent at less (see the README).
   - The open cycle's spend is whatever makes the signal-date balance match the file.
     Where the file gives a utilization_trend (c_003 rising, c_010 spiking), that spend is
     weighted towards the end of the cycle.
@@ -55,7 +60,7 @@ from app.db.models import CardTransaction, CreditLimit, Customer, Repayment
 CYCLE_START_DAY = 11  # a cycle runs from the 11th to the 10th of the next month
 DUE_DAY = 5  # due on the 5th of the month after the cycle closes
 HISTORY_CYCLES = 14  # closed cycles before the open one: more than 400 days of history
-HISTORY_CAP_SHARE = 0.45  # most a closed cycle's spend may be, as a share of the limit
+HISTORY_CAP_SHARE = 0.45  # most monthly_card_spend_cents may be, as a share of the limit
 LATE_DAYS = 3  # a late repayment is paid this many days after its due date
 RETURN_DAYS = 2  # a failed ACH debit comes back this many days after it was sent
 NEAR_LIMIT_SHARE = 0.9  # at this share of the limit, a further authorization is declined
@@ -67,20 +72,25 @@ ACH_RETURNS = {"R01": "Insufficient funds", "R02": "Account closed"}
 NOISE_DECLINES = ("AUTHORIZER_CARD_MCC_BLACKLIST", "SUSPECTED_FRAUD", "WRONG_CVV")
 
 
-def _default_yaml_path() -> Path:
+def _default_yaml_paths() -> list[Path]:
     """Where the seeder looks when no path is passed.
 
-    Order: SHARED_CUSTOMERS_YAML env var, then /app/data/..., then the repo's data/
-    directory relative to this file (for running the tests locally).
+    Order: SHARED_CUSTOMERS_YAML env var (one path, or several joined by ':', e.g. the team's
+    file and eval/extra_customers.yaml), then /app/data/..., then the repo's data/ directory
+    relative to this file (for running the tests locally).
     """
     env = os.environ.get("SHARED_CUSTOMERS_YAML")
     if env:
-        return Path(env)
+        return _split(env)
     in_container = Path("/app/data/shared_customers.yaml")
     if in_container.exists():
-        return in_container
+        return [in_container]
     # services/card/app/db/seed.py -> the repo root is parents[4]
-    return Path(__file__).resolve().parents[4] / "data" / "shared_customers.yaml"
+    return [Path(__file__).resolve().parents[4] / "data" / "shared_customers.yaml"]
+
+
+def _split(paths: str) -> list[Path]:
+    return [Path(p) for p in paths.split(":") if p]
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +259,36 @@ PROFILES: dict[str, Profile] = {
         (*_TRAVEL, Vendor("DoorDash", 9_000, 3), Vendor("LinkedIn Ads", 90_000, 2)),
         (Recurring(1, "Amazon Web Services", 600_000), Recurring(1, "WeWork", 450_000), Recurring(4, "Salesforce", 200_000)),
     ),
+    # The evaluation's one customer of its own (eval/extra_customers.yaml), twin of no team customer.
+    "c_013": Profile(
+        "catering", "722320", date(2021, 6, 1), ("Owner card", "Kitchen card", "Ops card"),
+        (Vendor("Sysco", 85_000, 4), Vendor("US Foods", 70_000, 3), Vendor("Restaurant Depot", 40_000, 4),
+         Vendor("Uline", 25_000, 2)),
+        (Recurring(2, "Toast", 40_000),),
+    ),
 }
+
+# The evaluation's other customers (eval/extra_customers.yaml) are each a team customer with one fact
+# changed, something irrelevant added, or the ids renamed, so each buys what its twin buys. The
+# file names no twin, so the link is kept here; the file's comments give each one.
+TWINS: dict[str, str] = {
+    "c_102": "c_002", "c_103": "c_003", "c_106": "c_006", "c_107": "c_007", "c_110": "c_010",
+    "c_111": "c_010", "c_201": "c_001", "c_203": "c_003", "c_208": "c_008", "c_301": "c_001",
+    "c_303": "c_003", "c_304": "c_004", "c_307": "c_007", "c_314": "c_004",
+}
+
+# Any other customer: a plain small business. No subscriptions, so any monthly spend covers its
+# recurring charges, and onboarded before the earliest history the seed writes.
+FALLBACK_PROFILE = Profile(
+    "unclassified", "999990", date(2020, 1, 1), ("Owner card", "Ops card"),
+    (Vendor("Staples", 15_000, 3), Vendor("Uber", 3_500, 3), Vendor("DoorDash", 8_000, 3),
+     Vendor("FedEx", 12_000, 2), Vendor("Google Ads", 60_000, 1)),
+)
+
+
+def profile_for(cid: str) -> Profile:
+    """The customer's own profile, else its twin's, else the fallback."""
+    return PROFILES.get(cid) or PROFILES.get(TWINS.get(cid, "")) or FALLBACK_PROFILE
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +496,7 @@ class _Ledger:
 def generate(customer: dict, as_of: date) -> dict[str, list[dict]]:
     """Every row for one customer of the shared file."""
     cid = customer["id"]
-    profile = PROFILES[cid]
+    profile = profile_for(cid)
     snapshot = customer["snapshot"]["card"]
     baseline = customer["baselines"]["card"]
     events = {e["kind"]: e for e in customer["signal_window"].get("card_events") or []}
@@ -468,13 +507,23 @@ def generate(customer: dict, as_of: date) -> dict[str, list[dict]]:
     monthly = int(baseline["monthly_card_spend_cents"])
     statuses: list[str] = list(snapshot["last_3_repayments"])
 
+    if monthly > HISTORY_CAP_SHARE * limit:
+        raise ValueError(
+            f"{cid}: monthly_card_spend_cents {monthly} is more than {HISTORY_CAP_SHARE:.0%} of the "
+            f"credit limit {limit} (at most {math.floor(HISTORY_CAP_SHARE * limit)}); a statement still "
+            "owed on top of the next cycle's spend would take the balance past the limit")
+
     closed, (open_start, open_end) = cycles(as_of)
     if closed[0][0] < profile.onboarded_on:
         raise ValueError(f"{cid}: history starts before onboarding")
     n_closed = len(closed)
     status_of = ["paid"] * (n_closed - len(statuses)) + statuses
-    # The event amount belongs to the latest repayment with that status, as the Orchestrator reads it.
-    latest_index = {s: i for i, s in enumerate(status_of)}
+    # As eval/signals.py reads the file: an event's amount is the latest repayment's, when that
+    # one's status is the event's. Every other repayment of the last three is the monthly spend.
+    for kind in ("late_repayment", "failed_repayment"):
+        if kind in events and f"{status_of[-1]}_repayment" != kind:
+            raise ValueError(f"{cid}: a {kind} event must be about the latest repayment, which is {status_of[-1]}")
+    trouble_index = n_closed - 1 if f"{status_of[-1]}_repayment" in events else None
 
     change = events.get("funding_account_change")
     account_of = [primary_account] * n_closed
@@ -485,16 +534,19 @@ def generate(customer: dict, as_of: date) -> dict[str, list[dict]]:
         funding_since = due_date(closed[-3][1]) + timedelta(days=15)
 
     ledger = _Ledger(cid, profile, as_of)
-    cap = math.floor(HISTORY_CAP_SHARE * limit)
     repayments: list[dict] = []
     still_owed = 0
     for i, (start, end) in enumerate(closed):
         status = status_of[i]
-        event = events.get(f"{status}_repayment")
-        if event and latest_index[status] == i:
+        event = events.get(f"{status}_repayment") if i == trouble_index else None
+        # Drawn for every cycle, used or not, so that which amount a cycle takes moves no later draw.
+        jittered = round(monthly * (1 + ledger.rng.uniform(-SPEND_JITTER, SPEND_JITTER)))
+        if event:
             target = int(event["amount_cents"])
+        elif i >= n_closed - len(statuses):
+            target = monthly  # one of the last three: what the signal shows
         else:
-            target = min(cap, round(monthly * (1 + ledger.rng.uniform(-SPEND_JITTER, SPEND_JITTER))))
+            target = jittered
         ledger.spend_cycle(start, end, target)
 
         due = due_date(end)
@@ -515,10 +567,24 @@ def generate(customer: dict, as_of: date) -> dict[str, list[dict]]:
             "settled_at": None,
             "returned_at": None,
         }
+        retry = None
         if status == "failed":
+            returned_on = due + timedelta(days=RETURN_DAYS)
             rep |= {"status": "RETURNED", "ach_return_code": "R01", "return_reason": ACH_RETURNS["R01"],
-                    "initiated_at": _at(due, 6), "returned_at": _at(due + timedelta(days=RETURN_DAYS), 15)}
-            still_owed += target
+                    "initiated_at": _at(due, 6), "returned_at": _at(returned_on, 15)}
+            after = event.get("repaid_after_days") if event else None
+            if after is not None and event.get("still_unpaid"):
+                raise ValueError(f"{cid}: a failed repayment cannot be both still_unpaid and repaid_after_days")
+            if after is None:
+                still_owed += target
+            else:
+                # Paid by hand later, under its own id: rep_{cid}_{YYYYMM} is the scheduled debit.
+                paid_on = returned_on + timedelta(days=int(after))
+                if paid_on > as_of:
+                    raise ValueError(f"{cid}: repaid on {paid_on}, after the signal date {as_of}")
+                retry = rep | {"repayment_id": f"{rep['repayment_id']}_r1", "payment_method": "ach_manual",
+                               "status": "COMPLETED", "ach_return_code": None, "return_reason": None,
+                               "initiated_at": _at(paid_on, 6), "settled_at": _at(paid_on, 14), "returned_at": None}
         elif status == "late":
             paid_on = due + timedelta(days=LATE_DAYS)
             rep |= {"payment_method": "ach_manual", "initiated_at": _at(paid_on, 6)}
@@ -530,10 +596,44 @@ def generate(customer: dict, as_of: date) -> dict[str, list[dict]]:
         elif due <= as_of:
             rep |= {"status": "COMPLETED", "initiated_at": _at(due, 6), "settled_at": _at(due, 14)}
         repayments.append(rep)
+        if retry:
+            repayments.append(retry)
 
     # The open cycle carries whatever brings the balance to the file's figure.
     stressed = "utilization_trend" in baseline
-    ledger.spend_cycle(open_start, open_end, balance_target - still_owed, back_loaded=stressed)
+    open_target = balance_target - still_owed
+    # What is owed when the open cycle starts, and the repayments that settle during it.
+    carried = (sum(t["amount_cents"] for t in ledger.txns if t["state"] != "DECLINED")
+               - sum(r["amount_cents"] for r in repayments if r["settled_at"] and r["settled_at"].date() < open_start))
+    settling = sorted((r["settled_at"].date(), r["amount_cents"]) for r in repayments
+                      if r["settled_at"] and open_start <= r["settled_at"].date() <= as_of)
+
+    def peak() -> int:
+        spent: dict[date, int] = {}
+        for t in ledger.txns:
+            if t["state"] != "DECLINED" and t["authorized_at"].date() >= open_start:
+                spent[t["authorized_at"].date()] = spent.get(t["authorized_at"].date(), 0) + t["amount_cents"]
+        balance, top = carried, carried
+        for d in _days(open_start, min(open_end, as_of)):
+            balance += spent.get(d, 0) - sum(a for s, a in settling if s == d)
+            top = max(top, balance)
+        return top
+
+    state = (len(ledger.txns), ledger.rng.getstate(), ledger.rx.getstate())
+    ledger.spend_cycle(open_start, open_end, open_target, back_loaded=stressed)
+    if peak() > limit and settling and settling[-1][0] > open_start:
+        # A statement paid late in the cycle (late, or returned and paid since) is still owed on
+        # the days before, and the draw above took the balance past the limit. Redraw: the spend
+        # before the last such payment is capped so the balance stays within the limit, and the
+        # rest lands from that day on.
+        del ledger.txns[state[0]:]
+        ledger.rng.setstate(state[1])
+        ledger.rx.setstate(state[2])
+        last = settling[-1][0]
+        share = (last - open_start).days / ((min(open_end, as_of) - open_start).days + 1)
+        before = min(round(open_target * share), limit - carried)
+        ledger.spend_cycle(open_start, last - timedelta(days=1), before, back_loaded=stressed)
+        ledger.spend_cycle(last, open_end, open_target - before, back_loaded=stressed)
     if stressed:
         ledger.decline_near_limit(limit, repayments, closed[0][0], open_start)
 
@@ -572,12 +672,34 @@ def generate(customer: dict, as_of: date) -> dict[str, list[dict]]:
 # ---------------------------------------------------------------------------
 
 
-def load(yaml_path: Path | None = None) -> dict:
-    with open(yaml_path or _default_yaml_path()) as f:
-        return yaml.safe_load(f)
+def load(yaml_path: Path | str | None = None) -> dict:
+    """The customers of one file, or of several (a str joined by ':'), as one file's shape.
+
+    The files must share schema_version and clock, and no customer id may appear twice.
+    """
+    paths = _split(yaml_path) if isinstance(yaml_path, str) else [yaml_path] if yaml_path else _default_yaml_paths()
+    merged: dict | None = None
+    seen: dict[str, Path] = {}
+    for path in paths:
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        if merged is None:
+            merged = {**data, "customers": []}
+        for key in ("schema_version", "clock"):
+            if data.get(key) != merged.get(key):
+                raise ValueError(f"{path}: {key} {data.get(key)!r} differs from {paths[0]}'s {merged.get(key)!r}")
+        for customer in data["customers"]:
+            cid = customer["id"]
+            if cid in seen:
+                raise ValueError(f"customer {cid} is in both {seen[cid]} and {path}")
+            seen[cid] = path
+            merged["customers"].append(customer)
+    if merged is None:
+        raise ValueError("no customer file given")
+    return merged
 
 
-def seed(session: Session, yaml_path: Path | None = None) -> dict[str, int]:
+def seed(session: Session, yaml_path: Path | str | None = None) -> dict[str, int]:
     """Populate every table. Flushes but does not commit. Returns row counts."""
     data = load(yaml_path)
     as_of = date.fromisoformat(data["clock"]["signal_date"])
@@ -598,7 +720,7 @@ def is_empty(session: Session) -> bool:
     return session.query(Customer).first() is None
 
 
-def seed_if_empty(session: Session, yaml_path: Path | None = None) -> dict[str, int] | None:
+def seed_if_empty(session: Session, yaml_path: Path | str | None = None) -> dict[str, int] | None:
     """Run seed() only if customers is empty. Commits on success."""
     if not is_empty(session):
         return None

@@ -49,6 +49,8 @@ SPIKING_LEVEL_BP = 9000  # ... and now at 90% of the limit or more
 SPEND_UP_BP = 5000  # +50%
 SPEND_DOWN_BP = -4000  # -40%
 MIN_CYCLES = 3  # fewer closed cycles than this is too short to tell
+# paying_account: a change of the funding account this recent counts as changed.
+FUNDING_LOOKBACK_MONTHS = 3  # about the last three statement cycles
 MAX_ROWS = 50
 MAX_LOOKBACK_DAYS = 400
 
@@ -135,27 +137,28 @@ def paying_account(
     customer_id: Customer, session: Db, _: Auth,
     count: Annotated[int, Query(ge=2, le=13, description="how many of the latest repayments to compare")] = 3,
 ) -> ToolResponse:
-    """Whether the bank account the card is paid from changed across the latest repayments."""
+    """Whether the bank account the card is paid from changed in the last three months.
+
+    The funding_account_change record (id rep_<customer>_funding) depends only on the customer
+    and the as-of date, never on `count`: it changed when the current account took over within
+    FUNDING_LOOKBACK_MONTHS before the as-of date from another account that paid an earlier
+    repayment. `count` only picks the repayments listed alongside, so a finding can cite them.
+    """
     book, as_of = _book(session, customer_id), service_as_of()
-    due = [r for r in book.due_by(as_of) if repayment_status(r, as_of) is not None][-count:]
-    reps = [ev.repayment(book, r, as_of) for r in due]
-    accounts = [r.funding_account_id for r in due]
-    current = book.profile.funding_account_id
-    first = accounts[0] if accounts else current
-    changed = any(a != first for a in accounts) or first != current
-    change = {
-        "changed": changed,
-        "from": first,
-        "to": current,
-        "changed_on": book.profile.funding_account_since if changed else None,
-        "repayments_compared": len(due),
-        "repayment_ids": [r.repayment_id for r in due],
-    }
-    agg = ev.item(ev.aggregate_id("paying_account", customer_id, count), ev.FUNDING_ACCOUNT_CHANGE, change)
-    data = {**change, "change_id": agg["id"],
+    known = [r for r in book.due_by(as_of) if repayment_status(r, as_of) is not None]
+    current, since = book.profile.funding_account_id, book.profile.funding_account_since
+    before = [r.funding_account_id for r in known if r.due_date < since]
+    previous = before[-1] if before else None
+    changed = _months_back(as_of, FUNDING_LOOKBACK_MONTHS) <= since <= as_of and previous not in (None, current)
+    change = ({"changed": True, "from": previous, "to": current, "changed_on": since} if changed
+              else {"changed": False, "from": current, "to": current})
+    record = ev.item(ev.funding_id(customer_id), ev.FUNDING_ACCOUNT_CHANGE, change)
+    shown = known[-count:]
+    data = {**change, "change_id": record["id"], "repayments_compared": len(shown),
+            "repayment_ids": [r.repayment_id for r in shown],
             "accounts": [{"repayment_id": r.repayment_id, "due": r.due_date, "funding_account_id": r.funding_account_id}
-                         for r in due]}
-    return _respond(data, [agg, *reps])
+                         for r in shown]}
+    return _respond(data, [record, *(ev.repayment(book, r, as_of) for r in shown)])
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +242,8 @@ def spend_by_cycle(
     three closed cycles the history is too_short_to_tell.
     """
     book, as_of = _book(session, customer_id), service_as_of()
-    closed = [r for r in book.repayments if r.statement_period_end < as_of][-cycles:]
+    # One row per statement: a later payment toward a returned debit (rep_..._r1) is not a cycle of its own.
+    closed = [r for r in book.due_by(date.max) if r.statement_period_end < as_of][-cycles:]
     rows = [{"start": r.statement_period_start, "end": r.statement_period_end,
              "spend_cents": book.spend_between(r.statement_period_start, r.statement_period_end)} for r in closed]
     open_start = (closed[-1].statement_period_end + timedelta(days=1)) if closed else (book.first_day() or as_of)
@@ -308,12 +312,14 @@ def transactions(
         "approved_total_cents": sum(t.amount_cents for t in rows if t.approved),
         "declined": sum(not t.approved for t in rows),
         "declined_by_reason": dict(Counter(t.decline_reason for t in rows if not t.approved)),
-        "shown": len(shown), "truncated": len(rows) > len(shown),
     }
+    # The id hashes the filters, not `limit`, so the record holds only what the filters decide.
+    # How many rows this page shows stays in `data`.
     filters = (start, end, merchant, category, mcc, card_id, state, min_amount_cents)
     agg = ev.item(ev.aggregate_id("transactions", customer_id, *filters), ev.TRANSACTION_SEARCH, totals)
     items = [ev.transaction(t) for t in shown]
-    data = {**totals, "summary_id": agg["id"], "transactions": [{"id": i["id"], **i["data"]} for i in items]}
+    data = {**totals, "shown": len(shown), "truncated": len(rows) > len(shown), "summary_id": agg["id"],
+            "transactions": [{"id": i["id"], **i["data"]} for i in items]}
     return _respond(data, [agg, *items])
 
 

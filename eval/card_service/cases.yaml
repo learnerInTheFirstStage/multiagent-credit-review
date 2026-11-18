@@ -6,7 +6,11 @@
 #                       returned in this request, with the same content
 #   figures_from_records every $ and % in a claim is in the records it cites
 #   counts_from_records  every "N paid / late / failed" in a claim is the count the cited records give
+#                       (a date or an "of M" total is not a count)
+#   wording_from_records a claim citing a repayment with paid_since: no does not say it was or will be
+#                       paid; one citing a rising or spiking balance does not call it normal or steady
 #   no_action           no finding and no suggested next step recommends an action
+#   card_calls          (runner) every call to Card was answered: replayed, every call has a recording
 #
 # Case fields:
 #   customer, topic (null: whatever the card side holds), question
@@ -205,3 +209,13 @@ cases:
         - {kind: card_spend_series, where: {unusual: "no"}}
         - {kind: repayment_summary, where: {paid: 3, late: 0, failed: 0}}
         - {kind: funding_account_change, where: {changed: false}}
+
+  # --- a question the card side cannot answer -----------------------------------------------------
+  - id: cb_19_unknown_topic
+    about: A topic the agent does not have gets no findings and says so, without calling Card.
+    customer: c_001
+    topic: interest_rates
+    question: What interest rate does the card charge?
+    expect:
+      findings: none
+      says: [no such topic]
