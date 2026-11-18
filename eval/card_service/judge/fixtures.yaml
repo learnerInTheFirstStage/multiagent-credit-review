@@ -24,7 +24,7 @@ fixtures:
     code: passes
     question: How is the customer using the card's limit?
     findings:
-      - claim: "On 2026-11-10 the balance was $92,000, 92% of the $100,000 limit. Its usual share is 46.7%, and Card rates the trend as spiking."
+      - claim: "On 2026-11-10 the balance was $92,000, 92% of the $100,000 limit. Its usual share is 47%, and Card rates the trend as spiking."
         cites: [bal_card_c_010_20261110]
 
   - id: ok_late_repayment

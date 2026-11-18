@@ -64,7 +64,7 @@ class _Transactions(_Window):
     mcc: str | None = Field(default=None, description="A 4-digit merchant category code.")
     card_id: str | None = Field(default=None, description="One card, such as crd_c_003_2.")
     state: Literal["approved", "declined", "any"] = "any"
-    min_amount_cents: int | None = Field(default=None, ge=0, description="Only transactions at least this large.")
+    min_amount_cents: int | None = Field(default=None, ge=0, description="Only transactions at least this large, in cents: 500000 is $5,000.")
     limit: int = Field(default=20, ge=1, le=50, description="Most rows to return.")
 
 
@@ -90,7 +90,7 @@ SPECS: dict[str, tuple[str, type[BaseModel], str]] = {
     )),
     "card_spend_by_cycle": ("spend_by_cycle", _SpendByCycle, (
         "Card spend per statement cycle. The current cycle against the median of the closed ones "
-        "(monthly_card_spend_cents), change_vs_usual_bp, and unusual (up, down or no). history is "
+        "(monthly_card_spend), change_vs_usual, and unusual (up, down or no). history is "
         "too_short_to_tell when there are fewer than three closed cycles. Evidence: one card_spend_series."
     )),
     "card_transactions": ("transactions", _Transactions, (

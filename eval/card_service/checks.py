@@ -28,9 +28,9 @@ _SAYS_PAID = re.compile(r"\b(?:re)?paid\s+(?:since|later|after|afterwards|back)\
                         r"|\bwill\s+(?:\w+\s+)?be\s+(?:re)?paid\b"
                         r"|\b(?:probably|likely)\s+(?:be\s+|been\s+|got\s+|gets\s+)?(?:re)?paid\b", re.I)
 _NEGATED = re.compile(r"\b(?:not|never|no)\b|n't\b", re.I)
-# "its usual 47%", "higher than usual", "a steady climb", "consistent with the rising trend": these
-# compare with the past or describe the rise; they do not call the level normal.
-_COMPARED_WITH = re.compile(r"\b(?:its|their|the|a|than|above|below|over|under)\s+$", re.I)
+# "its usual 47%", "the customer's usual share", "higher than usual", "a steady climb", "consistent with
+# the rising trend": these compare with the past or describe the rise; they do not call the level normal.
+_COMPARED_WITH = re.compile(r"(?:\b(?:its|their|the|a|than|above|below|over|under)|\w(?:'s|s'))\s+$", re.I)
 _DESCRIBES_A_FIGURE_OR_RISE = re.compile(
     r"^\s+(?:[\d$]|(?:with\s+(?:the\s+|a\s+|its\s+)?)?(?:ris|climb|increas|grow|upward|spik))", re.I)
 

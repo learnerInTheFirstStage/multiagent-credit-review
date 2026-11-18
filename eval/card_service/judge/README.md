@@ -52,3 +52,10 @@ The run was claude-sonnet-5-5 on `KAN-36-poc-complete`'s agent. The code grader 
   - **cb_17 (0.7):** the finding says the tools "do not rate the current use of the limit as unusual". The balance record has no such rating, only `steady`, and its 50% is above the usual 42.31%. Carrying the spend record's `unusual: no` over to the balance softens a rise. `checks.py` passed it.
   - **cb_15 (0.8):** the same transfer of "not unusual" from spend to utilization.
   - **cb_01 (0.8):** "no late or failed repayment to address" adds action framing. The judge also saw a finding cut off mid-sentence. The cause is the agent: `guardrails.py` cuts every claim to 500 characters.
+
+## Second run, after the units fix (2026-11-18)
+
+The agent now reads dollars and whole percents. The code grader passed 19 of 19 (cb_10 after the grader fix for "the customer's usual"). The judge read 16 answers, for $1.42:
+
+- **States, not judges:** all 16 passed, scoring 0.7 to 1.0.
+- **Faithful:** 15 scored 1.0. cb_11 scored 0.96, a **false alarm** from the judge. It added up $50,000 unpaid and $42,000 of spend to reach the $92,000 balance, treated that as "stated by the records", and failed the finding that says the records state no cause. No record states it. Threshold 1.0 is kept, so a single contradiction in a long answer still fails, and this one is read by hand.

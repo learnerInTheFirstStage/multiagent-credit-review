@@ -132,6 +132,32 @@ def test_a_figure_the_records_do_not_hold_is_dropped():
     assert not any("$95,000" in reason for reason in response.could_not_determine)
 
 
+def test_raw_cents_or_bp_in_a_claim_go_to_repair():
+    raw = "The card balance was 9200000 cents, 9200 bp of the limit."
+    response, _, model = run("c_010", [
+        answer((raw, [BALANCE])),
+        answer(("The card balance was $92,000, 92% of the $100,000 limit.", [BALANCE])),
+    ], topic="card_use")
+    assert model.step == 2  # one repair round
+    assert response.findings[0].claim == "The card balance was $92,000, 92% of the $100,000 limit."
+
+
+def test_the_model_reads_dollars_and_whole_percents_and_the_evidence_keeps_cards_units():
+    # c_009's balance: 1440000 cents of 4800000, 3000 bp used, 4167 bp usual. The figure check reads
+    # "$14,400" and "42%"; a model that converts on its own writes "41.67%" and loses the finding.
+    response, _, model = run("c_010", [
+        [("card_utilization", {"date": "2026-11-10"})],
+        answer(("The card balance was $92,000, 92% of the $100,000 limit.", [BALANCE])),
+    ], topic="card_use")
+    first = model_messages(model)[1].content  # preflight results, in the first message
+    tool = " ".join(m.content for m in model_messages(model) if isinstance(m, ToolMessage))
+    for shown in (first.replace(" ", ""), tool.replace(" ", "")):
+        assert '"balance":"$92,000"' in shown and '"used_share":"92%"' in shown
+        assert "balance_cents" not in shown and "used_share_bp" not in shown
+    record = next(e for e in response.evidence if e.id == BALANCE)
+    assert record.data["balance_cents"] == 9200000 and record.data["used_share_bp"] == 9200
+
+
 def test_rounded_figures_from_the_records_pass():
     response, _, _ = run("c_010", [answer(("The failed repayment was for $50K; the balance is $92K.", [FAILED, BALANCE]))])
     assert response.findings[0].evidence_ids == [FAILED, BALANCE]

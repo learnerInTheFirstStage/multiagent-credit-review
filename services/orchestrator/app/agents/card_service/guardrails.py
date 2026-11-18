@@ -1,14 +1,17 @@
 """Code around the model, not inside it. Every rule here holds whatever the model writes.
 
-1. Memo marking: a transaction memo is wrapped in <memo>...</memo>, angle brackets escaped,
-   before a tool result reaches the model. The prompt says what is inside is data.
+1. What the model reads: a transaction memo is wrapped in <memo>...</memo>, angle brackets
+   escaped; the prompt says what is inside is data. Amounts in cents and shares in basis points
+   are shown as dollars and whole percents (app.graph.facts.usd and pct), the form the figure
+   check reads, so the model copies a figure instead of converting it. The records in the
+   response keep Card's own units.
 2. The evidence pool: every record a tool returned in this run. The response's evidence is built
    from it, so the model cannot invent a record.
 3. Draft checks, per finding: the claim is not empty; every cited id is in the pool; every figure
    in the claim (amount, percent, number, multiple; read as app.graph.figures reads it) is shown
    by the cited records; the claim recommends no limit action, in any form; while any record says
    too_short_to_tell, a claim does not call things normal unless it says the history is too short
-   or rests on a record that made its own comparison.
+   or rests on a record that made its own comparison; a claim writes no raw cents or basis points.
 4. Every could_not_determine line, the ones code wrote too: no action, no amount or percent no record
    shows (side_text_problem). A reason code writes for a dropped finding counts the ids no tool returned,
    never quotes one, and states no figure.
@@ -22,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.graph import figures
+from app.graph.facts import pct, usd
 from contracts import Evidence, Finding
 
 TOO_SHORT = "too_short_to_tell"
@@ -32,13 +36,32 @@ TOO_SHORT = "too_short_to_tell"
 
 
 def for_the_model(result: Any) -> Any:
-    """A deep copy of a tool result with every `memo` value marked as data."""
+    """A deep copy of a tool result as the model reads it: every `memo` marked as data, every
+    *_cents amount in dollars and every *_bp share in whole percent ("amount": "$50,000")."""
     return _mark(copy.deepcopy(result))
+
+
+def _shown(key: str, value: Any) -> tuple[str, Any]:
+    # type() and not isinstance(): True is an int, and must not read as $0.01.
+    if type(value) is int and key.endswith("_cents"):
+        return key.removesuffix("_cents"), usd(value)
+    if type(value) is int and key.endswith("_bp"):
+        return key.removesuffix("_bp"), pct(value)
+    return key, value
 
 
 def _mark(value: Any) -> Any:
     if isinstance(value, dict):
-        return {k: (_wrap(v) if k == "memo" and isinstance(v, str) else _mark(v)) for k, v in value.items()}
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "memo" and isinstance(item, str):
+                out[key] = _wrap(item)
+                continue
+            name, shown = _shown(key, item)
+            if name != key and (name in value or name in out):
+                name, shown = key, item  # two keys must not collapse into one: keep Card's
+            out[name] = _mark(shown)
+        return out
     if isinstance(value, list):
         return [_mark(v) for v in value]
     return value
@@ -134,6 +157,8 @@ _ACTION_ON = re.compile(r"\b(limits?|cards?|credit lines?)\b", re.I)
 _SHOULD = re.compile(r"\b(warrant\w*|prudent|advis\w*|should|ought|must(?!\s+have\b)|needs? to|recommend\w*|"
                      r"justified|appropriate|necessary|called for|makes sense|sensible|wise)\b", re.I)
 _SENTENCE = re.compile(r"[^.;!?]+")
+# "4852661 cents" or "3500 bp": a raw unit in a claim, which the figure check reads as a bare number.
+_RAW_UNITS = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?\s*(?:cents?|bps?|basis points?)\b", re.I)
 _CALLS_IT_NORMAL = re.compile(r"\b(normal|usual|steady|stable|typical|in line|consistent|unremarkable|as expected)\b"
                               r"|\bout of the ordinary\b|\bnothing (unusual|abnormal|of note)\b", re.I)
 # What is usual for this customer, which a too_short_to_tell record says cannot be known yet. Words such
@@ -236,6 +261,10 @@ def check(findings: list[Finding], pool: EvidencePool) -> Checked:
             problems.append(f"states {bad}, which the cited records {[e.id for e in cited]} do not hold; "
                             "copy figures from the cited records or cite the record that holds them")
             reasons.append(f"states figures the cited records {[e.id for e in cited]} do not hold")
+        if raw := [m.group(0) for m in _RAW_UNITS.finditer(claim)]:
+            problems.append(f"writes {raw} in raw units; copy amounts and percents as the tools show them "
+                            "(\"amount\": \"$50,000\", \"used_share\": \"92%\")")
+            reasons.append("writes an amount in raw cents or basis points")
         if cited and _CALLS_IT_NORMAL.search(claim) and not _SAYS_TOO_SHORT.search(claim):
             normal = None
             if any(too_short(e) for e in cited):
