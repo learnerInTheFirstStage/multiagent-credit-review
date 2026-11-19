@@ -1166,6 +1166,7 @@ def test_the_briefs_hold_the_cases_facts_and_every_sent_question_by_agent_topic_
         brief = calls_to(run, system_prompt)[0][-1].content
         assert '"id": "sig_cash"' in brief and '"fall": "$230,000"' in brief
         sent = brief.split("Questions and answers:\n")[1]
+        sent = sent.split("\n\nThe likely causes, and what each means:")[0]
         sent = json.loads(sent.split("\n\nCredit guidelines:")[0].split("\n\nCauses no question has tested yet:")[0])
         # The dates a question named stay with the investigator and the specialist (spec 0.3, item 14).
         assert [(question["agent"], question["topic"], question["focus"]) for question in sent] == [
@@ -1177,6 +1178,10 @@ def test_the_briefs_hold_the_cases_facts_and_every_sent_question_by_agent_topic_
         assert "txn_c_010_01" in [record["id"] for record in sent[0]["answer"]["evidence"]]
         # A question that was sent and got no answer is there too: that side gave nothing.
         assert sent[2]["answer"] == {"error": "No usable answer from credit_behavior."}
+    # The report writer picks the cause, so it is told what each one means. With the names alone it gave
+    # no_clear_cause to c_012's books that do not reconcile.
+    report_brief = calls_to(run, prompts.REPORT)[0][-1].content
+    assert section(report_brief, "The likely causes, and what each means:") == causes.CAUSE_MEANS
 
 
 def test_the_cross_side_match_reaches_the_gap_reviewer_and_the_report_writer_once_it_is_made(monkeypatch):
@@ -1890,12 +1895,14 @@ def test_the_investigator_is_shown_the_causes_and_what_each_guideline_needs_befo
     assert [cause["cause"] for cause in shown_causes] == list(causes.CAUSES)
     assert {
         "cause": "insufficient_data",
+        "means": causes.CAUSE_MEANS["insufficient_data"],
         "shown_by": ["a linked account that is not reporting",
                      "a reconciliation that says balances and transactions do not match"],
         "ask": ["AskCashFlow, topic accounts", "AskCashFlow, topic reconciliation"],
     } in shown_causes  # fmt: skip
     assert {
         "cause": "funds_moved_out_of_view",
+        "means": causes.CAUSE_MEANS["funds_moved_out_of_view"],
         "shown_by": ["a transfer to the customer's own account elsewhere", "a change of the account that pays the card"],
         "ask": ["AskCashFlow, topic transactions", "AskCreditBehavior, topic paying_account"],
     } in shown_causes

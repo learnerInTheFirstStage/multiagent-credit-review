@@ -381,7 +381,8 @@ def test_a_hand_over_because_nothing_fits_is_refused_while_a_guideline_is_still_
     assert len(nudges(thin)) == 2
     not_settled = (
         "G-11 says no guideline fits, but that is not settled. A guideline that allows an action needs a record "
-        "nobody asked for: AskCashFlow, topic transactions; AskCashFlow, topic income. "
+        "nobody asked for: AskCashFlow, topic transactions; AskCashFlow, topic income; "
+        "AskCreditBehavior, topic paying_account. "
         "The report cannot say that none fits."
     )
     assert [entry["codes"] for entry in thin.result["draft_log"]] == [["not_settled"], ["not_settled"]]

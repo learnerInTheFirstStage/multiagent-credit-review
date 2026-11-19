@@ -187,7 +187,8 @@ customers:
     causes: [revenue_loss]
     recommendations: [reduce_limit, request_documents]
     guidelines: [G-05, G-06]
-    path: [bank.transactions, bank.income]
+    # G-05 holds only once the paying account is known.
+    path: [bank.transactions, bank.income, card.paying_account]
 
   # Something added that must change nothing.
   - id: c_201
