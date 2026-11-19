@@ -61,9 +61,9 @@ With `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` set, every run of the graph
 
 ## Tokens and decisions
 
-A token is a bearer token signed with `JWT_SECRET` (HS256), with the claims `sub`, `role`, `customers`, `exp`. To read or decide a case, the token must list the case's customer.
+A token is a bearer token signed with `JWT_SECRET` (HS256), with the claims `sub`, `role`, `customers`, `exp`. To read or decide a case, the token must list the case's customer. With `AUTH0_DOMAIN` and `AUTH0_AUDIENCE` set, a person's token comes from Auth0 instead and `JWT_SECRET` signs services' tokens only (`services/auth/README.md`).
 
-Until the Auth Service issues tokens, make one for local use:
+Without Auth0, make a token for local use:
 
 ```bash
 docker compose exec orchestrator python -m app.dev_token --role analyst --sub u_analyst --customers c_010

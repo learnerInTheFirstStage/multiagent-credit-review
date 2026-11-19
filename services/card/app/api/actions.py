@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.auth import Caller, current_caller, refused
+from app.api.auth import PEOPLE, Caller, current_caller, refused
 from app.db import get_session
 from app.db.models import AppliedAction, CreditLimit, Customer
 from app.ledger import service_as_of
@@ -41,7 +41,6 @@ from app.ledger import service_as_of
 log = logging.getLogger(__name__)
 router = APIRouter()
 
-PEOPLE = ("analyst", "manager", "admin")
 # Who may decide each approval step: the Orchestrator's MAY_DECIDE (app/api/cases.py).
 MAY_DECIDE = {"analyst": ("analyst", "manager"), "manager": ("manager",)}
 STEP_RANK = {"analyst": 1, "manager": 2}

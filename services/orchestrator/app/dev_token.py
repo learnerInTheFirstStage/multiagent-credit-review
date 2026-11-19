@@ -3,7 +3,8 @@
     python -m app.dev_token --role analyst --sub u_analyst --customers c_002 c_010
     python -m app.dev_token --role service --sub signal-generator
 
-Signed with JWT_SECRET, like every token in the POC (API doc section 5).
+Signed with JWT_SECRET, like every token in the POC (API doc section 5). With AUTH0_DOMAIN and AUTH0_AUDIENCE set,
+people sign in through Auth0 and the services accept only the --role service tokens this makes (app/auth.py).
 """
 
 import argparse

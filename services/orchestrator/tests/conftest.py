@@ -10,6 +10,9 @@ import pytest
 _db_dir = tempfile.mkdtemp(prefix="orchestrator-tests-")
 os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", f"sqlite:///{_db_dir}/test.db")
 os.environ["JWT_SECRET"] = "a-secret-for-tests-that-is-long-enough"
+# People's tokens are HS256 here. test_auth0 sets these itself.
+os.environ.pop("AUTH0_DOMAIN", None)
+os.environ.pop("AUTH0_AUDIENCE", None)
 os.environ.pop("LLM_MODEL", None)  # no test may reach a real model
 # The service reads these at start. A test that wants another flow, the search tool or other data files
 # sets its own.
