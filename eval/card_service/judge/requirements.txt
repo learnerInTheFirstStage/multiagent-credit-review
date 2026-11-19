@@ -1,0 +1,4 @@
+# The judge only (judge.py); not the Orchestrator's runtime. Its own venv: see judge.py.
+deepeval==4.3.4
+anthropic==2.10.0
+pyyaml

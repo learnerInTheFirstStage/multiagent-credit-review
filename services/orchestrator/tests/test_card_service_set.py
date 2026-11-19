@@ -188,6 +188,8 @@ def test_an_unpaid_repayment_said_to_be_unpaid_passes(c010, claim):
     ("cb_11_spiking_use", "Utilization shows a steady climb to 92% of the limit.", set()),
     ("cb_11_spiking_use", "The card is at 92% of the limit, consistent with the spiking trend.", set()),
     ("cb_10_rising_use", "The card is at 85% of the limit, a steady level.", {"wording_from_records"}),
+    # Found on a model run: a comparison with the customer's usual share, not a claim of normal.
+    ("cb_10_rising_use", "The customer's usual share is 41%, so 85% is unusual against its own past.", set()),
 ])
 def test_a_rising_or_spiking_balance_called_normal_is_caught(case_id, claim, want):
     response, returned = answer_of(case_id)
