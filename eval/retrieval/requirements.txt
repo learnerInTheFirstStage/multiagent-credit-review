@@ -1,0 +1,5 @@
+# generate.py and score.py. retrieve.py runs in the Orchestrator image.
+ragas==0.4.4
+pyyaml==6.0.3
+anthropic==2.11.0
+instructor==1.17.0

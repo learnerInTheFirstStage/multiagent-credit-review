@@ -1,0 +1,139 @@
+# What the past-case search should find, for retrieve.py and score.py.
+#
+# Each situation is one kind of case from eval/golden_set.yaml, with:
+#   cases     the golden cases that are this situation. The search pool is the same for every case
+#             (every seeded review dated before the data clock, of any customer), so cases in one
+#             situation search the same pool with the same kind of query.
+#   relevant  the seeded reviews (eval/history.yaml, eval/history_eval.yaml) that are real precedents.
+#   why       the reason, and the near misses that are not.
+#   queries   what the investigator might send, in SearchPastCases' own form: "what was found so far,
+#             in one or two sentences". Two per situation:
+#               close        worded near the precedent's own claim
+#               paraphrase   the same findings in other words
+#             No query names a cause label or a recommendation.
+#
+# The rule for `relevant`: same cause, and the same card-repayment situation, whatever was decided
+# then. A precedent with the same cause but a failed repayment (seed_p3, seed_p4) is not a precedent
+# for a case whose card is paid on time, and the other way round. Copying the decision of the nearest
+# review is wrong half the time on the twin pairs; finding the review with the same facts is not.
+#
+# Golden cases with no seeded precedent are left out, and named in README.md.
+
+situations:
+  - id: payroll_tax_paid_on_time
+    cases: [c_001, c_201, c_301]
+    relevant: [seed_c_301_a, seed_c_301_b]
+    why: >-
+      Payroll and a quarterly tax payment in one week, inflows steady, card paid. Not seed_p3 or
+      seed_p4: the same cause, but their repayment failed.
+    queries:
+      close: "A payroll run and a quarterly tax payment went out in the same week. Income is normal and card repayments are on time."
+      paraphrase: "The drop is explained by salaries and an estimated tax payment leaving together; deposits look as usual and the card is paid."
+
+  - id: own_account_transfer
+    cases: [c_002]
+    relevant: [seed_p1]
+    why: >-
+      Most of the fall is one transfer to the customer's own account at another bank; card paid on
+      time. Not seed_p2: there the money went to a payee never paid before.
+    queries:
+      close: "Most of the fall is one transfer to an account at another bank in the company's own name. Income is steady and repayments are on time."
+      paraphrase: "A large sum moved to a business account we cannot see, held under the same company name; nothing else looks wrong."
+
+  - id: new_paying_account
+    cases: [c_006]
+    relevant: [seed_p1]
+    why: >-
+      Money moving to an account out of view while the card is still paid on time, as in seed_p1.
+      Not seed_p2: no unknown payee here.
+    queries:
+      close: "Income into the linked account has almost stopped. Card repayments are still on time, now from an account we have not seen before."
+      paraphrase: "Deposits into the monitored account dried up while the card keeps getting paid from a different, newly used account."
+
+  - id: one_new_payee
+    cases: [c_102]
+    relevant: [seed_p2]
+    why: >-
+      Most of the fall is one payment to a payee never paid before. Not seed_p1: c_102 is c_002's
+      twin, and the own-account transfer is the near miss.
+    queries:
+      close: "Most of the fall is one payment to a payee the company has never paid before. Income is steady."
+      paraphrase: "A single large payment went to an unfamiliar recipient with no history with this business; other activity is normal."
+
+  - id: several_new_payees
+    cases: [c_008, c_208]
+    relevant: [seed_p2]
+    why: Large payments to payees never paid before, as in seed_p2.
+    queries:
+      close: "About $380K went out to three payees the business has never paid before."
+      paraphrase: "Several large payments to first-time recipients account for the drop in cash."
+
+  - id: shrinking_income_late_repayment
+    cases: [c_003, c_203, c_303]
+    relevant: [seed_p5]
+    why: >-
+      Income shrinking for months and the latest repayment late, as in seed_p5. Not seed_c_303_2025:
+      a slow season a year ago is c_303's tempting precedent. Not seed_c_314_a or _b: one weak week.
+    queries:
+      close: "Weekly inflows have shrunk over three months, card utilization keeps climbing and the latest repayment was late."
+      paraphrase: "Deposits have declined steadily since the summer, the card balance is rising and the most recent payment came in after the due date."
+
+  - id: stocking_but_shrinking
+    cases: [c_107]
+    relevant: [seed_p5]
+    why: >-
+      The yearly stocking payment is there, but the case turns on shrinking income and a late
+      repayment (accepted cause revenue_loss). The stocking reviews (seed_c_007_2025,
+      seed_c_107_2025, seed_c_307_2025) are the trap.
+    queries:
+      close: "The yearly stocking payment went out as last November, but inflows have shrunk over three months and the latest repayment was late."
+      paraphrase: "Same inventory purchase as a year ago and cash is back to last year's level, yet deposits keep falling and the card was paid late."
+
+  - id: tax_and_weak_week
+    cases: [c_004, c_314, c_304]
+    relevant: [seed_c_314_a, seed_c_314_b]
+    why: >-
+      Inflows well under the usual level for one week, too short to call a trend, as in seed_c_314.
+      Not seed_c_301: there inflows were steady. Not seed_c_304: c_304's own earlier reviews were
+      about a bank feed that stopped, which is not what happened this time.
+    queries:
+      close: "A tax payment explains most of the fall. Inflows for the week were also well under the usual level; one week is too short to call a trend."
+      paraphrase: "Most of the drop is a tax bill, but deposits this week came in clearly below normal and it is not yet clear whether that will last."
+
+  - id: feed_stopped
+    cases: [c_005]
+    relevant: [seed_c_304_a, seed_c_304_b]
+    why: A linked account stopped reporting, so its balance is missing, as in both seed_c_304 reviews.
+    queries:
+      close: "One of two linked accounts stopped reporting five days ago, so its balance is missing from the figures."
+      paraphrase: "A bank connection has been down for several days and that account's money is not in the totals; cash only looks lower."
+
+  - id: seasonal_stocking
+    cases: [c_007, c_307]
+    relevant: [seed_c_007_2025, seed_c_107_2025, seed_c_307_2025, seed_c_303_2025]
+    why: >-
+      A seasonal outflow and a slow month, as every seasonal review in the seeds: the three yearly
+      stocking payments and seed_c_303_2025's slow season.
+    queries:
+      close: "The yearly stocking payment to a long-standing supplier went out and the month is slow, as in the same weeks of the year before."
+      paraphrase: "An annual inventory purchase plus the usual quiet period at this time of year, the same pattern as last November."
+
+  - id: payroll_tax_failed_unpaid
+    cases: [c_010, c_110]
+    relevant: [seed_p4]
+    why: >-
+      Payroll and tax explain the fall and the latest repayment failed and is still owed, as in
+      seed_p4. Not seed_p3: there it was paid three days later (c_110 and c_111 are twins).
+    queries:
+      close: "Payroll and tax made up the fall. The latest card repayment failed and has not been paid."
+      paraphrase: "Salaries and taxes explain the bank side, but the most recent card payment bounced for lack of funds and is still owed."
+
+  - id: payroll_tax_failed_paid_later
+    cases: [c_111]
+    relevant: [seed_p3]
+    why: >-
+      Payroll and tax explain the fall and the failed repayment was paid three days later, as in
+      seed_p3. Not seed_p4: there it was never paid.
+    queries:
+      close: "Payroll and tax made up the fall. The latest card repayment failed and was paid three days later."
+      paraphrase: "Salaries and a tax payment account for the drop; one card payment was returned but went through a few days after."
