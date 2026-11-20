@@ -4,7 +4,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# The fastembed model for search, off by default so a normal build fetches nothing new.
+# The fastembed model for search. Off for a bare `docker build`; docker-compose.yml turns it on.
 # Before the copies below, so an edit to contracts or data/ does not fetch the model again.
 ARG WITH_EMBEDDINGS=0
 COPY services/orchestrator/requirements-embed.txt .

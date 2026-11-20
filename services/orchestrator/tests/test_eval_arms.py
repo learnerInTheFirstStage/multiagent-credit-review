@@ -7,6 +7,7 @@ commands it would run in the Orchestrator's container run in this checkout inste
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -766,6 +767,16 @@ def test_the_main_stack_starts_the_orchestrator_only_once_bank_and_card_answer_t
         assert test[:3] == ["CMD", "python", "-c"] and "http://127.0.0.1:8000/health" in test[3]
 
 
+def test_the_main_stack_builds_the_model_its_search_names():
+    # A default naming a model the image did not fetch offers no search, with only a warning in the log.
+    main = yaml.safe_load((EVAL.parent / "docker-compose.yml").read_text())["services"]["orchestrator"]
+    dockerfile = (SERVICE / "Dockerfile").read_text()
+
+    named = re.fullmatch(r"\$\{EMBEDDINGS_MODEL:-fastembed:(.+)\}", main["environment"]["EMBEDDINGS_MODEL"])
+    assert re.findall(r"TextEmbedding\('([^']+)'\)", dockerfile) == [named.group(1)]
+    assert re.fullmatch(r"\$\{WITH_EMBEDDINGS:-1\}", main["build"]["args"]["WITH_EMBEDDINGS"])
+
+
 def test_the_runner_seeds_history_before_the_first_signal_and_stops_when_the_database_is_not_clean(
     monkeypatch, start, tmp_path
 ):
@@ -872,7 +883,8 @@ def test_the_evaluation_overlay_seeds_both_files_and_mounts_them_read_only():
     assert overlay["environment"]["SHARED_CUSTOMERS_FILE"] == "/data/shared_customers.yaml:/eval/extra_customers.yaml"
     assert overlay["environment"]["INVESTIGATION_FLOW"] == "${INVESTIGATION_FLOW:-}"
     assert overlay["environment"]["SPECIALISTS"] == "${SPECIALISTS:-}"
-    assert overlay["build"]["args"] == {"WITH_EMBEDDINGS": "1"}
+    # The search comes from the main file only, so the evaluation measures what the main stack runs.
+    assert "build" not in overlay and "EMBEDDINGS_MODEL" not in overlay["environment"]
     assert set(overlay["volumes"]) == {
         "./eval/extra_customers.yaml:/eval/extra_customers.yaml:ro",
         "./eval/history.yaml:/eval/history.yaml:ro",

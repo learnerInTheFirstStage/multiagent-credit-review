@@ -124,13 +124,13 @@ Compose falls back to local defaults for the passwords and the signing secret, s
 | `LLM_MODEL`, `LLM_API_KEY`, `LLM_STRUCTURED_OUTPUT` | Orchestrator | the model cases run on, as `provider:model`, for example `anthropic:claude-sonnet-5-5` or `openai:<model>` (both packages are installed; only Anthropic has been run). Empty by default: signals are stored and their cases wait as `queued`. `LLM_STRUCTURED_OUTPUT=json_schema` is recommended with Anthropic |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Orchestrator | LangFuse tracing. Empty by default: cases run without tracing. Keys go in your own `.env` only. Set the base URL your LangFuse project shows, or keys from another region are refused |
 | `SPECIALISTS` | Orchestrator | empty: the real Cash Flow and Card agents, which call Bank and Card. `stand_in`: the stand-ins, which answer from the data files with no service and no model |
+| `EMBEDDINGS_MODEL`, `WITH_EMBEDDINGS` | Orchestrator | the embedder for the search over past reviews. Default `fastembed:BAAI/bge-small-en-v1.5`, built into the image (`WITH_EMBEDDINGS=1`, which fetches the model from huggingface.co). Offline, set `WITH_EMBEDDINGS=0` and `EMBEDDINGS_MODEL=hash:384` together. After pulling this default, rebuild the Orchestrator once (`--build`): an older image has no fastembed and offers no search |
 
 The Orchestrator also reads these. `docker-compose.yml` does not pass them yet, so on the main stack they keep the defaults shown; the evaluation overlay sets them (`eval/README.md`).
 
 | Variable | Default | What |
 |---|---|---|
 | `INVESTIGATION_FLOW` | empty, which is `agent` | who chooses the questions: `agent` (the model), `fixed` (a written plan) or `fixed_rules` (the plan, then what code's gap list names). Used to compare arms in the evaluation |
-| `EMBEDDINGS_MODEL` | `hash:384` (set in the image) | the embedder for the search over past reviews. `fastembed:BAAI/bge-small-en-v1.5` needs an image built with `WITH_EMBEDDINGS=1` |
 | `HISTORY_SEED_FILE` | `/eval/history.yaml` | past reviews seeded at every start |
 | `SHARED_CUSTOMERS_FILE` | `/data/shared_customers.yaml`, the image's copy of `data/shared_customers.yaml` | the customer files the stand-in specialists answer from, separated by `:`. A signal for a customer they do not hold gets a 422 |
 
