@@ -1,8 +1,11 @@
 """The monthly credit review report (app/reports.py, app/api/reports.py). No network: S3 is moto's."""
 
 import hashlib
+import io
+import json
 from datetime import UTC, datetime
 
+import pypdf
 import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
@@ -90,6 +93,10 @@ def november():
     )
 
 
+def text(pdf: bytes) -> str:
+    return "\n".join(page.extract_text() for page in pypdf.PdfReader(io.BytesIO(pdf)).pages)
+
+
 def test_a_month_is_a_utc_calendar_month_and_december_runs_into_january():
     assert reports.month_range("2026-12") == (datetime(2026, 12, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC))
     assert reports.previous_month(datetime(2027, 1, 1, tzinfo=UTC)) == "2026-12"
@@ -125,17 +132,32 @@ def test_the_pdf_names_every_closed_case_and_the_month(folder):
     november()
     made = reports.generate("2026-11", by="u_manager", now=NOV_23)
     pdf = (folder / made["key"]).read_bytes()
-    assert pdf.startswith(b"%PDF")
-    for text in (b"case_cut", b"case_pause", b"case_human", b"November 2026 \\(month to date\\)", b"u_manager"):
-        assert text in pdf
-    assert b"case_oct" not in pdf and b"seed_p1" not in pdf
+    page = text(pdf)
+    for shown in ("case_cut", "case_pause", "case_human", "November 2026 (month to date)", "u_manager",
+                  "$4,000 of limit removed"):
+        assert shown in page
+    assert "case_oct" not in page and "seed_p1" not in page
     assert made["sha256"] == hashlib.sha256(pdf).hexdigest()
+
+
+def test_the_pdf_is_pdf_a_3u_with_its_fonts_embedded_and_its_figures_attached(folder):
+    november()
+    made = reports.generate("2026-11", by="u_manager", now=NOV_23)
+    reader = pypdf.PdfReader(folder / made["key"])
+    xmp = reader.trailer["/Root"]["/Metadata"].get_object().get_data()
+    assert b"<pdfaid:part>3</pdfaid:part>" in xmp and b"<pdfaid:conformance>U</pdfaid:conformance>" in xmp
+    fonts = reader.pages[0]["/Resources"]["/Font"].values()
+    assert fonts and all(font["/DescendantFonts"][0].get_object()["/FontDescriptor"].get("/FontFile2")
+                         for font in fonts)
+    attached = json.loads(reader.attachments["report.json"][0])
+    assert attached["totals"] == made["totals"]
+    assert [row["case_id"] for row in attached["rows"]] == ["case_cut", "case_human", "case_pause"]
+    assert attached["generated"] == {"at": "2026-11-23T14:05:00+00:00", "by": "u_manager", "how": "manual"}
 
 
 def test_a_month_with_no_closed_case_still_gets_a_report_that_says_so(folder):
     made = reports.generate("2026-10", by="u_manager", now=NOV_23)
-    pdf = (folder / made["key"]).read_bytes()
-    assert b"No case was closed in this month." in pdf
+    assert "No case was closed in this month." in text((folder / made["key"]).read_bytes())
     assert made["month_to_date"] is False and made["totals"]["closed"] == 0
 
 
@@ -171,7 +193,8 @@ def test_in_s3_the_copy_carries_its_sha256_and_is_never_overwritten(bucket):
     stored = bucket.get_object(Bucket="reports-test", Key=made["key"])
     body = stored["Body"].read()
     assert stored["ContentType"] == "application/pdf"
-    assert stored["Metadata"] == {"sha256": hashlib.sha256(body).hexdigest(), "generated-by": "u_manager"}
+    assert stored["Metadata"] == {"sha256": hashlib.sha256(body).hexdigest(), "generated-by": "u_manager",
+                                  "format": "PDF/A-3U"}
     with pytest.raises(reports.AlreadyStored):
         reports.generate("2026-11", by="u_manager", now=NOV_23)
 

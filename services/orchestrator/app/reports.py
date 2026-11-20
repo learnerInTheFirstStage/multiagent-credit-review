@@ -4,19 +4,25 @@ Built only from the cases and reviews tables. No agent and no model is called, s
 figures every time and a report costs nothing. Each closed case's review already holds what the specialists found.
 
 Why it exists: a limit cut or a card pause is an adverse action on an existing account, and its records are kept
-for 12 months for business credit (Reg B, 12 CFR 1002.12(b)(2)); a model's outcomes are monitored over time
-(SR 11-7). The POC drops and reseeds its database on a schema change, so the copy lives elsewhere: S3 with Object
-Lock on AWS, a folder elsewhere (runtime.reports_storage). A stored copy is never overwritten. Running a month
-again adds a copy.
+for 12 months for business credit (Reg B, 12 CFR 1002.12(b)(2); 60 days for a business with over $1M in revenue,
+unless it asks, under (b)(5)); credit decisions are reviewed independently and on an ongoing basis (Interagency
+Guidance on Credit Risk Review Systems, 2020). The POC drops and reseeds its database on a schema change, so the
+copy lives elsewhere: S3 with Object Lock on AWS, a folder elsewhere (runtime.reports_storage). A stored copy is
+never overwritten. Running a month again adds a copy.
 
 A month is a calendar month in UTC, read on the wall clock (closed_at, created_at), not on the data clock the
 signals carry. Seeded reviews are left out: they are history the demo starts from, not decisions made here.
+
+The file is PDF/A-3U (ISO 19005-3), the archival form of PDF. Its fonts are embedded (Liberation Sans, in app/fonts,
+under the SIL Open Font License), so it reads the same years from now with no app or font installed. Its figures
+and rows ride inside it as report.json, so one locked object holds the page for people and the data for machines.
 
 Two callers, one function: POST /reports/monthly/{YYYY-MM} (app/api/reports.py) and the service's hourly look
 (run_due, from app/main.py), which makes last month's report when none is stored yet.
 """
 
 import hashlib
+import json
 import logging
 import re
 from collections import Counter
@@ -32,9 +38,13 @@ from app.db import SessionLocal
 from app.db.models import OPEN_STATUSES, Case, CaseStatus, Review
 
 log = logging.getLogger(__name__)
+# fpdf2 cuts the embedded fonts down to the glyphs used; fontTools logs every step of that at INFO.
+logging.getLogger("fontTools").setLevel(logging.WARNING)
 
 _MONTH = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
 PREFIX = "monthly"
+FORMAT = "PDF/A-3U"
+FONTS = Path(__file__).parent / "fonts"
 LINK_SECONDS = 900  # how long the download link in the API's answer works
 
 
@@ -155,18 +165,26 @@ def render(report: dict) -> bytes:
     start, _ = month_range(report["month"])
     title = f"{start:%B %Y}" + (" (month to date)" if report["month_to_date"] else "")
 
-    pdf = FPDF(orientation="L", format="A4")
-    pdf.set_compression(False)  # small anyway, and its text stays searchable
-    pdf.set_creation_date(datetime.fromisoformat(generated["at"]))
+    made = datetime.fromisoformat(generated["at"])
+    # PDF/A-3U: fpdf2 refuses whatever the standard forbids, and adds the sRGB output intent and the XMP itself.
+    pdf = FPDF(orientation="L", format="A4", enforce_compliance="PDFA_3U")
+    pdf.set_creation_date(made)
     pdf.set_title(f"Credit review monthly report {report['month']}")
+    pdf.set_lang("en-US")
+    # Embedded, as PDF/A requires. Liberation Sans has Helvetica's widths, so the layout is the one drawn before.
+    for style, name in (("", "Regular"), ("B", "Bold"), ("I", "Italic")):
+        pdf.add_font("Sans", style, FONTS / f"LiberationSans-{name}.ttf")
+    pdf.embed_file(bytes=json.dumps(report, indent=1, sort_keys=True).encode(), basename="report.json",
+                   mime_type="application/json", associated_file_relationship="Data", modification_date=made,
+                   desc="The figures and rows of this report, for machines")
     pdf.set_auto_page_break(True, margin=12)
     pdf.add_page()
 
     def line(text: str, *, size: float = 9, style: str = "", height: float = 5.5) -> None:
-        pdf.set_font("Helvetica", style, size)
-        pdf.cell(0, height, _latin(text), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Sans", style, size)
+        pdf.cell(0, height, text, new_x="LMARGIN", new_y="NEXT")
 
-    line(f"Credit review - monthly report, {title}", size=14, style="B", height=8)
+    line(f"Credit review — monthly report, {title}", size=14, style="B", height=8)
     line(f"Generated {generated['at'][:16].replace('T', ' ')} UTC · {generated['how']}, by {generated['by']} · "
          f"months are UTC · policy {', '.join(report['policy_versions']) or '-'}", size=8)
     pdf.ln(3)
@@ -181,13 +199,13 @@ def render(report: dict) -> bytes:
                        if totals["limit_removed_cents"] else "")),
         ("People", _counts(totals["people"])),
     ):
-        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_font("Sans", "B", 9)
         pdf.cell(24, 5.5, label)
         line(text)
     pdf.ln(3)
 
     if report["rows"]:
-        pdf.set_font("Helvetica", size=8)
+        pdf.set_font("Sans", size=8)
         headings = ("Case", "Customer", "Closed", "Outcome", "Cause", "Recommended", "Decided by", "Action")
         with pdf.table(col_widths=(34, 18, 13, 17, 40, 28, 70, 30), text_align="LEFT", line_height=4.5) as table:
             for values in (headings, *(tuple(row[k] for k in (
@@ -195,7 +213,7 @@ def render(report: dict) -> bytes:
             )) for row in report["rows"])):
                 cells = table.row()
                 for value in values:
-                    cells.cell(_latin(str(value)))
+                    cells.cell(str(value))
     else:
         line("No case was closed in this month.", style="I")
     pdf.ln(3)
@@ -205,11 +223,6 @@ def render(report: dict) -> bytes:
 
 def _counts(counts: dict) -> str:
     return " · ".join(f"{name} {count}" for name, count in sorted(counts.items())) or "none"
-
-
-def _latin(text: str) -> str:
-    # The PDF's built-in fonts hold Latin-1 only.
-    return text.encode("latin-1", "replace").decode("latin-1")
 
 
 def _key(month: str, now: datetime, how: str) -> str:
@@ -227,7 +240,7 @@ def store(month: str, pdf: bytes, *, now: datetime, how: str, by: str) -> dict:
         try:
             s3.put_object(
                 Bucket=bucket, Key=key, Body=pdf, ContentType="application/pdf", IfNoneMatch="*",
-                Metadata={"sha256": digest, "generated-by": by.encode("ascii", "replace").decode()},
+                Metadata={"sha256": digest, "generated-by": by.encode("ascii", "replace").decode(), "format": FORMAT},
             )
         except ClientError as error:
             if error.response.get("Error", {}).get("Code") in ("PreconditionFailed", "ConditionalRequestConflict"):
