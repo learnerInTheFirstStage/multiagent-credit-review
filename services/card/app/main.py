@@ -10,6 +10,9 @@ from app.api.tools import router as tools_router
 from app.db import Base, SessionLocal, engine
 from app.db.seed import seed_if_empty
 from contracts import Health
+from contracts.logs import RequestLog, setup_logging
+
+setup_logging("card")
 
 
 @asynccontextmanager
@@ -25,6 +28,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Card Service", lifespan=lifespan)
+app.add_middleware(RequestLog)
 app.include_router(snapshots_router)
 app.include_router(tools_router)
 app.include_router(actions_router)

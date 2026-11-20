@@ -4,7 +4,8 @@ from collections.abc import Iterator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+# hide_parameters: a failed write's error, and so its log line, would quote the report or the note it carried.
+engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True, hide_parameters=True)
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 

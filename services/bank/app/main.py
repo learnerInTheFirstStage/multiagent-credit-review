@@ -8,6 +8,9 @@ from app.api.tools import router as tools_router
 from app.db import Base, SessionLocal, engine
 from app.db.seed import seed_if_empty
 from contracts import Health
+from contracts.logs import RequestLog, setup_logging
+
+setup_logging("bank")
 
 
 @asynccontextmanager
@@ -23,6 +26,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Bank Service", lifespan=lifespan)
+app.add_middleware(RequestLog)
 app.include_router(tools_router)
 
 

@@ -14,9 +14,9 @@ from app.api import cases, dev_login, signals
 from app.db import Base, SessionLocal, engine
 from app.db import models  # noqa: F401  registers the tables on Base
 from contracts import Health
+from contracts.logs import RequestLog, setup_logging
 
-# uvicorn only sets up its own loggers. Without this the app's INFO lines are dropped.
-logging.basicConfig(level=logging.INFO)
+setup_logging("orchestrator")
 log = logging.getLogger(__name__)
 
 
@@ -70,6 +70,7 @@ async def _retry_waiting(graph, stop: asyncio.Event, first, every: float) -> Non
 
 
 app = FastAPI(title="Orchestrator Service", lifespan=lifespan)
+app.add_middleware(RequestLog)
 app.include_router(signals.router)
 app.include_router(cases.router)
 app.include_router(dev_login.router)

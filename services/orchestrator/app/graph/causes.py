@@ -3,6 +3,24 @@
 CAUSES = ("payroll_or_tax", "planned_vendor_payment", "seasonal_dip", "funds_moved_out_of_view",
           "revenue_loss", "unexplained_outflow", "insufficient_data")
 
+# What each likely cause means, shown to the investigator and the report writer. A model given the names alone
+# read funds_moved_out_of_view as "a transfer out" and ruled it out for c_006, whose card is paid from an account
+# no linked account pays into; and gave c_012's unreconciled books no_clear_cause. No figure in these.
+CAUSE_MEANS = {
+    "payroll_or_tax": "A regular payroll run or a tax payment explains the fall.",
+    "planned_vendor_payment": "A payment to a vendor the customer has paid before, in line with what it usually "
+    "pays, explains the fall.",
+    "seasonal_dip": "Last year's same weeks show the same kind of fall, and income is not falling.",
+    "funds_moved_out_of_view": "The customer's money is still there, in an account we cannot see: a transfer to "
+    "their own account elsewhere that makes up most of the fall, or a card now paid from an unlinked account that "
+    "no linked account pays into, so income lands there instead.",
+    "revenue_loss": "Income is down, and it is not just arriving in an account we cannot see.",
+    "unexplained_outflow": "Money went to payees with no history or known purpose.",
+    "insufficient_data": "The data cannot be trusted or is incomplete: a linked account stopped reporting, or "
+    "balances and transactions do not reconcile.",
+    "no_clear_cause": "The data is complete and consistent, but no record explains the fall.",
+}
+
 # The topics of each tool, in catalogue order.
 TOPICS = {
     "AskCashFlow": ("transactions", "income", "payee_history", "accounts", "reconciliation", "prior_year"),

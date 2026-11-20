@@ -232,7 +232,8 @@ def write(record: dict, records: dict[str, dict]) -> Finding | None:
         writer = _WRITERS.get(record["kind"])
         return writer(record) if writer else None
     except Exception as error:  # noqa: BLE001 - a record Bank shaped oddly must not cost the answer
-        log.warning("cash_flow could not write a finding for %s: %s", record.get("id"), error)
+        # Its kind only: a ValidationError of the Finding quotes the claim, written from Bank's record.
+        log.warning("cash_flow could not write a finding for %s: %s", record.get("id"), type(error).__name__)
         return None
 
 

@@ -682,7 +682,8 @@ def build_graph(
         try:
             found = search_reviews({"customer_id": signal["customer_id"], "as_of": signal["as_of"], "query": query})
         except Exception as failure:
-            log.warning("case %s: the search gave no usable answer: %s", state["case_id"], failure)
+            # Its kind only: a database error quotes its parameters, and the query is the model's text.
+            log.warning("case %s: the search gave no usable answer: %s", state["case_id"], type(failure).__name__)
             return refused("No usable answer from SearchPastCases.")
         results = json.dumps({"untrusted": prompts.SEARCH_HEADER, "results": found.results})
         return {
@@ -755,7 +756,9 @@ def build_graph(
         except CaseWaiting:
             raise
         except Exception as error:  # a specialist that fails is "no answer", the case goes on
-            log.warning("case %s: %s gave no usable answer: %s", state["case_id"], asked, error)
+            # A ValidationError quotes the answer, which Langfuse keeps. The log gets the fields that failed.
+            why = _not_a_report(error) if isinstance(error, ValidationError) else error
+            log.warning("case %s: %s gave no usable answer: %s", state["case_id"], asked, why)
             answer.setdefault("error", f"No usable answer from {asked}.")
 
         told = facts.shown_answer(answer, untrusted=True)
@@ -808,7 +811,9 @@ def build_graph(
             review = None if _cut_off(reply["raw"]) else reply["parsed"]
             if review is None:
                 # The case goes on: step 6 still checks that the report addresses every review reason.
-                why = "it was cut off" if _cut_off(reply["raw"]) else reply["parsing_error"]
+                # The parser's message would quote the answer, which Langfuse keeps. The log gets its kind only.
+                error = reply["parsing_error"]
+                why = "it was cut off" if _cut_off(reply["raw"]) else type(error).__name__ if error else "it was empty"
                 log.warning("case %s: the gap review gave no usable answer: %s", state["case_id"], why)
             written = review.gaps if review else []
             # A gap that states a figure goes nowhere. The nudge is a message code writes, so a figure the gap
@@ -859,7 +864,8 @@ def build_graph(
         try:
             reply = report_writer.invoke([SystemMessage(prompts.REPORT), HumanMessage(brief)])
         except OutputParserException as error:  # prose, from a provider that raises on it
-            log.warning("case %s: draft %d could not be parsed: %s", state["case_id"], state["drafts"] + 1, error)
+            log.warning("case %s: draft %d could not be parsed: %s", state["case_id"], state["drafts"] + 1,
+                        type(error).__name__)
             reply = {"raw": None, "parsed": None, "parsing_error": error.__cause__}
         cut_off = _cut_off(reply["raw"])
         draft = None if cut_off else reply["parsed"]
@@ -868,9 +874,8 @@ def build_graph(
                 error = "It was cut off before it was complete. Write a shorter report."
             else:
                 error = _not_a_report(reply["parsing_error"])
-            # The parser's own message goes to the log only.
-            why = reply["parsing_error"] or error
-            log.warning("case %s: draft %d is not a report: %s", state["case_id"], state["drafts"] + 1, why)
+            # Not the parser's own message, here either: it quotes the draft, which Langfuse keeps.
+            log.warning("case %s: draft %d is not a report: %s", state["case_id"], state["drafts"] + 1, error)
             # The redraft is told what did not fit.
             return {"report": None, "draft_error": error.replace("\x00", "")[:1000], "drafts": state["drafts"] + 1}
         report = {

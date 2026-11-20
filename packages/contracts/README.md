@@ -2,7 +2,7 @@
 
 The one piece of code the services share: the request and response models for calls between them, and for calls from the graph to a specialist agent.
 
-Today it holds `Health`, the review signal (`signal.py`, API doc section 3) and the specialist request and response (`investigate.py`, API doc section 2). Both are drafts until agreed in KAN-13 and KAN-14. Still to come: the analysis tool requests and responses, the report, the cause and recommendation lists. The report and the two lists (`LikelyCause`, `Recommendation`) exist as drafts in `services/orchestrator/app/graph/report.py` and move here once agreed.
+Today it holds `Health`, the review signal (`signal.py`, API doc section 3) and the specialist request and response (`investigate.py`, API doc section 2). The report and the cause and recommendation lists (`LikelyCause`, `Recommendation`) are defined in `services/orchestrator/app/graph/report.py`, the only service that imports them; the frontend keeps its own copy of the report's fields in `frontend/src/types.ts`. Bank and Card each define their analysis tools' responses. Either moves here when a second service needs to import it.
 
 Put each contract in its own module (for example `investigate.py`) and re-export it from `__init__.py`. Each service installs this package in its Dockerfile and imports from it:
 
@@ -11,6 +11,18 @@ from contracts import Health
 ```
 
 A change here affects every service, so all three owners review it.
+
+## Logs
+
+`contracts.logs` is the one module here that is not a model: the shape of every service's log line. Each service calls `setup_logging("<service>")` when its app module loads and adds `RequestLog` to its app. Every line is one JSON object on stdout. A request's lines carry the gateway's `X-Request-ID` as `request_id`, and the gateway returns the same id to the browser in the `X-Request-ID` response header. A case run's lines carry `case_id` (`bind(case_id=...)`). To follow one request or one case through the Orchestrator:
+
+```bash
+docker compose logs --no-log-prefix orchestrator | grep <request id or case id>
+```
+
+The Orchestrator does not pass the id on to Bank and Card yet, so their lines have an id of their own.
+
+A line holds ids, status codes and counts, never customer names, account numbers, tokens, or text that a model or a customer wrote: Langfuse keeps those.
 
 ## The specialist request and response
 

@@ -72,4 +72,4 @@ Settings: `BANK_URL` (compose sets `http://bank:8000`), `JWT_SECRET`, and the se
 
 Tests: `test_cash_flow_agent.py`, `test_cash_flow_regressions.py`, `test_cash_flow_graph.py`, `test_cash_flow_fixture.py` (the agent with no model returns every record the stand-in returns, unchanged, and passes its own checks), `test_cash_flow_case.py` (inside the real case graph, the same guideline outcomes as `mock.cash_flow` for c_002, c_003, c_005, c_009, c_011, c_012). Bank answers from `tests/fixtures/bank_tools_standin.json`: the stand-in's records shaped as Bank tool responses (`python -m tests._bank_standin` regenerates it; `tests/_bank_standin.py` says which tool returns which kind). When the Bank branch lands, record its real responses into the same keys.
 
-Not done yet: the swap in `app/runtime.py` (KAN-36), and a run on a real model.
+The swap in `app/runtime.py` is done (KAN-36): the graph asks this agent unless `SPECIALISTS=stand_in`.

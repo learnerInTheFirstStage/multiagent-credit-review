@@ -9,9 +9,9 @@ All customers and data are simulated. This project is not affiliated with Ramp.
 - **Orchestrator**: takes a review signal at `POST /signals`, investigates the case on a LangGraph graph, writes a report that code checks, pauses for the analyst and, where needed, the manager, and sends an approved action to Card. It asks the real Cash Flow and Card agents (`SPECIALISTS=stand_in` switches to stand-ins that read the data files). If Bank or Card is down, the case waits and retries, then fails with the reason. It keeps closed reviews as history and traces every model and tool call to LangFuse. See `services/orchestrator/README.md`.
 - **Bank**: seeds every customer in `data/shared_customers.yaml` and `eval/extra_customers.yaml` as a complete bank feed (every movement of the week, 13 weeks of history, last year's same weeks) and serves the Cash Flow agent's read-only tools. See `services/bank/README.md`.
 - **Card**: seeds the same customers with about 14 months of card history. `GET /snapshots` gives each customer's limit, balance and last three repayments. Its read-only tools serve the Card agent, and `POST /customers/{id}/actions` carries out an approved `reduce_limit` or `pause_card` once per approval.
-- **Evaluation**: a golden set of 27 test customers with expected answers, graded by code (`eval/`). On the real model on 2026-11-17, 14 of them ran once each: the recommendation was right on 13 and the cause on 11. On 2026-11-18 c_010 ran from signal to Card's action following this README: `pause_card` under G-08b, approved by the analyst and the manager, card paused. The full set has not been run yet.
+- **Evaluation**: a golden set of 27 test customers with expected answers, graded by code (`eval/`). On the real model on 2026-11-17, 14 of them ran once each: the recommendation was right on 13 and the cause on 11. On 2026-11-18 c_010 ran from signal to Card's action following this README: `pause_card` under G-08b, approved by the analyst and the manager, card paused. On 2026-11-18 the full set ran once on Claude Sonnet 5.5: the recommendation was right on 24 of 27 and the cause on 23, with no wrong cut, for $11.51.
+- **Frontend**: the React review app: a login page, the case queue, and a case page where the analyst, and the manager where needed, approves or rejects. People sign in through Auth0 when it is configured; otherwise the login page gets a token from the Orchestrator's `POST /dev_login`, which answers only when `DEV_LOGIN` is on. See `frontend/README.md`.
 - **Auth**: with `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` and `AUTH0_CLIENT_ID` set, the review app signs people in through Auth0 and the Orchestrator and Card take people's tokens from Auth0 only; services keep signing their own with `JWT_SECRET` (`services/auth/README.md`). Left empty, the review app's dev login (`DEV_LOGIN=1`) and `python -m app.dev_token` make people's tokens.
-- **Frontend**: a placeholder page.
 
 ## Architecture
 
@@ -100,6 +100,8 @@ done
 ```
 
 Run them in a shell without the stack's variables (`LLM_*`, `LANGFUSE_*`, `SHARED_CUSTOMERS_*`): the tests set their own. Card's Postgres-only tests run when `CARD_PG_URL` points at a Postgres database, and are skipped otherwise.
+
+Every pull request, and every push to main, runs these three suites and the frontend build on GitHub Actions (`.github/workflows/tests.yml`). GitHub does not block a merge on a failed run on this repository's plan, so check that the run is green before merging.
 
 ### Run the evaluation
 

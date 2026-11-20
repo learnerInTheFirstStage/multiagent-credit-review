@@ -417,11 +417,24 @@ def test_books_that_do_not_match_keep_an_action_from_passing_over_them(reconcile
 
 def test_stopped_inflows_ask_for_documents_and_are_no_reason_to_cut_the_limit():
     # c_106 (5.2): its trend label is stopped, so the shrinking of G-06 is not met and reduce_limit is not permitted.
-    records = ledger("c_106", "transactions", "income")
+    records = ledger("c_106", "transactions", "income", "paying_account")
 
     assert not needs.meets(need("G-06"), records)
     assert needs.meets(need("G-07"), records)  # down, for G-07: still nothing without a repayment in trouble
     assert needs.permitted(GUIDELINES, records) == {"request_documents": ["G-05"]}
+
+
+def test_stopped_income_with_repayments_on_time_asks_which_account_pays_the_card():
+    # c_006 on a real model: Bank showed income stopped, every repayment was paid, G-05 was met, and the gap pass
+    # stopped there. Card was never asked, so a move of income out of view read as revenue loss. Before the fix,
+    # request_documents was permitted on Bank's answers alone and no gap was found. Run on c_106's records, which
+    # this module holds: on Bank's side the twins are the same.
+    records, asked = case("c_106", "transactions", "income")
+
+    assert needs.permitted(GUIDELINES, records) == {}
+    assert [gap["ask"] for gap in needs.code_gaps(GUIDELINES, records, asked)] == [
+        {"tool": "AskCreditBehavior", "args": {"topic": "paying_account"}}
+    ]
 
 
 def test_a_short_dip_with_a_late_repayment_asks_for_nothing():
@@ -481,15 +494,19 @@ def test_none_fits_is_met_only_when_nothing_acting_is_permitted_and_no_acting_gu
         records, asked = case("c_314", *steps)
         return needs.unmet(nothing_fits, [], guidelines=GUIDELINES, known=records, asked=asked) == []
 
-    # Nothing asked: transactions and income could still let a guideline act.
+    # Nothing asked: transactions and income could still let a guideline act, and so could the paying account
+    # (G-05) while income is not known.
+    paying_account = {"tool": "AskCreditBehavior", "args": {"topic": "paying_account"}}
     assert not fits()
     assert needs.unsettled(GUIDELINES, *case("c_314")) == [
         {"tool": "AskCashFlow", "args": {"topic": "transactions"}},
         {"tool": "AskCashFlow", "args": {"topic": "income"}},
+        paying_account,
     ]
     assert not fits("transactions")
     assert needs.unsettled(GUIDELINES, *case("c_314", "transactions")) == [
-        {"tool": "AskCashFlow", "args": {"topic": "income"}}
+        {"tool": "AskCashFlow", "args": {"topic": "income"}},
+        paying_account,
     ]
     assert fits("transactions", "income")
     assert needs.hand_over(GUIDELINES, *case("c_314", "transactions", "income")) == ["G-11"]
@@ -509,6 +526,7 @@ def test_an_open_need_of_a_payee_is_named_with_the_payment_to_ask_about():
     assert needs.unsettled(GUIDELINES, *case("c_011", "transactions")) == [
         {"tool": "AskCashFlow", "args": {"topic": "income"}},
         {"tool": "AskCashFlow", "args": {"topic": "payee_history", "record_id": "txn_c_011_01"}},
+        {"tool": "AskCreditBehavior", "args": {"topic": "paying_account"}},
     ]
 
 
@@ -667,10 +685,12 @@ def test_a_guideline_whose_only_met_need_is_the_cases_own_record_is_not_called_h
     healthy = guideline("G-04")  # every repayment paid is met by sig_repayments before anything is asked
 
     assert [needs.state(n, healthy, records, asked) for n in healthy["needs"]] == ["open", "open", "met"]
+    # While income is not known G-05 is alive, and its paying-account question comes before the hand-over
+    # guidelines' questions, so it takes the third slot.
     assert gaps("c_001") == [
         ("G3", "AskCashFlow, topic transactions."),
         ("G3", "AskCashFlow, topic income."),
-        ("G3", "AskCashFlow, topic reconciliation."),
+        ("G3", "AskCreditBehavior, topic paying_account."),
     ]
 
 
@@ -1145,6 +1165,15 @@ def test_a_need_code_could_not_check_cannot_be_written(broken):
         Need.model_validate({**good, **broken})
 
 
+def test_every_cause_a_report_may_give_says_what_it_means():
+    # Given the names alone, a model read funds_moved_out_of_view as "a transfer out" and ruled it out for c_006.
+    from typing import get_args
+
+    from app.graph import report
+
+    assert set(causes.CAUSE_MEANS) == set(get_args(report.LikelyCause))
+
+
 def test_what_a_need_or_a_guideline_says_states_no_figure():
     # The model is shown these words. A threshold in them could be copied into a report as a fact (1.6, 6.1).
     from app.graph import figures
@@ -1152,6 +1181,7 @@ def test_what_a_need_or_a_guideline_says_states_no_figure():
     texts = [n["says"] for g in GUIDELINES for n in g["needs"]]
     texts += [g[field] for g in GUIDELINES for field in ("title", "when", "note")]
     texts += [n["says"] for alternatives in causes.CAUSE_NEEDS.values() for n in alternatives]
+    texts += list(causes.CAUSE_MEANS.values())
     texts += [entry["says"] for entry in causes.MUST_ADDRESS]
     texts += [step["args"]["question"] for step in plans.FIXED_PLAN]
     texts += [plans.follow_up({"tool": "AskCashFlow", "args": {"topic": "payee_history"}})["args"]["question"]]

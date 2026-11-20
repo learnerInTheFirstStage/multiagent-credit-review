@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from typing import Literal
 
+from contracts.logs import bind
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
@@ -377,7 +378,8 @@ def decide(
         resume = Command(resume={**decision.model_dump(exclude_none=True), "by": user.sub})
 
     try:
-        state = graph.invoke(resume, config, context={"approver_token": user.token})
+        with bind(case_id=case_id):
+            state = graph.invoke(resume, config, context={"approver_token": user.token})
     except CardError as error:
         log.warning("case %s: approved by %s, but Card did not carry out the action: %s", case_id, user.sub, error)
         if error.refused:

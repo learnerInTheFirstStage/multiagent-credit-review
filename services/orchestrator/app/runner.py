@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+from contracts.logs import bind
 from langgraph.types import StateSnapshot
 from sqlalchemy import delete, select, update
 
@@ -72,29 +73,31 @@ def run_case(graph, case_id: str, now: datetime | None = None) -> None:
 
     now is when an outage met in this run counts as met: the current time unless given.
     """
-    config = thread(case_id)
-    try:
-        snapshot = graph.get_state(config)
-        if not snapshot.values:
-            _set_status(case_id, CaseStatus.INVESTIGATING)
-            graph.invoke({"case_id": case_id, "signal": _opening_signal(case_id)}, config)
-        elif snapshot.next and waiting_for(snapshot) is None:
-            # A restart stopped it part-way, or Bank or Card gave nothing. Go on from the last saved step.
-            _set_status(case_id, CaseStatus.INVESTIGATING)
-            graph.invoke(None, config)
-        # Otherwise the graph is where it should be and only the table may be behind.
-        status = _catch_up(graph, case_id)
-    except CaseWaiting as outage:
+    # Every line the run logs carries the case, the graph's and the specialists' too.
+    with bind(case_id=case_id):
+        config = thread(case_id)
         try:
-            status = _wait_or_fail(case_id, outage, now or datetime.now(UTC))
-        except Exception:  # the database is gone too. The case stays investigating; the next start picks it up.
-            log.exception("case %s: %s, and the wait could not be recorded", case_id, outage)
-            return
-    except Exception:
-        log.exception("case %s failed", case_id)
-        status = CaseStatus.FAILED
-        _set_status(case_id, status, outage_over=True)  # it failed, but not for want of Bank or Card
-    log.info("case %s is %s", case_id, status)
+            snapshot = graph.get_state(config)
+            if not snapshot.values:
+                _set_status(case_id, CaseStatus.INVESTIGATING)
+                graph.invoke({"case_id": case_id, "signal": _opening_signal(case_id)}, config)
+            elif snapshot.next and waiting_for(snapshot) is None:
+                # A restart stopped it part-way, or Bank or Card gave nothing. Go on from the last saved step.
+                _set_status(case_id, CaseStatus.INVESTIGATING)
+                graph.invoke(None, config)
+            # Otherwise the graph is where it should be and only the table may be behind.
+            status = _catch_up(graph, case_id)
+        except CaseWaiting as outage:
+            try:
+                status = _wait_or_fail(case_id, outage, now or datetime.now(UTC))
+            except Exception:  # the database is gone too. The case stays investigating; the next start picks it up.
+                log.exception("case %s: %s, and the wait could not be recorded", case_id, outage)
+                return
+        except Exception:
+            log.exception("case %s failed", case_id)
+            status = CaseStatus.FAILED
+            _set_status(case_id, status, outage_over=True)  # it failed, but not for want of Bank or Card
+        log.info("case %s is %s", case_id, status)
 
 
 def retry_due(graph, now: datetime | None = None, stopping: Callable[[], bool] = lambda: False) -> list[str]:

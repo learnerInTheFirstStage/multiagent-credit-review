@@ -1,7 +1,8 @@
 """The report the graph writes for the analyst. Draft, see API doc section 4.
 
-The cause and recommendation lists are still to be agreed (KAN-14). When they
-are, this belongs in packages/contracts, because the frontend reads it too.
+The cause and recommendation lists (KAN-14) are defined here, and the frontend
+keeps its own copy of the report's fields in frontend/src/types.ts. If another
+service needs to import them, they move to packages/contracts.
 """
 
 from typing import Literal

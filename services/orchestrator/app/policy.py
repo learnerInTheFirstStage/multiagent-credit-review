@@ -2,7 +2,8 @@
 
 # 2026-11-17: when Bank or Card gives nothing, the case waits and asks again (OUTAGE_RETRY_SECONDS), then fails with
 # the reason, instead of going to a person under G-11.
-POLICY_VERSION = "2026-11-17"
+# 2026-11-18: G-05 needs the record of which account pays the card before it can be cited.
+POLICY_VERSION = "2026-11-18"
 
 EXPLAINS_BP = 5000        # "explains the fall", "the fall matches": at least half of it (G-01, G-04)
 LARGE_PART_BP = 2500      # "a large part of the fall", "the fall is a payment to": at least a quarter (G-02, G-09)

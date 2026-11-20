@@ -2121,7 +2121,7 @@ Accepted: cause revenue_loss, recommendation reduce_limit or request_documents.
 
 Guidelines a right report may rest on: G-05, G-06.
 
-A question path that reaches it: bank.transactions, bank.income.
+A question path that reaches it: bank.transactions, bank.income, card.paying_account.
 
 The signal the case starts with:
 

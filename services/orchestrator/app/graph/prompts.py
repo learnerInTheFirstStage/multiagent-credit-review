@@ -11,7 +11,7 @@ import json
 import logging
 
 from app.graph import facts
-from app.graph.causes import CAUSE_NEEDS, CAUSES, KIND_TOPIC
+from app.graph.causes import CAUSE_MEANS, CAUSE_NEEDS, CAUSES, KIND_TOPIC
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +91,8 @@ the records it rests on. Ids that start with sig_, hist_ or xs_ are records too.
 put a figure in a sentence unless a record that sentence cites shows it. Do not write a size or a \
 multiple in words: copy the percentage shown.
 - Say what the report finds about each review reason. If it could not be determined, say so.
-- Choose the likely cause a record shows. If no record shows one, use no_clear_cause.
+- Choose the likely cause a record shows, by what each cause means. If no record shows one, use \
+no_clear_cause.
 - Cite a guideline only when the report cites a record for each thing it needs, and recommend only \
 an action it allows. Cite only the guidelines the recommendation rests on.
 - To hand the case to a person, cite the guideline that says so. Its needs must be met like any \
@@ -177,7 +178,12 @@ def opening_brief(case_facts: list[dict], guidelines: list[dict], window: dict) 
     signal = [record for record in case_facts if record["id"].startswith("sig_")]
     history = [record for record in case_facts if record["id"].startswith("hist_")]
     causes = [
-        {"cause": cause, "shown_by": [need["says"] for need in CAUSE_NEEDS[cause]], "ask": _asks(cause)}
+        {
+            "cause": cause,
+            "means": CAUSE_MEANS[cause],
+            "shown_by": [need["says"] for need in CAUSE_NEEDS[cause]],
+            "ask": _asks(cause),
+        }
         for cause in CAUSES
     ]
     return (
@@ -207,6 +213,7 @@ def report_brief(
     brief = (
         f"Facts worked out by code:\n{_json(_shown(case_facts))}\n\n"
         f"Questions and answers:\n{_json(sent)}\n\n"
+        f"The likely causes, and what each means:\n{_json(CAUSE_MEANS)}\n\n"
         f"Credit guidelines:\n{_json(guidelines_shown(guidelines))}"
     )
     if still_unexplained:
