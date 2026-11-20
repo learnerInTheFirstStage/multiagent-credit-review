@@ -14,3 +14,7 @@ pyyaml>=6,<7
 # The monthly report (app/reports.py): the PDF, and S3 where it is kept.
 fpdf2>=2.8,<3
 boto3>=1.35,<2
+
+# KAN-74 (bonus): the MQ publisher and worker use pika's BlockingConnection.
+# Imported from the orchestrator process (publisher) and from the worker entrypoint.
+pika>=1.3,<2

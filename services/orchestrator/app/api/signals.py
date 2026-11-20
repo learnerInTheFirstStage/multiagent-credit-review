@@ -8,11 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import runner
 from app.agents import mock
 from app.auth import User, current_user
 from app.db import get_session
 from app.db.models import OPEN_STATUSES, Case, CaseStatus, SignalRow
+from app.mq import publisher as mq_publisher
+from app.mq.dispatch import dispatch
 from contracts import Signal
 
 log = logging.getLogger(__name__)
@@ -135,8 +136,10 @@ def receive_signal(
     )
     if result == "opened":
         graph = request.app.state.graph
-        if graph is None:
-            log.warning("case %s stays queued: no model is configured", case.case_id)
+        # MQ mode can dispatch without the in-process graph (the worker owns one).
+        # Fallback needs it: with no model configured, the case stays queued.
+        if mq_publisher.enabled() or graph is not None:
+            dispatch(case.case_id, graph, background)
         else:
-            background.add_task(runner.run_case, graph, case.case_id)
+            log.warning("case %s stays queued: no model is configured", case.case_id)
     return SignalAccepted(case_id=case.case_id, status=CaseStatus(case.status), result=result)

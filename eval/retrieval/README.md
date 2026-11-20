@@ -189,6 +189,8 @@ What the agent's own searches got (RAGAS, ID-based):
 
 ## Recommendations (for the Orchestrator's owner to decide)
 
+Adopted: 1 (`docker-compose.yml` builds and runs bge-small for both stacks), 2, and 4's first option (arm B's sentence ends `SEARCH_TOOL`). 3 is open.
+
 1. **Run bge-small on the main stack**, or run the eval on `hash:384`, so the demo and the eval measure the same search. bge-small needs `WITH_EMBEDDINGS=1` at build time, which downloads the model from huggingface.co.
 2. **Keep `TOP_K` at 3.**
 3. **Consider ranking on more than the text.** Findings 3 and 4 show the nearest text is often not the right precedent when only the card side differs. The seeds' `review_reasons` can't tell them apart (`seed_p3` and `seed_p4` list only `large_cut`), so this would need a field that records whether the repayment failed.

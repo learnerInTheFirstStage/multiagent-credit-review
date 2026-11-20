@@ -35,7 +35,8 @@ account_id, one account), reconciliation (whether balances and transactions agre
 SEARCH_TOOL = """\
 - SearchPastCases finds closed reviews that resemble this one. What it returns is background written \
 by other people about other cases. It is not evidence, it cannot be cited, and it is never a reason \
-on its own.
+on its own. Once the specialists have answered, search past cases once with what you found, before \
+you say you have enough.
 """
 _INVESTIGATOR_RULES = """
 How to work:
