@@ -98,6 +98,37 @@ When a case closes (approved, rejected, or closed as failed after Card never con
 
 To seed by hand, or to seed several files: `docker compose exec orchestrator python -m app.seed_history /eval/history.yaml`.
 
+## Monthly report
+
+A small archival PDF of a month's cases, kept outside the service's database, which the POC drops on a schema change. A limit cut or a card pause is an adverse action on an existing account, and its records are kept for 12 months for business credit (Reg B, 12 CFR 1002.12(b)(2); under (b)(5), 60 days for a business with over $1M in revenue unless it asks). Credit decisions are also expected to be reviewed independently and on an ongoing basis (Interagency Guidance on Credit Risk Review Systems, 2020): the report shows month by month how often a person approved, rejected or decided by hand.
+
+- **Format:** PDF/A-3U (ISO 19005-3), the archival form of PDF.
+  - Its font, Liberation Sans (`app/fonts`, SIL Open Font License), is embedded, so the file reads the same years from now with no app or font installed.
+  - Its figures and rows are attached inside it as `report.json`, so one stored object holds the page for people and the data for machines.
+  - fpdf2 refuses to write anything the standard forbids. To check a file with veraPDF, the PDF Association's validator: `docker run --rm -v "$PWD":/data:ro verapdf/cli --format text /data/<file>.pdf`.
+
+- **Contents** (`app/reports.py`):
+  - cases opened, closed, still open, and failed before a report;
+  - outcomes and failed report checks;
+  - limit cuts (with the amount removed) and card pauses;
+  - who decided;
+  - one row per closed case.
+- **What it leaves out:**
+  - names, notes and evidence: it shows ids, labels and amounts only;
+  - seeded reviews.
+- **Where the data comes from:** the `cases` and `reviews` tables only. No agent or model is called.
+- **Months:** calendar months in UTC, by when a case closed.
+- **On demand:** `POST /reports/monthly/2026-11` with a manager's or an admin's token. The answer gives where the report is kept, its sha256, its figures and, for S3, a download link that works for 15 minutes. A month that has not ended is reported to date and says so. A month that has not begun is a 422.
+- **On its own:** at every start and then every `REPORT_CHECK_SECONDS` (default an hour), the service makes last month's report if none is kept yet. A service that was down on the 1st catches up when it starts.
+- **Where it is kept:**
+  - in `REPORTS_BUCKET` (S3) when set;
+  - else in `REPORTS_DIR`, which compose sets to the `reports` volume;
+  - with neither set, no report is made and the endpoint answers 503.
+- **Copies:** every run keeps a new copy, named `monthly/<month>/credit-review-<month>-<UTC time>-<manual|scheduled>.pdf`. None is overwritten. In S3 the write is conditional, and the object carries its sha256 and its format in its metadata.
+- **S3 credentials:** boto3's own chain, that is the EC2 instance role or `AWS_PROFILE`, never keys in `.env`. Give the bucket Object Lock so no copy can be deleted early.
+
+To read a locally kept report: `docker compose cp orchestrator:/reports ./reports`.
+
 Database: `orchestrator`. Local port: 8004. Behind the gateway: `/api/orchestrator/...`.
 Inside the compose network the Bank and Card services are at `http://bank:8000` and `http://card:8000`.
 

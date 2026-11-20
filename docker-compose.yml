@@ -109,6 +109,13 @@ services:
       # service (started by the `mq` profile below) runs them. Empty leaves the default
       # in-process FastAPI BackgroundTasks path.
       RABBITMQ_URL: ${RABBITMQ_URL:-}
+      # The monthly report (services/orchestrator/app/reports.py): kept in this S3 bucket when set, else in the
+      # reports volume. S3 credentials come from the instance role on AWS, never from .env.
+      REPORTS_BUCKET: ${REPORTS_BUCKET:-}
+      REPORTS_DIR: /reports
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+    volumes:
+      - reports:/reports
     depends_on:
       postgres:
         condition: service_healthy
@@ -199,3 +206,4 @@ services:
 
 volumes:
   pgdata:
+  reports:
