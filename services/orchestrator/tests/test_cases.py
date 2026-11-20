@@ -3,7 +3,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,6 +18,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import object_session
 
 from app import card_client, guidelines, history, policy, runner, runtime
+from app.api.cases import MAY_DECIDE
 from app.agents import mock
 from app.card_client import CardError
 from app.db import Base, SessionLocal, engine
@@ -42,6 +43,16 @@ def manager() -> dict:
 
 APPROVE = {"decision": "approve"}
 REJECT = {"decision": "reject"}
+STAMPS = ("by_role", "decided_at")
+
+
+def unstamped(decisions: list[dict]) -> list[dict]:
+    """The decisions without the role and the time the API stamps on each, once each is checked to have both."""
+    deciders = set().union(*MAY_DECIDE.values())
+    for decision in decisions:
+        assert decision["by_role"] in deciders, decision
+        assert datetime.fromisoformat(decision["decided_at"]).tzinfo is not None, decision
+    return [{key: value for key, value in decision.items() if key not in STAMPS} for decision in decisions]
 
 
 class FakeCard:
@@ -291,7 +302,7 @@ def test_an_approval_sends_the_action_to_card_with_the_approvers_own_token(start
     case = answer.json()
     assert case["status"] == "done"
     assert case["waiting_for"] is None
-    assert case["decisions"] == [{"step": "analyst", "decision": "approve", "by": "u_analyst"}]
+    assert unstamped(case["decisions"]) == [{"step": "analyst", "decision": "approve", "by": "u_analyst"}]
     assert case["action"]["result"] == {"applied": True}
     [(action, token)] = service.card.calls
     assert action == {
@@ -376,6 +387,20 @@ def test_a_decision_is_approve_or_reject_and_cannot_name_who_decided(start, body
     assert service.decide(case_id, body, analyst()).status_code == 422
     assert service.case(case_id)["waiting_for"] == "analyst"
     assert service.card.calls == []
+
+
+def test_a_decision_records_the_role_it_was_made_in_and_when(start):
+    # The role comes from the token: a manager deciding the analyst step is recorded as a manager.
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case()
+    before = datetime.now(UTC).replace(microsecond=0)
+
+    [decision] = service.decide(case_id, APPROVE, manager()).json()["decisions"]
+
+    assert (decision["step"], decision["by"], decision["by_role"]) == ("analyst", "u_manager", "manager")
+    assert before <= datetime.fromisoformat(decision["decided_at"]) <= datetime.now(UTC)
+    [review] = reviews_of(case_id)
+    assert review.decisions == [decision]
 
 
 def test_a_case_that_is_not_waiting_cannot_be_decided(start):
@@ -470,7 +495,7 @@ def test_an_approval_card_did_not_carry_out_is_kept_and_only_its_approver_can_re
     case = service.case(case_id)
     assert case["status"] == "needs_approval"
     assert case["waiting_for"] == "retry"
-    assert case["decisions"] == [{"step": "analyst", "decision": "approve", "by": "u_analyst"}]
+    assert unstamped(case["decisions"]) == [{"step": "analyst", "decision": "approve", "by": "u_analyst"}]
     assert case["action"] is None
     assert "Send the approval again to retry" in failed.json()["message"]
 
@@ -516,7 +541,7 @@ def test_a_manager_can_close_a_case_card_never_confirmed_so_it_does_not_block_th
     assert case["status"] == "failed"
     assert case["waiting_for"] is None
     assert case["action"] is None
-    assert case["decisions"] == [
+    assert unstamped(case["decisions"]) == [
         {"step": "analyst", "decision": "approve", "by": "u_analyst"},
         {"step": "retry", "decision": "reject", "by": "u_manager"},
     ]
@@ -1138,7 +1163,7 @@ def test_a_note_longer_than_the_limit_is_refused(start):
 
     kept = service.decide(case_id, {**APPROVE, "note": "x" * 500}, analyst())
 
-    assert kept.json()["decisions"] == [
+    assert unstamped(kept.json()["decisions"]) == [
         {"step": "analyst", "decision": "approve", "by": "u_analyst", "note": "x" * 500}
     ]
     [review] = reviews_of(case_id)
@@ -1153,7 +1178,7 @@ def test_a_manager_closing_what_card_never_confirmed_may_say_why(start):
 
     closed = service.decide(case_id, {**REJECT, "note": "  Card applied it, checked by phone.\x00 "}, manager())
 
-    assert closed.json()["decisions"][-1] == {
+    assert unstamped(closed.json()["decisions"])[-1] == {
         "step": "retry",
         "decision": "reject",
         "by": "u_manager",
@@ -1177,10 +1202,10 @@ def test_an_approval_retried_with_its_note_keeps_the_note_once(start):
     assert retried.status_code == 200
     assert retried.json()["status"] == "done"
     decisions = [{"step": "analyst", "decision": "approve", "by": "u_analyst", "note": "Cut as the engine says."}]
-    assert retried.json()["decisions"] == decisions
+    assert unstamped(retried.json()["decisions"]) == decisions
     assert len(service.card.calls) == 1
     [review] = reviews_of(case_id)
-    assert review.decisions == decisions
+    assert unstamped(review.decisions) == decisions
 
 
 def _nothing_first(service, case_id):
@@ -1239,7 +1264,9 @@ def test_what_the_person_decided_is_accepted_only_when_approving_a_hand_over(sta
 
     case = answer.json()
     assert case["status"] == "done"
-    assert case["decisions"] == [{"step": "analyst", "decision": "approve", "by": "u_analyst", "decided": "pause_card"}]
+    assert unstamped(case["decisions"]) == [
+        {"step": "analyst", "decision": "approve", "by": "u_analyst", "decided": "pause_card"}
+    ]
     assert case["action"] is None
     assert service.card.calls == []  # a person decided it: nothing goes to Card for it
     [review] = reviews_of(case_id)
@@ -1428,7 +1455,7 @@ def test_the_case_page_is_what_it_was(start):
     assert set(first) == set(second) == keys
     assert first["outage"] is None and second["outage"] is None
     # A decision gains a note only when one was given.
-    assert second["decisions"] == [
+    assert unstamped(second["decisions"]) == [
         {"step": "analyst", "decision": "approve", "by": "u_analyst"},
         {"step": "manager", "decision": "approve", "by": "u_manager", "note": "Seen."},
     ]
