@@ -106,7 +106,7 @@ As `golden_set.yaml` stands, the class D split by nudge tells something for c_00
 
 ## The overlay
 
-`docker-compose.eval.yml` builds the image with the fastembed model, mounts the evaluation's customers and both seed files read-only, and sets `HISTORY_SEED_FILE=/eval/history.yaml:/eval/history_eval.yaml`, so the service seeds all fifteen reviews at start.
+`docker-compose.eval.yml` mounts the evaluation's customers and both seed files read-only, and sets `HISTORY_SEED_FILE=/eval/history.yaml:/eval/history_eval.yaml`, so the service seeds all fifteen reviews at start. The embedder is the main file's (fastembed bge-small, built into the image), so the evaluation measures the search the main stack runs.
 
 Check that it merges with the main file before a paid run. This starts nothing:
 
@@ -114,4 +114,4 @@ Check that it merges with the main file before a paid run. This starts nothing:
 docker compose -f docker-compose.yml -f eval/docker-compose.eval.yml config
 ```
 
-If `build.args` does not merge there, pass `--build-arg WITH_EMBEDDINGS=1` on the build. On a machine that cannot reach huggingface.co at build time, build with `WITH_EMBEDDINGS=0` and run with `EMBEDDINGS_MODEL=hash:384`, the built-in embedder.
+On a machine that cannot reach huggingface.co at build time, set `WITH_EMBEDDINGS=0` and `EMBEDDINGS_MODEL=hash:384` together, the built-in embedder.

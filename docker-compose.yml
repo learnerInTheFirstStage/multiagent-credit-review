@@ -80,6 +80,10 @@ services:
     build:
       context: .
       dockerfile: services/orchestrator/Dockerfile
+      # The fastembed model for the investigator's search, fetched from huggingface.co at build time.
+      # Offline: set WITH_EMBEDDINGS=0 and EMBEDDINGS_MODEL=hash:384 together, or the search tool is not offered.
+      args:
+        WITH_EMBEDDINGS: ${WITH_EMBEDDINGS:-1}
     environment:
       DATABASE_URL: postgresql+psycopg://orchestrator:${ORCHESTRATOR_DB_PASSWORD:-local-orchestrator}@postgres:5432/orchestrator
       JWT_SECRET: ${JWT_SECRET:-local-jwt-secret-for-development-only}
@@ -94,6 +98,8 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
       SPECIALISTS: ${SPECIALISTS:-}
+      # The same embedder here and in the evaluation, so the demo runs the search the evaluation measured.
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-fastembed:BAAI/bge-small-en-v1.5}
       # Enables POST /dev_login for the demo frontend, until the real Auth Service lands.
       # Default is OFF: anyone who can reach the gateway could otherwise mint a service
       # or analyst token with this endpoint. Set DEV_LOGIN=1 in your local .env to use
