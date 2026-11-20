@@ -144,7 +144,7 @@ export default function CaseDetailPage() {
                       decision.decision === "approve" ? "text-emerald-700" : "text-rose-700"
                     }
                   >
-                    {decision.decision}d
+                    {decision.decision === "approve" ? "approved" : "rejected"}
                   </span>
                   {decision.decided && (
                     <>

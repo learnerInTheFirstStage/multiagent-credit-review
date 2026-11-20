@@ -16,7 +16,7 @@ from app.agents.errors import OutageKind
 from app.auth import User, current_user
 from app.card_client import CardError
 from app.db import get_session
-from app.db.models import OPEN_STATUSES, Case, CaseStatus, OutageWait
+from app.db.models import OPEN_STATUSES, Case, CaseStatus, OutageWait, SignalRow
 from app.graph import facts
 
 log = logging.getLogger(__name__)
@@ -119,6 +119,11 @@ class CaseRow(BaseModel):
     created_at: datetime
     updated_at: datetime
     outage: Outage | None
+    # Every distinct review reason the signals for this case name, in the order
+    # they first arrived. Empty means the case was opened before signals carried
+    # reasons (not expected on new data), which is why the queue still renders
+    # when it is empty.
+    signal_reasons: list[str] = []
 
 
 class CaseList(BaseModel):
@@ -144,14 +149,17 @@ def list_cases(
     # Open cases only unless asked: otherwise old finished cases would fill the first page.
     wanted = (mine, Case.status == case_status if case_status else Case.status.in_(OPEN_STATUSES))
     total = session.scalar(select(func.count()).select_from(Case).where(*wanted))
-    rows = session.execute(
+    # Materialised to a list because _reasons_for below needs the ids first,
+    # and the CaseRow comprehension then iterates over rows again.
+    rows = list(session.execute(
         select(Case, OutageWait)
         .outerjoin(OutageWait, OutageWait.case_id == Case.case_id)
         .where(*wanted)
         .order_by(Case.created_at, Case.case_id)
         .limit(limit)
         .offset(offset)
-    )
+    ))
+    reasons = _reasons_for(session, [row.case_id for row, _ in rows])
     return CaseList(
         cases=[
             CaseRow(
@@ -161,11 +169,35 @@ def list_cases(
                 created_at=row.created_at,
                 updated_at=row.updated_at,
                 outage=_outage(wait),
+                signal_reasons=reasons.get(row.case_id, []),
             )
             for row, wait in rows
         ],
         total=total,
     )
+
+
+def _reasons_for(session: Session, case_ids: list[str]) -> dict[str, list[str]]:
+    """Every distinct review reason the signals for each case named, in arrival order.
+
+    Taken from SignalRow.payload rather than denormalised on Case, so the schema
+    stays unchanged. One query for all cases, no N+1.
+    """
+    if not case_ids:
+        return {}
+    reasons: dict[str, list[str]] = {}
+    for signal in session.execute(
+        select(SignalRow)
+        .where(SignalRow.case_id.in_(case_ids))
+        .order_by(SignalRow.received_at, SignalRow.signal_id)
+    ).scalars():
+        seen = reasons.setdefault(signal.case_id, [])
+        # `or []` so a payload that stored review_reasons as null (older data,
+        # or a sender bug) returns no reasons instead of raising on iteration.
+        for reason in signal.payload.get("review_reasons") or []:
+            if reason not in seen:
+                seen.append(reason)
+    return reasons
 
 
 def _case(session: Session, case_id: str, user: User, *, lock: bool = False) -> Case:

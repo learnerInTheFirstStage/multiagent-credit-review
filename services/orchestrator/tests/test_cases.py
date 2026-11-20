@@ -612,6 +612,26 @@ def queued_case(client) -> str:
     return client.post("/signals", json=SIGNAL, headers=sender()).json()["case_id"]
 
 
+def test_the_queue_carries_the_review_reasons_from_every_signal(client):
+    """A queue row names every distinct review reason the case's signals carried,
+    in arrival order, so the analyst sees what opened the case without clicking in."""
+    case_id = queued_case(client)  # SIGNAL carries ["large_cut", "failed_repayment"]
+
+    # A second signal attaches another reason the first did not name.
+    joined = {**SIGNAL, "signal_id": "sig_552", "review_reasons": ["incomplete_data", "large_cut"]}
+    joined_resp = client.post("/signals", json=joined, headers=sender())
+    # Asserted so a sender-side break (e.g. 422) fails here, not later on the queue read.
+    assert joined_resp.status_code == 200, joined_resp.text
+
+    queue = client.get("/cases", headers=analyst()).json()
+
+    rows = [row for row in queue["cases"] if row["case_id"] == case_id]
+    assert rows, f"case {case_id} should be in the open queue"
+    # The first signal's reasons come first, in order. "large_cut" from the second
+    # signal is a duplicate and is dropped; "incomplete_data" is appended.
+    assert rows[0]["signal_reasons"] == ["large_cut", "failed_repayment", "incomplete_data"]
+
+
 def test_a_queued_case_is_run_when_it_is_picked_up(client):
     case_id = queued_case(client)
     graph = graph_on([*INVESTIGATION, report()], FakeCard())

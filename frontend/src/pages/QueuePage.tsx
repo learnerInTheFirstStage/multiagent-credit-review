@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listCases } from "../api/cases";
 import { ApiError } from "../api/client";
+import { ReviewReasonChip } from "../components/ReviewReasonChip";
 import { StatusChip } from "../components/StatusChip";
 import type { CaseRow, CaseStatus } from "../types";
 
@@ -141,7 +142,7 @@ export default function QueuePage() {
                       onClick={() => navigate(`/cases/${row.case_id}`)}
                       className="w-full text-left px-4 py-3 hover:bg-slate-50 flex items-center justify-between gap-4 transition"
                     >
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <div className="font-mono text-sm text-slate-900">{row.case_id}</div>
                         <div className="text-sm text-slate-500">
                           Customer <span className="font-mono">{row.customer_id}</span>
@@ -149,8 +150,18 @@ export default function QueuePage() {
                             <span className="ml-2 text-amber-600">• {row.outage.message}</span>
                           )}
                         </div>
+                        {/* The `&&` guard is defensive: if a browser on the new
+                            frontend talks to an older orchestrator during a rolling
+                            deploy, signal_reasons may be missing from the response. */}
+                        {row.signal_reasons && row.signal_reasons.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {row.signal_reasons.map((reason) => (
+                              <ReviewReasonChip key={reason} reason={reason} />
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      <div className="text-xs text-slate-400 text-right">
+                      <div className="text-xs text-slate-400 text-right shrink-0">
                         <div>opened {formatWhen(row.created_at)}</div>
                         <div>updated {formatWhen(row.updated_at)}</div>
                       </div>

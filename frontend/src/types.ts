@@ -25,6 +25,12 @@ export interface Outage {
   message: string;
 }
 
+export type ReviewReason =
+  | "large_cut"
+  | "failed_repayment"
+  | "incomplete_data"
+  | "large_limit";
+
 export interface CaseRow {
   case_id: string;
   customer_id: string;
@@ -32,6 +38,8 @@ export interface CaseRow {
   created_at: string;
   updated_at: string;
   outage: Outage | null;
+  // Every distinct review_reason the case's signals named, in arrival order.
+  signal_reasons: ReviewReason[];
 }
 
 export interface CaseList {
