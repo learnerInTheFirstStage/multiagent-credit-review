@@ -40,8 +40,9 @@ You need git, Docker and Python 3.12. A model API key is needed only to run case
 ```bash
 git clone https://github.com/lqc412/multiagent-credit-review.git
 cd multiagent-credit-review
-git checkout KAN-36-poc-complete   # until the KAN-36 pull requests are merged; after that, stay on main
 ```
+
+Everything below runs on `main`.
 
 1. Run the tests: [Run the tests](#run-the-tests). No Docker, no key. This also creates the Python environment steps 3 and 4 use.
 2. Start the stack and check the health URLs: [Run it](#run-it).
@@ -60,10 +61,12 @@ docker compose up --build
 
 | URL | What |
 |---|---|
-| http://localhost:8080 | frontend placeholder |
+| http://localhost:8080 | the review app (React) |
 | http://localhost:8080/api/auth/health | Auth through the gateway |
 | http://localhost:8080/api/orchestrator/health | Orchestrator through the gateway |
 | http://localhost:8001/health to :8004 | auth, bank, card, orchestrator directly (local only) |
+
+To sign in on the review app, copy `.env.example` to `.env` before starting: it sets `DEV_LOGIN=1`, which turns on the dev login (a name and a role, no password). Keep it to your machine: leave `DEV_LOGIN` empty on any host others can reach. Without a model (Configuration) the queue stays empty until a signal arrives, and a signal's case waits as `queued`.
 
 To start again with empty databases: `docker compose down -v`. A volume seeded by an older version fails at start, so run it after pulling data or schema changes too.
 
