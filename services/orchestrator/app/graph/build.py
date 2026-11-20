@@ -124,10 +124,11 @@ def _person_decides(state: CaseState, step: str) -> dict:
     side effects. An answer that is not a decision pauses the case again. Raising
     instead would leave that answer stored as the reply to the pause for good.
 
-    A note and what the person decided on a hand-over are kept only when given:
-    a decision without them looks as it did before they existed. What the person
-    decided is kept only where it means something (1.9): the analyst approving a
-    report that hands the case over.
+    A note, what the person decided on a hand-over, and the role and time the API
+    stamps from the token and its clock (by_role, decided_at) are kept only when
+    given: a decision without them looks as it did before they existed. What the
+    person decided is kept only where it means something (1.9): the analyst
+    approving a report that hands the case over.
     """
     shown = {"case_id": state["case_id"], "step": step, "report": state["report"]}
     while True:
@@ -139,6 +140,9 @@ def _person_decides(state: CaseState, step: str) -> dict:
             and answer["by"]
         ):
             decision = {"step": step, "decision": answer["decision"], "by": answer["by"]}
+            for stamp in ("by_role", "decided_at"):
+                if isinstance(answer.get(stamp), str) and answer[stamp]:
+                    decision[stamp] = answer[stamp]
             note = answer.get("note")
             if isinstance(note, str) and (note := note.replace("\x00", "").strip()[:NOTE_MAX]):
                 decision["note"] = note

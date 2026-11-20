@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from contracts.logs import bind
@@ -32,7 +32,8 @@ REPORT_IS_CHECKED = ("needs_approval", "needs_manager", "done", "rejected", "fai
 
 
 class Decision(BaseModel):
-    # Who decides comes from the token. A "by" in the body is refused, not ignored.
+    # Who decides, in which role and when come from the token and the clock (_stamp). A "by" in the body is
+    # refused, not ignored.
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["approve", "reject"]
@@ -406,8 +407,8 @@ def decide(
             status.HTTP_403_FORBIDDEN, f"{user.sub} approved the analyst step. The manager step needs another person"
         )
     else:
-        # A note and what was decided travel only when given, so a decision without them looks as it always did.
-        resume = Command(resume={**decision.model_dump(exclude_none=True), "by": user.sub})
+        # A note and what was decided travel only when given; who, in which role and when, always.
+        resume = Command(resume={**decision.model_dump(exclude_none=True), **_stamp(user)})
 
     try:
         with bind(case_id=case_id):
@@ -430,13 +431,18 @@ def decide(
     return _view(session, case, graph)
 
 
+def _stamp(user: User) -> dict:
+    """Who decided, in which role and when, for the case's record. From the token and this clock, never the body."""
+    return {"by": user.sub, "by_role": user.role, "decided_at": datetime.now(UTC).isoformat(timespec="seconds")}
+
+
 def _close_unconfirmed(session: Session, case: Case, graph, user: User, note: str | None) -> CaseView:
     """Close a case whose approved action Card never confirmed, so it does not stay open for good.
 
     It ends as failed, not rejected: Card may have applied the action and lost its answer,
     so a person has to check. Nothing more is sent.
     """
-    closing = {"step": "retry", "decision": "reject", "by": user.sub}
+    closing = {"step": "retry", "decision": "reject", **_stamp(user)}
     # Cleaned as the graph cleans the note of any other decision.
     if note and (note := note.replace("\x00", "").strip()):
         closing["note"] = note
