@@ -174,6 +174,11 @@ def _built() -> list[Guideline]:
                     says="weekly inflows that stopped or shrank sharply",
                 ),
                 all_paid,
+                # Repayments that go on while income stops are paid from somewhere. Which account pays the card,
+                # set against what the linked accounts paid into it (xs_account_match), tells income moved out of
+                # view from income lost (c_006 against c_106). Changed or not, the record must be in before G-05
+                # can be cited, and while nothing else is permitted the gap pass asks Card for it (G2).
+                Need(kind="funding_account_change", says="which account pays the card"),
             ],
         ),
         Guideline(
