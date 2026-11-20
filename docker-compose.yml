@@ -105,6 +105,10 @@ services:
       # or analyst token with this endpoint. Set DEV_LOGIN=1 in your local .env to use
       # the demo login page. Never set it on a host that reaches the internet.
       DEV_LOGIN: ${DEV_LOGIN:-}
+      # KAN-74 (bonus): when set, the API publishes case_ids to RabbitMQ and the worker
+      # service (started by the `mq` profile below) runs them. Empty leaves the default
+      # in-process FastAPI BackgroundTasks path.
+      RABBITMQ_URL: ${RABBITMQ_URL:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -116,6 +120,64 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8004:8000"
+
+  # KAN-74 (bonus): RabbitMQ broker + a worker that consumes case_ids. Both sit behind
+  # the `mq` compose profile so `docker compose up` stays on the in-process path by
+  # default. Start the async stack with `docker compose --profile mq up -d`.
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    profiles: [mq]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-credit-review}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-local-rabbit}
+    ports:
+      # Management UI (http://localhost:15672) kept on 127.0.0.1 only.
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+      args:
+        WITH_EMBEDDINGS: ${WITH_EMBEDDINGS:-1}
+    profiles: [mq]
+    command: ["python", "-m", "app.mq.worker"]
+    # A real case takes 60–180 s inside the pika callback. Docker's default
+    # SIGTERM-to-SIGKILL gap is 10 s, which would kill a case mid-run; the
+    # broker would redeliver it after noticing the dead connection. 10 min
+    # is a comfortable upper bound for any one case.
+    stop_grace_period: 10m
+    environment:
+      DATABASE_URL: postgresql+psycopg://orchestrator:${ORCHESTRATOR_DB_PASSWORD:-local-orchestrator}@postgres:5432/orchestrator
+      JWT_SECRET: ${JWT_SECRET:-local-jwt-secret-for-development-only}
+      BANK_URL: http://bank:8000
+      CARD_URL: http://card:8000
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_STRUCTURED_OUTPUT: ${LLM_STRUCTURED_OUTPUT:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+      SPECIALISTS: ${SPECIALISTS:-}
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-fastembed:BAAI/bge-small-en-v1.5}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-credit-review}:${RABBITMQ_PASSWORD:-local-rabbit}@rabbitmq:5672/
+      # Pipe-validation mode: the worker sleeps instead of running the graph so no LLM is called.
+      MOCK_PROCESSING: ${MOCK_PROCESSING:-}
+      MOCK_SECONDS: ${MOCK_SECONDS:-150}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      bank:
+        condition: service_healthy
+      card:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   frontend:
     build:

@@ -13,6 +13,7 @@ from app import history, runner, runtime
 from app.api import cases, dev_login, events, signals
 from app.db import Base, SessionLocal, engine
 from app.db import models  # noqa: F401  registers the tables on Base
+from app.mq import publisher as mq_publisher
 from contracts import Health
 from contracts.logs import RequestLog, setup_logging
 
@@ -38,9 +39,16 @@ async def lifespan(app: FastAPI):
         if graph is not None:
             # A closed case must not read as "no earlier review" for want of its review.
             runner.keep_missing_reviews(graph)
-            # A restart must not leave a case queued, half investigated, or with a stale status.
             loop = asyncio.get_running_loop()
-            picked_up = [loop.run_in_executor(None, runner.run_case, graph, case_id) for case_id in runner.unfinished()]
+            # A restart must not leave a case queued, half investigated, or with a stale status.
+            # In MQ mode this is skipped on purpose: any case a worker already took is already in
+            # the queue (durable), and republishing it would double-run it. Transactional outbox
+            # is the proper fix for the "stored but not published" edge; out of POC scope.
+            if mq_publisher.enabled():
+                log.info("MQ mode: skipping startup pickup of unfinished cases; workers own them")
+            else:
+                picked_up = [loop.run_in_executor(None, runner.run_case, graph, case_id)
+                             for case_id in runner.unfinished()]
             # Cases waiting for Bank or Card run again when their retry is due, first those that came due while
             # the service was down.
             first = loop.run_in_executor(None, _retry_due, graph, stop)
@@ -49,6 +57,8 @@ async def lifespan(app: FastAPI):
         # Before the checkpointer closes. If the process is killed first, the next start picks them up again.
         stop.set()
         await asyncio.gather(*picked_up, *([retrying] if retrying else []), return_exceptions=True)
+        # Close the MQ publisher connection. no-op when fallback is in use.
+        mq_publisher.close()
 
 
 def _retry_due(graph, stop: asyncio.Event) -> None:
