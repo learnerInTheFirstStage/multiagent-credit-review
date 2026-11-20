@@ -25,10 +25,51 @@ const CONFIDENCE_STYLES: Record<string, string> = {
   low: "bg-rose-50 text-rose-700 ring-rose-200",
 };
 
-export function ReportCard({ report }: { report: Report }) {
+// When the agent tells us the cause cannot be determined AND it gives up on a
+// specific action, the page should not show a recommendation chip — the spec
+// in KAN-50 says "says so and shows no recommendation". A specific action like
+// `request_documents` is still a decision the agent made, so keep the chip for
+// those.
+const UNDETERMINED_CAUSES = new Set(["no_clear_cause", "insufficient_data"]);
+
+interface Props {
+  report: Report;
+  /** Called when the reviewer clicks on an evidence id. */
+  onEvidenceClick?: (id: string) => void;
+}
+
+function EvidenceIds({
+  ids,
+  onClick,
+}: {
+  ids: string[];
+  onClick?: (id: string) => void;
+}) {
+  return (
+    <span className="text-xs text-slate-500 font-mono">
+      cites:{" "}
+      {ids.map((id, i) => (
+        <span key={id}>
+          {i > 0 && ", "}
+          <button
+            type="button"
+            onClick={() => onClick?.(id)}
+            className="hover:text-brand-700 hover:underline"
+          >
+            {id}
+          </button>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+export function ReportCard({ report, onEvidenceClick }: Props) {
   const likelyCause = report.likely_cause as string | undefined;
   const confidence = report.confidence as string | undefined;
   const recommendation = report.recommendation as string | undefined;
+  const causeUndetermined = !!likelyCause && UNDETERMINED_CAUSES.has(likelyCause);
+  const hideRecommendation = causeUndetermined && recommendation === "needs_human";
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6">
@@ -55,13 +96,19 @@ export function ReportCard({ report }: { report: Report }) {
         <p className="text-slate-700 leading-relaxed mb-4">{report.summary}</p>
       )}
 
-      {recommendation && (
-        <div className="mb-4">
-          <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">Recommendation</div>
-          <div className="inline-flex items-center rounded-md bg-brand-50 text-brand-700 px-3 py-1 text-sm font-semibold ring-1 ring-brand-200">
-            {RECOMMENDATION_LABELS[recommendation] ?? recommendation}
-          </div>
+      {hideRecommendation ? (
+        <div className="mb-4 bg-slate-50 border border-slate-200 rounded-md px-3 py-2 text-sm text-slate-700">
+          The cause could not be determined from the available data. A person must decide.
         </div>
+      ) : (
+        recommendation && (
+          <div className="mb-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">Recommendation</div>
+            <div className="inline-flex items-center rounded-md bg-brand-50 text-brand-700 px-3 py-1 text-sm font-semibold ring-1 ring-brand-200">
+              {RECOMMENDATION_LABELS[recommendation] ?? recommendation}
+            </div>
+          </div>
+        )
       )}
 
       {Array.isArray(report.evidence) && report.evidence.length > 0 && (
@@ -71,8 +118,8 @@ export function ReportCard({ report }: { report: Report }) {
             {report.evidence.map((item, idx) => (
               <li key={idx} className="border-l-2 border-brand-500 pl-3">
                 <div className="text-slate-800">{item.claim}</div>
-                <div className="text-xs text-slate-500 mt-0.5 font-mono">
-                  cites: {item.evidence_ids.join(", ")}
+                <div className="mt-0.5">
+                  <EvidenceIds ids={item.evidence_ids} onClick={onEvidenceClick} />
                 </div>
               </li>
             ))}
@@ -90,8 +137,8 @@ export function ReportCard({ report }: { report: Report }) {
                   {(item.cause && CAUSE_LABELS[item.cause]) ?? item.cause}
                 </span>
                 <span className="text-slate-600"> — {item.reason}</span>
-                <div className="text-xs text-slate-500 mt-0.5 font-mono">
-                  cites: {item.evidence_ids.join(", ")}
+                <div className="mt-0.5">
+                  <EvidenceIds ids={item.evidence_ids} onClick={onEvidenceClick} />
                 </div>
               </li>
             ))}

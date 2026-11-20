@@ -96,6 +96,8 @@ export interface CasePathQuestion {
   topic: string;
   question?: string;
   outcome: string;
+  /** The record ids that came back, in the order the backend wrote them. */
+  returned?: string[];
   [key: string]: unknown;
 }
 

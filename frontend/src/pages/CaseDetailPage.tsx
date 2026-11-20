@@ -1,22 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { postDecision, readCase, readPath } from "../api/cases";
 import type { DecisionInput } from "../api/cases";
 import { StatusChip } from "../components/StatusChip";
 import { ReportCard } from "../components/ReportCard";
 import { DecisionForm } from "../components/DecisionForm";
+import { EngineLimitHeader } from "../components/EngineLimitHeader";
+import { InvestigationTimeline } from "../components/InvestigationTimeline";
+import { EvidenceDetailDrawer } from "../components/EvidenceDetailDrawer";
 import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import type { CasePath } from "../types";
 
 const ACTIVE_STATUSES = new Set(["queued", "investigating", "waiting_for_data"]);
+
+type PathRecord = CasePath["records"][number];
 
 export default function CaseDetailPage() {
   const { caseId = "" } = useParams<{ caseId: string }>();
   const { user } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const [showPath, setShowPath] = useState(false);
+  const [selectedEvidence, setSelectedEvidence] = useState<string | null>(null);
+  const [showRawPath, setShowRawPath] = useState(false);
   const [decisionError, setDecisionError] = useState<string | null>(null);
 
   const caseQuery = useQuery({
@@ -31,10 +38,16 @@ export default function CaseDetailPage() {
     },
   });
 
+  // Path is always fetched: it feeds the engine-limit header, the timeline,
+  // and the lookup for clickable evidence ids. Polls on the same cadence as
+  // the case while the agent is working, so a new record shows up quickly.
+  const caseStatus = caseQuery.data?.status;
   const pathQuery = useQuery({
     queryKey: ["case-path", caseId],
     queryFn: () => readPath(caseId),
-    enabled: showPath && !!caseId,
+    enabled: !!caseId,
+    refetchInterval:
+      caseStatus && ACTIVE_STATUSES.has(caseStatus) ? 3_000 : false,
   });
 
   const decisionMutation = useMutation({
@@ -50,6 +63,22 @@ export default function CaseDetailPage() {
   });
 
   const caseView = caseQuery.data;
+
+  const recordById = useMemo(() => {
+    const map: Record<string, PathRecord> = {};
+    const records = pathQuery.data?.records ?? [];
+    for (const record of records) map[record.id] = record;
+    return map;
+  }, [pathQuery.data]);
+
+  const limitRecord = recordById["sig_limit"]?.data as
+    | React.ComponentProps<typeof EngineLimitHeader>["limit"]
+    | undefined;
+
+  // Stable callback so the drawer's Esc listener is not re-registered on every
+  // 3 s polling render.
+  const closeDrawer = useCallback(() => setSelectedEvidence(null), []);
+
   const needsDecision =
     caseView &&
     ((caseView.status === "needs_approval" && (user?.role === "analyst" || user?.role === "manager")) ||
@@ -109,6 +138,8 @@ export default function CaseDetailPage() {
         </div>
       )}
 
+      <EngineLimitHeader limit={limitRecord} />
+
       {caseView.status === "queued" || caseView.status === "investigating" ? (
         <div className="bg-sky-50 border border-sky-200 rounded-xl px-6 py-10 text-center">
           <div className="animate-pulse text-sky-700 font-medium">
@@ -119,7 +150,10 @@ export default function CaseDetailPage() {
           </div>
         </div>
       ) : caseView.report ? (
-        <ReportCard report={caseView.report} />
+        <ReportCard
+          report={caseView.report}
+          onEvidenceClick={(id) => setSelectedEvidence(id)}
+        />
       ) : (
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 text-center text-slate-500">
           No report yet. {caseView.status === "waiting_for_data" && "Waiting for Bank or Card to respond."}
@@ -182,30 +216,47 @@ export default function CaseDetailPage() {
         </div>
       )}
 
-      <div className="mt-6">
-        <button
-          onClick={() => setShowPath((prev) => !prev)}
-          className="text-sm text-brand-600 hover:underline"
-        >
-          {showPath ? "Hide investigation path" : "Show investigation path"}
-        </button>
-        {showPath && pathQuery.isLoading && (
-          <div className="mt-3 text-sm text-slate-500">Loading investigation path…</div>
+      <section className="mt-8">
+        <h2 className="text-lg font-semibold text-slate-900 mb-3">
+          Investigation steps
+        </h2>
+        {pathQuery.isLoading && !pathQuery.data && (
+          <div className="text-sm text-slate-500">Loading…</div>
         )}
-        {showPath && pathQuery.isError && (
-          <div className="mt-3 text-sm text-red-700">
-            Could not load the path:{" "}
+        {pathQuery.isError && (
+          <div className="text-sm text-red-700">
+            Could not load the investigation path:{" "}
             {pathQuery.error instanceof ApiError
               ? pathQuery.error.message
               : String(pathQuery.error)}
           </div>
         )}
-        {showPath && pathQuery.data && (
+        {pathQuery.data && (
+          <InvestigationTimeline
+            questions={pathQuery.data.questions}
+            onEvidenceClick={(id) => setSelectedEvidence(id)}
+          />
+        )}
+        {pathQuery.data && (
+          <button
+            onClick={() => setShowRawPath((prev) => !prev)}
+            className="text-xs text-slate-500 hover:text-slate-700 mt-3"
+          >
+            {showRawPath ? "Hide raw JSON" : "Show raw JSON (debug)"}
+          </button>
+        )}
+        {showRawPath && pathQuery.data && (
           <pre className="mt-3 bg-slate-900 text-slate-100 text-xs rounded-lg p-4 overflow-x-auto">
             {JSON.stringify(pathQuery.data, null, 2)}
           </pre>
         )}
-      </div>
+      </section>
+
+      <EvidenceDetailDrawer
+        evidenceId={selectedEvidence}
+        record={selectedEvidence ? recordById[selectedEvidence] ?? null : null}
+        onClose={closeDrawer}
+      />
     </div>
   );
 }
