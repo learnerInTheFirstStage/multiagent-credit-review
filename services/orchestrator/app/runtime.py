@@ -86,17 +86,37 @@ def retry_check_seconds() -> float:
     """How often the service looks for cases whose retry after a Bank or Card outage is due (OUTAGE_CHECK_SECONDS,
     default 15). A value that is not a positive number of seconds is the default, with one warning: the loop must
     neither end nor spin. The retry delays themselves are policy.OUTAGE_RETRY_SECONDS."""
-    setting = os.environ.get("OUTAGE_CHECK_SECONDS")
+    return _seconds("OUTAGE_CHECK_SECONDS", RETRY_CHECK_DEFAULT)
+
+
+REPORT_CHECK_DEFAULT = 3600.0
+
+
+def report_check_seconds() -> float:
+    """How often the service looks whether last month's report is kept (REPORT_CHECK_SECONDS, default an hour).
+    As OUTAGE_CHECK_SECONDS, a value that is not a positive number of seconds is the default, with one warning."""
+    return _seconds("REPORT_CHECK_SECONDS", REPORT_CHECK_DEFAULT)
+
+
+def _seconds(name: str, default: float) -> float:
+    setting = os.environ.get(name)
     if not setting:
-        return RETRY_CHECK_DEFAULT
+        return default
     try:
         seconds = float(setting)
     except ValueError:
         seconds = 0.0
     if seconds > 0 and seconds != float("inf"):
         return seconds
-    log.warning("OUTAGE_CHECK_SECONDS %s is not a positive number of seconds. %s is used.", setting, RETRY_CHECK_DEFAULT)
-    return RETRY_CHECK_DEFAULT
+    log.warning("%s %s is not a positive number of seconds. %s is used.", name, setting, default)
+    return default
+
+
+def reports_storage() -> tuple[str | None, str | None]:
+    """Where monthly reports are kept (app/reports.py): the S3 bucket REPORTS_BUCKET, else the folder REPORTS_DIR.
+    Neither set: no report is made, on a schedule or asked for. S3 credentials and region are boto3's own chain
+    (the instance role on AWS, AWS_PROFILE on a laptop), never a key in .env."""
+    return os.environ.get("REPORTS_BUCKET") or None, os.environ.get("REPORTS_DIR") or None
 
 
 def history_seed_files() -> list[str]:

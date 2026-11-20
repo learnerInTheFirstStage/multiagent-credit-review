@@ -27,6 +27,9 @@ os.environ["HISTORY_SEED_FILE"] = f"{_db_dir}/no-seeds.yaml"
 # The service looks for due retries at start and then every so often. In tests only the look at start happens on its
 # own: a test calls runner.retry_due itself, with the time it means.
 os.environ["OUTAGE_CHECK_SECONDS"] = "3600"
+# No monthly report is kept unless a test says where: unset, the service makes none (app/reports.py).
+os.environ.pop("REPORTS_BUCKET", None)
+os.environ.pop("REPORTS_DIR", None)
 
 import jwt  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

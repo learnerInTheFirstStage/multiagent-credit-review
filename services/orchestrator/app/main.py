@@ -9,8 +9,9 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 from sqlalchemy import text
 
-from app import history, runner, runtime
+from app import history, reports, runner, runtime
 from app.api import cases, dev_login, events, signals
+from app.api import reports as reports_api
 from app.db import Base, SessionLocal, engine
 from app.db import models  # noqa: F401  registers the tables on Base
 from contracts import Health
@@ -45,10 +46,15 @@ async def lifespan(app: FastAPI):
             # the service was down.
             first = loop.run_in_executor(None, _retry_due, graph, stop)
             retrying = asyncio.create_task(_retry_waiting(graph, stop, first, runtime.retry_check_seconds()))
+        # Last month's report, once it is due. It needs no model, so it runs whether or not one is set.
+        reporting = None
+        if any(runtime.reports_storage()):
+            reporting = asyncio.create_task(_report_monthly(stop, runtime.report_check_seconds()))
         yield
         # Before the checkpointer closes. If the process is killed first, the next start picks them up again.
         stop.set()
-        await asyncio.gather(*picked_up, *([retrying] if retrying else []), return_exceptions=True)
+        waits = [task for task in (retrying, reporting) if task]
+        await asyncio.gather(*picked_up, *waits, return_exceptions=True)
 
 
 def _retry_due(graph, stop: asyncio.Event) -> None:
@@ -69,6 +75,24 @@ async def _retry_waiting(graph, stop: asyncio.Event, first, every: float) -> Non
             await loop.run_in_executor(None, _retry_due, graph, stop)
 
 
+def _run_due() -> None:
+    try:
+        reports.run_due()
+    except Exception:  # S3 or the database that is down for a moment must not end the loop
+        log.exception("Last month's report could not be made. Trying again later.")
+
+
+async def _report_monthly(stop: asyncio.Event, every: float) -> None:
+    """Run reports.run_due at start and then every `every` seconds until the service stops."""
+    loop = asyncio.get_running_loop()
+    while not stop.is_set():
+        await loop.run_in_executor(None, _run_due)
+        try:
+            await asyncio.wait_for(stop.wait(), every)
+        except TimeoutError:
+            pass
+
+
 app = FastAPI(title="Orchestrator Service", lifespan=lifespan)
 app.add_middleware(RequestLog)
 app.include_router(signals.router)
@@ -77,6 +101,7 @@ app.include_router(signals.router)
 app.include_router(events.router)
 app.include_router(cases.router)
 app.include_router(dev_login.router)
+app.include_router(reports_api.router)
 
 # Every error has one shape: {"error": ..., "message": ...}. API doc section 8.
 ERROR_NAMES = {
