@@ -112,7 +112,13 @@ services:
       - "127.0.0.1:8004:8000"
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      # The same .env values the Orchestrator and Card check tokens with. Empty: the dev login page.
+      args:
+        VITE_AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+        VITE_AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
+        VITE_AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
 
   gateway:
     build: ./gateway

@@ -112,6 +112,8 @@ export interface User {
   sub: string;
   role: "analyst" | "manager" | "admin" | "service";
   customers: string[];
+  // Shown instead of sub when set: an Auth0 sub reads "auth0|6aff…", so the person's email.
+  name?: string;
 }
 
 export interface AuthState {

@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { devLogin } from "../api/cases";
 import { useAuth } from "../auth/AuthContext";
+import Auth0SignIn from "../auth/Auth0SignIn";
+import { auth0Settings } from "../auth/auth0";
 
 const DEFAULT_CUSTOMERS = [
   "c_001",
@@ -22,7 +24,12 @@ const DEFAULT_CUSTOMERS = [
 
 type RoleChoice = "analyst" | "manager";
 
+// Auth0 when the build has its settings (src/auth/auth0.ts); the dev login otherwise.
 export default function LoginPage() {
+  return auth0Settings ? <Auth0SignIn /> : <DevLoginPage />;
+}
+
+function DevLoginPage() {
   const { signIn } = useAuth();
   const navigate = useNavigate();
   const [sub, setSub] = useState("u_analyst");

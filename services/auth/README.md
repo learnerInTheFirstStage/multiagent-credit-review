@@ -17,21 +17,21 @@ Set up on 2026-11-19 in a development tenant the team shares with another projec
 |---|---|
 | `AUTH0_DOMAIN` | `dev-pd2uh1dimju6bx2a.us.auth0.com` |
 | `AUTH0_AUDIENCE` | `https://api.credit-review.demo` (API "Credit Review API") |
-| Dashboard SPA client id | `Nwe76UaM6WetJUAsrc3xfEt8yiMzc6tj` (callbacks, logout and web origins: `http://localhost:8080`, `http://localhost:5173`) |
+| `AUTH0_CLIENT_ID` | `Nwe76UaM6WetJUAsrc3xfEt8yiMzc6tj` (SPA "Credit Review Dashboard"; callbacks `http://localhost:8080/login` and `:5173/login`; logout and web origins `http://localhost:8080`, `:5173`) |
 | Action | `credit-review-claims` on the post-login trigger |
 | Demo users | `analyst@credit-review.demo` (analyst) and `manager@credit-review.demo` (manager), customers `c_001` to `c_012`; ask the team lead for the passwords |
 
 ## Setting up the Auth0 tenant
 
 1. Create an API with the identifier `https://api.credit-review.demo` (the audience; another one must also go into `AUDIENCE` in `auth0/post-login.js`). Signing algorithm: RS256. The Action touches only logins that ask for this API, so other apps on the same tenant keep working as they did.
-2. Create a Single Page Application for the dashboard. Allowed callback, logout and web origin URLs: the dashboard's address, for example `http://localhost:8080`.
+2. Create a Single Page Application for the dashboard, and let it request tokens for the API (its API access tab). Allowed callback URLs: the dashboard's `/login`, for example `http://localhost:8080/login`. Logout and web origin URLs: the dashboard's address, `http://localhost:8080`.
 3. Create the users. Give each one role:
    - with Auth0 Roles, create `analyst`, `manager` and `admin` and assign one;
    - otherwise put the role in the user's app_metadata: `{"role": "manager"}`.
    Put their customers in app_metadata: `{"customers": ["c_002", "c_010"]}`.
 4. Create a post-login Action from `auth0/post-login.js`, deploy it and add it to the post-login trigger. A login with no role, or more than one, is refused.
-5. In `.env`, set `AUTH0_DOMAIN` to the tenant's domain (for example `your-tenant.us.auth0.com`) and `AUTH0_AUDIENCE` to the API identifier. Restart the Orchestrator and Card.
+5. In `.env`, set `AUTH0_DOMAIN` to the tenant's domain (for example `your-tenant.us.auth0.com`), `AUTH0_AUDIENCE` to the API identifier and `AUTH0_CLIENT_ID` to the SPA's client id, and leave `DEV_LOGIN` empty. Then `docker compose up -d --build`: the frontend is built with them and shows "Sign in with Auth0", and the Orchestrator and Card check its tokens.
 
-Do step 5 only once the dashboard signs people in: from then on `app.dev_token` makes service tokens only, and nothing else in the repo gets a person a token. The dashboard must ask Auth0 for a token with `audience` set to the API identifier. Without it, Auth0 returns an access token the services cannot check.
+From then on `app.dev_token` and the dev login make service tokens only. The dashboard asks Auth0 for a token with `audience` set to the API identifier (`frontend/src/auth/WithAuth0.tsx`); without it, Auth0 returns an access token the services cannot check. Public sign-up on the tenant's database connection should be off: a signed-up account gets no token for this API (the Action refuses an account with no role), but it is better not to have one.
 
 Database: `auth` (unused for now). Local port: 8001. Behind the gateway: `/api/auth/...`.
