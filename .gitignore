@@ -10,6 +10,11 @@ build/
 node_modules/
 dist/
 
+# Local docker-compose overrides: port moves for stale Docker Desktop
+# bindings, mocks for quick iteration, etc. Not for CI or other machines.
+docker-compose.override.yml
+docker-compose.override.yml.*
+
 .DS_Store
 .idea/
 .vscode/

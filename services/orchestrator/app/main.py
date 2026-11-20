@@ -10,7 +10,7 @@ from starlette.exceptions import HTTPException
 from sqlalchemy import text
 
 from app import history, runner, runtime
-from app.api import cases, signals
+from app.api import cases, dev_login, signals
 from app.db import Base, SessionLocal, engine
 from app.db import models  # noqa: F401  registers the tables on Base
 from contracts import Health
@@ -72,6 +72,7 @@ async def _retry_waiting(graph, stop: asyncio.Event, first, every: float) -> Non
 app = FastAPI(title="Orchestrator Service", lifespan=lifespan)
 app.include_router(signals.router)
 app.include_router(cases.router)
+app.include_router(dev_login.router)
 
 # Every error has one shape: {"error": ..., "message": ...}. API doc section 8.
 ERROR_NAMES = {

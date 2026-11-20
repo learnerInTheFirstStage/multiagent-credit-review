@@ -94,6 +94,11 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
       SPECIALISTS: ${SPECIALISTS:-}
+      # Enables POST /dev_login for the demo frontend, until the real Auth Service lands.
+      # Default is OFF: anyone who can reach the gateway could otherwise mint a service
+      # or analyst token with this endpoint. Set DEV_LOGIN=1 in your local .env to use
+      # the demo login page. Never set it on a host that reaches the internet.
+      DEV_LOGIN: ${DEV_LOGIN:-}
     depends_on:
       postgres:
         condition: service_healthy
