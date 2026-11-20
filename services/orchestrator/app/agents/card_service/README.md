@@ -61,4 +61,4 @@ Settings: `CARD_URL` (compose sets `http://card:8000`), `JWT_SECRET`, and the se
 
 Tests: `services/orchestrator/tests/test_card_service_agent.py` (what an answer holds), `test_card_service_fixes.py` (one regression test per review fix) and `test_card_service_graph.py` (the steps each kind of run takes, and the graph inside a checkpointed caller), against Card responses recorded from the seeded stack (`tests/fixtures/card_tools.json`) and a scripted model. To record them again after a Card change, run the stack and call each tool in that file's keys with a token from `docker compose exec card python -m app.dev_token --sub fixture --customers <id>`.
 
-Not done yet: the swap in `app/runtime.py` (KAN-36), and a run on a real model.
+The swap in `app/runtime.py` is done (KAN-36): the graph asks this agent unless `SPECIALISTS=stand_in`. Its runs on a real model are written up in `eval/card_service/judge/README.md`.

@@ -2,7 +2,7 @@
 
 The one piece of code the services share: the request and response models for calls between them, and for calls from the graph to a specialist agent.
 
-Today it holds `Health`, the review signal (`signal.py`, API doc section 3) and the specialist request and response (`investigate.py`, API doc section 2). Both are drafts until agreed in KAN-13 and KAN-14. Still to come: the analysis tool requests and responses, the report, the cause and recommendation lists. The report and the two lists (`LikelyCause`, `Recommendation`) exist as drafts in `services/orchestrator/app/graph/report.py` and move here once agreed.
+Today it holds `Health`, the review signal (`signal.py`, API doc section 3) and the specialist request and response (`investigate.py`, API doc section 2). The report and the cause and recommendation lists (`LikelyCause`, `Recommendation`) are defined in `services/orchestrator/app/graph/report.py`, the only service that imports them; the frontend keeps its own copy of the report's fields in `frontend/src/types.ts`. Bank and Card each define their analysis tools' responses. Either moves here when a second service needs to import it.
 
 Put each contract in its own module (for example `investigate.py`) and re-export it from `__init__.py`. Each service installs this package in its Dockerfile and imports from it:
 
