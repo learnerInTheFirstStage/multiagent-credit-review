@@ -143,7 +143,8 @@ def _run_tool(tool: Any, name: str, args: Any, config: RunnableConfig) -> Any:
     try:
         return tool.invoke(args, config=config)
     except Exception as error:  # noqa: BLE001 - arguments the schema refused, or anything else
-        log.warning("cash_flow tool %s raised: %s", name, error)
+        # Its kind only: the message quotes the model's arguments. The model gets it, and Langfuse with it.
+        log.warning("cash_flow tool %s raised %s", name, type(error).__name__)
         return {"error": "invalid_arguments", "message": str(error)[:300]}
 
 
@@ -469,7 +470,8 @@ def _answer(request: InvestigateRequest, model: BaseChatModel | None, http: http
             )
             response = InvestigateResponse.model_validate(final_state["response"])
         except Exception as error:  # noqa: BLE001 - answer from what was fetched before it failed
-            log.warning("cash_flow graph failed: %s", error)
+            # Its kind only: a ValidationError of the response quotes the model's claims.
+            log.warning("cash_flow graph failed: %s", type(error).__name__)
             # What Bank said about the topic's own calls; a call the model chose may be about another window.
             calls, _ = preflight_calls(request.model_dump(mode="json"))
             said = [line for name, args in calls for line in bank.said.get(bank_tools.call_key(name, args), [])]

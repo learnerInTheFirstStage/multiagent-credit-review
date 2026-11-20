@@ -12,6 +12,18 @@ from contracts import Health
 
 A change here affects every service, so all three owners review it.
 
+## Logs
+
+`contracts.logs` is the one module here that is not a model: the shape of every service's log line. Each service calls `setup_logging("<service>")` when its app module loads and adds `RequestLog` to its app. Every line is one JSON object on stdout. A request's lines carry the gateway's `X-Request-ID` as `request_id`, and the gateway returns the same id to the browser in the `X-Request-ID` response header. A case run's lines carry `case_id` (`bind(case_id=...)`). To follow one request or one case through the Orchestrator:
+
+```bash
+docker compose logs --no-log-prefix orchestrator | grep <request id or case id>
+```
+
+The Orchestrator does not pass the id on to Bank and Card yet, so their lines have an id of their own.
+
+A line holds ids, status codes and counts, never customer names, account numbers, tokens, or text that a model or a customer wrote: Langfuse keeps those.
+
 ## The specialist request and response
 
 Three optional fields of `InvestigateRequest` say what is asked. Left out, a specialist returns whatever it holds, as before they existed.
