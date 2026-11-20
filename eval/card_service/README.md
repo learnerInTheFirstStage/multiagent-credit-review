@@ -47,7 +47,7 @@ Today: 19 of 19 pass with no model, replayed. The first 18 also passed on the li
 
 **With a model**, the model writes the findings and the guardrails drop the ones that break the rules. Code then adds its own finding for each hard fact no accepted finding cites: a failed or late repayment, and a change of the account that pays the card. A model that leaves those out still passes on them; what it writes about everything else is its own.
 
-**Not yet run on a model**: no API key was at hand. That run is the owner's to start, and it is the one that tests the model.
+**Run on a model** on 2026-11-18 (claude-sonnet-5-5): the code grader passed 15 of 19, then 19 of 19 after the units fix. Both runs, and the judge's reading of them, are in `judge/README.md`.
 
 ## What the cases cover
 
