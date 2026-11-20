@@ -101,6 +101,8 @@ done
 
 Run them in a shell without the stack's variables (`LLM_*`, `LANGFUSE_*`, `SHARED_CUSTOMERS_*`): the tests set their own. Card's Postgres-only tests run when `CARD_PG_URL` points at a Postgres database, and are skipped otherwise.
 
+Every pull request, and every push to main, runs these three suites and the frontend build on GitHub Actions (`.github/workflows/tests.yml`). GitHub does not block a merge on a failed run on this repository's plan, so check that the run is green before merging.
+
 ### Run the evaluation
 
 `eval/run.py` sends every golden-set customer through a fresh stack and grades the answers: recommendation, cause, hand-over, citations, precision and recall of cuts, cost and time. It costs about $0.45 a case and run. To try a few cases once:
