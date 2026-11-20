@@ -6,6 +6,7 @@ switch that makes a side answer as its real agent does when every call to its se
 """
 
 import logging
+import time
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 
@@ -411,7 +412,12 @@ def test_a_restart_leaves_a_waiting_case_to_its_time_and_then_retries_it(monkeyp
         )
         session.commit()
     with TestClient(app):
-        pass
+        # The retry pass runs on another thread and starts no case once the service is stopping, so stay up
+        # until it has taken this one. The stop then waits for that run to end.
+        deadline = time.monotonic() + 10
+        while status_in_table(case_id) == "waiting_for_data":
+            assert time.monotonic() < deadline, "the start did not retry the case"
+            time.sleep(0.01)
 
     assert status_in_table(case_id) == "needs_approval"
     assert down.asked == [*asked, ("cash_flow", "income")]
