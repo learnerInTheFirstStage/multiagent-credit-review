@@ -17,7 +17,7 @@ function TopBar() {
         {user && (
           <div className="flex items-center gap-3 text-sm">
             <div className="text-right">
-              <div className="text-slate-900">{user.sub}</div>
+              <div className="text-slate-900">{user.name ?? user.sub}</div>
               <div className="text-xs text-slate-500">{user.role}</div>
             </div>
             <button

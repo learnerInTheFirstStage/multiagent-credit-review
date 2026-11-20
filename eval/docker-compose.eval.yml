@@ -18,6 +18,9 @@ services:
       INVESTIGATION_FLOW: ${INVESTIGATION_FLOW:-}
       # Empty is the real specialists, which call Bank and Card; stand_in answers from the data files.
       SPECIALISTS: ${SPECIALISTS:-}
+      # The runner signs its analyst's token with JWT_SECRET (app.dev_token), so no Auth0 here, whatever .env says.
+      AUTH0_DOMAIN: ""
+      AUTH0_AUDIENCE: ""
     volumes:
       - ./eval/extra_customers.yaml:/eval/extra_customers.yaml:ro
       - ./eval/history.yaml:/eval/history.yaml:ro
@@ -31,5 +34,7 @@ services:
   card:
     environment:
       SHARED_CUSTOMERS_YAML: /app/data/shared_customers.yaml:/eval/extra_customers.yaml
+      AUTH0_DOMAIN: ""
+      AUTH0_AUDIENCE: ""
     volumes:
       - ./eval/extra_customers.yaml:/eval/extra_customers.yaml:ro

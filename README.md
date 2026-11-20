@@ -10,8 +10,8 @@ All customers and data are simulated. This project is not affiliated with Ramp.
 - **Bank**: seeds every customer in `data/shared_customers.yaml` and `eval/extra_customers.yaml` as a complete bank feed (every movement of the week, 13 weeks of history, last year's same weeks) and serves the Cash Flow agent's read-only tools. See `services/bank/README.md`.
 - **Card**: seeds the same customers with about 14 months of card history. `GET /snapshots` gives each customer's limit, balance and last three repayments. Its read-only tools serve the Card agent, and `POST /customers/{id}/actions` carries out an approved `reduce_limit` or `pause_card` once per approval.
 - **Evaluation**: a golden set of 27 test customers with expected answers, graded by code (`eval/`). On the real model on 2026-11-17, 14 of them ran once each: the recommendation was right on 13 and the cause on 11. On 2026-11-18 c_010 ran from signal to Card's action following this README: `pause_card` under G-08b, approved by the analyst and the manager, card paused. On 2026-11-18 the full set ran once on Claude Sonnet 5.5: the recommendation was right on 24 of 27 and the cause on 23, with no wrong cut, for $11.51.
-- **Frontend**: the React review app: a login page, the case queue, and a case page where the analyst, and the manager where needed, approves or rejects. Until Auth issues tokens, the login page gets one from the Orchestrator's `POST /dev_login`, which answers only when `DEV_LOGIN` is on. See `frontend/README.md`.
-- **Auth**: a skeleton that answers `/health`. Tokens come from `python -m app.dev_token` in the Orchestrator container.
+- **Frontend**: the React review app: a login page, the case queue, and a case page where the analyst, and the manager where needed, approves or rejects. People sign in through Auth0 when it is configured; otherwise the login page gets a token from the Orchestrator's `POST /dev_login`, which answers only when `DEV_LOGIN` is on. See `frontend/README.md`.
+- **Auth**: with `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` and `AUTH0_CLIENT_ID` set, the review app signs people in through Auth0 and the Orchestrator and Card take people's tokens from Auth0 only; services keep signing their own with `JWT_SECRET` (`services/auth/README.md`). Left empty, the review app's dev login (`DEV_LOGIN=1`) and `python -m app.dev_token` make people's tokens.
 
 ## Architecture
 
@@ -127,6 +127,7 @@ Compose falls back to local defaults for the passwords and the signing secret, s
 | `POSTGRES_PASSWORD` | postgres | superuser password |
 | `AUTH_DB_PASSWORD`, `BANK_DB_PASSWORD`, `CARD_DB_PASSWORD`, `ORCHESTRATOR_DB_PASSWORD` | postgres and the matching service | letters, digits and hyphens only, because they go into a connection URL |
 | `JWT_SECRET` | the Orchestrator, Bank and Card | signs and checks tokens. One shared secret in the POC, 32 characters or more. The compose fallback is public, so anyone can sign tokens on a stack that runs without `.env`: set a real one on any shared or deployed stack |
+| `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `AUTH0_CLIENT_ID` | the Orchestrator and Card (domain, audience); the frontend build (all three) | the Auth0 tenant's domain, the API identifier and the review app's client id. All set: people sign in through Auth0 and `JWT_SECRET` signs services' tokens only; leave `DEV_LOGIN` empty then. Empty by default (`services/auth/README.md`) |
 | `LLM_MODEL`, `LLM_API_KEY`, `LLM_STRUCTURED_OUTPUT` | Orchestrator | the model cases run on, as `provider:model`, for example `anthropic:claude-sonnet-5-5` or `openai:<model>` (both packages are installed; only Anthropic has been run). Empty by default: signals are stored and their cases wait as `queued`. `LLM_STRUCTURED_OUTPUT=json_schema` is recommended with Anthropic |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Orchestrator | LangFuse tracing. Empty by default: cases run without tracing. Keys go in your own `.env` only. Set the base URL your LangFuse project shows, or keys from another region are refused |
 | `SPECIALISTS` | Orchestrator | empty: the real Cash Flow and Card agents, which call Bank and Card. `stand_in`: the stand-ins, which answer from the data files with no service and no model |
@@ -153,7 +154,7 @@ Reserved for later, so every service uses the same name: `AS_OF_DATE`.
 | `services/orchestrator` | Orchestrator Service: the graph, cases and approvals | Vincent |
 | `services/orchestrator/app/agents/cash_flow` | Cash Flow Agent | Allen |
 | `services/orchestrator/app/agents/card_service` | Credit Behavior Agent (Card Service agent) | James |
-| `services/auth` | login, JWT, roles | to be assigned |
+| `services/auth` | Auth0 sign-in: the post-login Action and setup | Vincent |
 | `gateway` | Nginx API gateway | to be assigned |
 | `frontend` | review app (React) | to be assigned |
 | `packages/contracts` | models shared by the services | all three |

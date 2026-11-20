@@ -20,7 +20,10 @@ docker compose up -d
 open http://localhost:8080/
 ```
 
-The login page uses a dev-only `POST /dev_login` on the Orchestrator (enabled by `DEV_LOGIN=1`, which `docker-compose.yml` sets by default for local). The real Auth Service will replace it.
+The login page depends on how the bundle was built:
+
+- **Auth0** when `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` and `AUTH0_CLIENT_ID` are in `.env` (compose passes them to the build as `VITE_AUTH0_*`; for `npm run dev`, export the three `VITE_AUTH0_*` yourself). "Sign in with Auth0" asks for the account every time, so the analyst and the manager can take turns in one browser. The access token goes into the same session as below, so the rest of the app does not change. Our tenant's values and demo users: `services/auth/README.md`. Leave `DEV_LOGIN` empty then: the services refuse dev-login person tokens once Auth0 is on.
+- **Dev login** otherwise: `POST /dev_login` on the Orchestrator, enabled by `DEV_LOGIN=1` in your local `.env`.
 
 ## Scripts
 
@@ -33,7 +36,8 @@ The login page uses a dev-only `POST /dev_login` on the Orchestrator (enabled by
 - `src/api/client.ts` — fetch wrapper, token storage, typed `ApiError`
 - `src/api/cases.ts` — all backend calls the UI makes
 - `src/auth/AuthContext.tsx` — current user + token across the app
-- `src/pages/LoginPage.tsx` — dev login, picks a role and a username
+- `src/auth/auth0.ts`, `Auth0SignIn.tsx`, `WithAuth0.tsx` — the Auth0 sign-in, used only when the build has its settings
+- `src/pages/LoginPage.tsx` — Auth0 sign-in, or the dev login that picks a role and a username
 - `src/pages/QueuePage.tsx` — `GET /cases` grouped by status, polled every 5s
 - `src/pages/CaseDetailPage.tsx` — `GET /cases/:id`, polled every 3s while the agent is working, plus the decision form and the investigation path
 - `src/components/ReportCard.tsx` — likely cause, confidence, summary, evidence with citations, ruled-out causes, next action, guideline ids

@@ -6,6 +6,11 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+# Auth0 sign-in, read by Vite at build time (src/auth/auth0.ts). Empty: the dev login page.
+ARG VITE_AUTH0_DOMAIN=""
+ARG VITE_AUTH0_CLIENT_ID=""
+ARG VITE_AUTH0_AUDIENCE=""
+ENV VITE_AUTH0_DOMAIN=$VITE_AUTH0_DOMAIN VITE_AUTH0_CLIENT_ID=$VITE_AUTH0_CLIENT_ID VITE_AUTH0_AUDIENCE=$VITE_AUTH0_AUDIENCE
 RUN npm run build
 
 # Serve stage: copy dist/ into nginx.

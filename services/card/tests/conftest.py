@@ -10,6 +10,9 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_db_dir}/test.db"
 # The lifespan refuses to start without a secret; tests sign their own tokens with this one.
 os.environ["JWT_SECRET"] = "test-jwt-secret-not-used-anywhere-real"
 os.environ.pop("AS_OF_DATE", None)
+# People's tokens are HS256 here. test_auth0 sets these itself.
+os.environ.pop("AUTH0_DOMAIN", None)
+os.environ.pop("AUTH0_AUDIENCE", None)
 
 import time  # noqa: E402
 
