@@ -10,7 +10,7 @@ from starlette.exceptions import HTTPException
 from sqlalchemy import text
 
 from app import history, runner, runtime
-from app.api import cases, dev_login, signals
+from app.api import cases, dev_login, events, signals
 from app.db import Base, SessionLocal, engine
 from app.db import models  # noqa: F401  registers the tables on Base
 from contracts import Health
@@ -72,6 +72,9 @@ async def _retry_waiting(graph, stop: asyncio.Event, first, every: float) -> Non
 app = FastAPI(title="Orchestrator Service", lifespan=lifespan)
 app.add_middleware(RequestLog)
 app.include_router(signals.router)
+# Events must come before cases: `/cases/events` would otherwise match the
+# `/cases/{case_id}` pattern with case_id="events" and 401 on the bearer check.
+app.include_router(events.router)
 app.include_router(cases.router)
 app.include_router(dev_login.router)
 

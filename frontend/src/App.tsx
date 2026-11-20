@@ -1,10 +1,12 @@
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { useCaseEvents } from "./hooks/useCaseEvents";
+import { LiveStateChip } from "./components/LiveStateChip";
 import LoginPage from "./pages/LoginPage";
 import QueuePage from "./pages/QueuePage";
 import CaseDetailPage from "./pages/CaseDetailPage";
 
-function TopBar() {
+function TopBar({ liveState }: { liveState: ReturnType<typeof useCaseEvents> }) {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   return (
@@ -16,6 +18,7 @@ function TopBar() {
         </button>
         {user && (
           <div className="flex items-center gap-3 text-sm">
+            <LiveStateChip state={liveState} />
             <div className="text-right">
               <div className="text-slate-900">{user.name ?? user.sub}</div>
               <div className="text-xs text-slate-500">{user.role}</div>
@@ -36,12 +39,16 @@ function TopBar() {
 function AuthedLayout() {
   const { token } = useAuth();
   const location = useLocation();
+  // Mount the SSE subscription at the authed layout, so it lifecycles with the
+  // token: logging in opens the stream, signing out closes it, and the chip in
+  // the top bar reflects the current state.
+  const liveState = useCaseEvents(token);
   if (!token) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
   return (
     <div>
-      <TopBar />
+      <TopBar liveState={liveState} />
       <Outlet />
     </div>
   );
