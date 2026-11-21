@@ -15,6 +15,24 @@ import type { CasePath } from "../types";
 
 const ACTIVE_STATUSES = new Set(["queued", "investigating", "waiting_for_data"]);
 
+// The orchestrator writes `case.status` in the DB and the LangGraph state's own
+// `status` (which gates the report in `_view()`) in two separate steps. For a
+// brief window a GET /cases/{id} can return a settled status with the report
+// still null. Only `needs_approval` and `needs_manager` can hit this race: both
+// transitions happen right after the agent commits the report. `done` and
+// `rejected` only come from a decision after a report exists, so the race is
+// already resolved by then. `failed` can legitimately have no report (the
+// agent crashed, or a specialist failed with no fallback) and seeded reviews
+// read as `done` with `report: null` by design, so excluding those statuses
+// avoids infinite polling on legitimate-no-report cases. Self-heals in one or
+// two ticks.
+const RACE_STATUSES = new Set(["needs_approval", "needs_manager"]);
+
+/** True while status + null-report hints at the DB/LangGraph commit race. */
+function isFinalising(data: { status: string; report: unknown | null } | undefined) {
+  return !!data && RACE_STATUSES.has(data.status) && !data.report;
+}
+
 type PathRecord = CasePath["records"][number];
 
 export default function CaseDetailPage() {
@@ -31,23 +49,28 @@ export default function CaseDetailPage() {
     queryFn: () => readCase(caseId),
     enabled: !!caseId,
     refetchInterval: (query) => {
-      const status = query.state.data?.status;
+      const data = query.state.data;
+      if (!data) return 3_000;
       // Poll while the case is in motion, stop once a person needs to act or it's closed.
-      if (status && ACTIVE_STATUSES.has(status)) return 3_000;
+      if (ACTIVE_STATUSES.has(data.status)) return 3_000;
+      // Keep polling across the finalise race (settled status but report still null).
+      if (isFinalising(data)) return 3_000;
       return false;
     },
   });
 
   // Path is always fetched: it feeds the engine-limit header, the timeline,
   // and the lookup for clickable evidence ids. Polls on the same cadence as
-  // the case while the agent is working, so a new record shows up quickly.
-  const caseStatus = caseQuery.data?.status;
+  // the case while the agent is working, or while we're inside the finalise
+  // race so the timeline keeps growing in step with the report.
+  const caseData = caseQuery.data;
+  const finalising = isFinalising(caseData);
   const pathQuery = useQuery({
     queryKey: ["case-path", caseId],
     queryFn: () => readPath(caseId),
     enabled: !!caseId,
     refetchInterval:
-      caseStatus && ACTIVE_STATUSES.has(caseStatus) ? 3_000 : false,
+      caseData && (ACTIVE_STATUSES.has(caseData.status) || finalising) ? 3_000 : false,
   });
 
   const decisionMutation = useMutation({
@@ -81,6 +104,7 @@ export default function CaseDetailPage() {
 
   const needsDecision =
     caseView &&
+    !finalising &&
     ((caseView.status === "needs_approval" && (user?.role === "analyst" || user?.role === "manager")) ||
       (caseView.status === "needs_manager" && user?.role === "manager"));
 
@@ -147,6 +171,15 @@ export default function CaseDetailPage() {
           </div>
           <div className="text-xs text-sky-600 mt-2">
             Updates arrive every 3 seconds. A typical case takes 60 to 120 seconds.
+          </div>
+        </div>
+      ) : finalising ? (
+        <div className="bg-sky-50 border border-sky-200 rounded-xl px-6 py-10 text-center">
+          <div className="animate-pulse text-sky-700 font-medium">
+            Finalising the report…
+          </div>
+          <div className="text-xs text-sky-600 mt-2">
+            The agent finished and the report is being committed. This usually takes a second or two.
           </div>
         </div>
       ) : caseView.report ? (
