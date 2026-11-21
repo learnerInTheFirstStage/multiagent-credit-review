@@ -1,0 +1,11 @@
+# One-node kind cluster for the local overlay. The gateway's NodePort reaches the laptop on 127.0.0.1:8088, a port
+# no compose stack of this repo uses.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: credit-review
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8088
+        listenAddress: 127.0.0.1

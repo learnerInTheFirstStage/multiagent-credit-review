@@ -113,9 +113,10 @@ def _seconds(name: str, default: float) -> float:
 
 
 def reports_storage() -> tuple[str | None, str | None]:
-    """Where monthly reports are kept (app/reports.py): the S3 bucket REPORTS_BUCKET, else the folder REPORTS_DIR.
-    Neither set: no report is made, on a schedule or asked for. S3 credentials and region are boto3's own chain
-    (the instance role on AWS, AWS_PROFILE on a laptop), never a key in .env."""
+    """Where monthly reports are kept (app/reports.py): the bucket REPORTS_BUCKET (S3, or Cloud Storage when it is
+    gs://<bucket>), else the folder REPORTS_DIR. Neither set: no report is made, on a schedule or asked for.
+    Credentials are each cloud's own chain (the instance role or the VM's service account; AWS_PROFILE or gcloud's
+    application-default login on a laptop), never a key in .env."""
     return os.environ.get("REPORTS_BUCKET") or None, os.environ.get("REPORTS_DIR") or None
 
 

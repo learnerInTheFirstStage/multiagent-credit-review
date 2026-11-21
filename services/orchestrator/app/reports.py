@@ -7,7 +7,8 @@ Why it exists: a limit cut or a card pause is an adverse action on an existing a
 for 12 months for business credit (Reg B, 12 CFR 1002.12(b)(2); 60 days for a business with over $1M in revenue,
 unless it asks, under (b)(5)); credit decisions are reviewed independently and on an ongoing basis (Interagency
 Guidance on Credit Risk Review Systems, 2020). The POC drops and reseeds its database on a schema change, so the
-copy lives elsewhere: S3 with Object Lock on AWS, a folder elsewhere (runtime.reports_storage). A stored copy is
+copy lives elsewhere: S3 with Object Lock on AWS, Cloud Storage with a retention policy on Google Cloud, a folder
+elsewhere (runtime.reports_storage). A stored copy is
 never overwritten. Running a month again adds a copy.
 
 A month is a calendar month in UTC, read on the wall clock (closed_at, created_at), not on the data clock the
@@ -46,6 +47,7 @@ PREFIX = "monthly"
 FORMAT = "PDF/A-3U"
 FONTS = Path(__file__).parent / "fonts"
 LINK_SECONDS = 900  # how long the download link in the API's answer works
+GCS = "gs://"  # REPORTS_BUCKET=gs://<bucket> keeps the reports in Google Cloud Storage instead of S3
 
 
 class BadMonth(ValueError):
@@ -230,17 +232,19 @@ def _key(month: str, now: datetime, how: str) -> str:
 
 
 def store(month: str, pdf: bytes, *, now: datetime, how: str, by: str) -> dict:
-    """Write one copy, never over another. Returns where it went, and a download link for one in S3."""
+    """Write one copy, never over another. Returns where it went, and a download link for one in a bucket."""
     bucket, folder = runtime.reports_storage()
     key, digest = _key(month, now, how), hashlib.sha256(pdf).hexdigest()
+    metadata = {"sha256": digest, "generated-by": by.encode("ascii", "replace").decode(), "format": FORMAT}
+    if bucket and bucket.startswith(GCS):
+        return _store_gcs(bucket.removeprefix(GCS), key, pdf, metadata)
     if bucket:
         from botocore.exceptions import ClientError
 
         s3 = _s3()
         try:
             s3.put_object(
-                Bucket=bucket, Key=key, Body=pdf, ContentType="application/pdf", IfNoneMatch="*",
-                Metadata={"sha256": digest, "generated-by": by.encode("ascii", "replace").decode(), "format": FORMAT},
+                Bucket=bucket, Key=key, Body=pdf, ContentType="application/pdf", IfNoneMatch="*", Metadata=metadata,
             )
         except ClientError as error:
             if error.response.get("Error", {}).get("Code") in ("PreconditionFailed", "ConditionalRequestConflict"):
@@ -264,6 +268,8 @@ def stored(month: str) -> bool:
     """Whether any copy of this month's report is kept."""
     bucket, folder = runtime.reports_storage()
     prefix = f"{PREFIX}/{month}/"
+    if bucket and bucket.startswith(GCS):
+        return any(_gcs().list_blobs(bucket.removeprefix(GCS), prefix=prefix, max_results=1))
     if bucket:
         return _s3().list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=1).get("KeyCount", 0) > 0
     if folder:
@@ -287,6 +293,53 @@ def _s3():
         endpoint_url=f"https://s3.{region}.amazonaws.com" if region else None,
         config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
     )
+
+
+def _gcs():
+    from google.cloud import storage  # here, so a service with no gs:// bucket set never loads it
+
+    # Credentials are Google's own chain: the VM's service account on Google Cloud, `gcloud auth
+    # application-default login` on a laptop. Never a key file.
+    return storage.Client()
+
+
+def _store_gcs(bucket: str, key: str, pdf: bytes, metadata: dict) -> dict:
+    """The same copy in Cloud Storage. if_generation_match=0 writes only if no object has the name, as IfNoneMatch
+    does in S3. The bucket's retention policy keeps every copy from being deleted early, as Object Lock does."""
+    from google.api_core.exceptions import PreconditionFailed
+
+    blob = _gcs().bucket(bucket).blob(key)
+    blob.metadata = metadata
+    try:
+        blob.upload_from_string(pdf, content_type="application/pdf", if_generation_match=0)
+    except PreconditionFailed as error:
+        raise AlreadyStored(key) from error
+    return {"key": key, "location": f"gs://{bucket}/{key}", "url": _gcs_link(blob), "sha256": metadata["sha256"]}
+
+
+def _gcs_link(blob) -> str | None:
+    """A V4 signed download link. A VM's service account has no private key, so the link is signed by the IAM
+    Credentials API (signBlob) with the account's own token: the account needs Token Creator on itself. With no
+    service account (a person's own login on a laptop), or if signing fails, the copy is kept and has no link."""
+    from datetime import timedelta
+
+    import google.auth
+    from google.auth.transport.requests import Request
+
+    try:
+        credentials, _ = google.auth.default()
+        # On a VM the account's email reads "default" until the first refresh asks the metadata server for it.
+        if not credentials.valid or getattr(credentials, "service_account_email", None) == "default":
+            credentials.refresh(Request())
+        email = getattr(credentials, "service_account_email", None)
+        if not email:
+            log.warning("No service account to sign a download link with: the report is kept, with no link")
+            return None
+        return blob.generate_signed_url(version="v4", expiration=timedelta(seconds=LINK_SECONDS), method="GET",
+                                        service_account_email=email, access_token=credentials.token)
+    except Exception:
+        log.exception("The report is kept, but its download link could not be signed")
+        return None
 
 
 def generate(month: str, *, by: str, now: datetime | None = None, scheduled: bool = False) -> dict:

@@ -1,0 +1,63 @@
+# k3s on one Google Cloud VM (k8s/gcp/). Images from Artifact Registry, reports to Cloud Storage through the VM's
+# service account. k8s/up.sh gcp-k3s fills in IMAGE_REGISTRY and REPORTS_BUCKET_NAME from k8s/gcp/state.env, so no
+# project id or bucket name is committed. The pods pull with the pull secret the VM keeps fresh (k8s/gcp/startup.sh).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - {name: credit-review-auth, newName: IMAGE_REGISTRY/auth, newTag: latest}
+  - {name: credit-review-bank, newName: IMAGE_REGISTRY/bank, newTag: latest}
+  - {name: credit-review-card, newName: IMAGE_REGISTRY/card, newTag: latest}
+  - {name: credit-review-orchestrator, newName: IMAGE_REGISTRY/orchestrator, newTag: latest}
+  - {name: credit-review-frontend, newName: IMAGE_REGISTRY/frontend, newTag: latest}
+
+configMapGenerator:
+  - name: settings
+    behavior: merge
+    literals:
+      # The monthly report (KAN-73) goes to Cloud Storage. The VM's service account may write to this bucket only.
+      - REPORTS_BUCKET=gs://REPORTS_BUCKET_NAME
+
+# :latest from Artifact Registry on every start, so a push and a redeploy run the new code.
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: auth}
+      spec: {template: {spec: {containers: [{name: auth, imagePullPolicy: Always}]}}}
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: bank}
+      spec: {template: {spec: {containers: [{name: bank, imagePullPolicy: Always}]}}}
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: card}
+      spec: {template: {spec: {containers: [{name: card, imagePullPolicy: Always}]}}}
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: orchestrator}
+      spec:
+        template:
+          spec:
+            initContainers: [{name: wait-for-dependencies, imagePullPolicy: Always}]
+            containers: [{name: orchestrator, imagePullPolicy: Always}]
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: worker}
+      spec:
+        template:
+          spec:
+            initContainers: [{name: wait-for-dependencies, imagePullPolicy: Always}]
+            containers: [{name: worker, imagePullPolicy: Always}]
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: frontend}
+      spec: {template: {spec: {containers: [{name: frontend, imagePullPolicy: Always}]}}}

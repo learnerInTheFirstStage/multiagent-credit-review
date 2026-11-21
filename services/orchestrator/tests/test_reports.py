@@ -1,4 +1,5 @@
-"""The monthly credit review report (app/reports.py, app/api/reports.py). No network: S3 is moto's."""
+"""The monthly credit review report (app/reports.py, app/api/reports.py). No network: S3 is moto's, Cloud Storage a
+fake of the few calls made."""
 
 import hashlib
 import io
@@ -197,6 +198,98 @@ def test_in_s3_the_copy_carries_its_sha256_and_is_never_overwritten(bucket):
                                   "format": "PDF/A-3U"}
     with pytest.raises(reports.AlreadyStored):
         reports.generate("2026-11", by="u_manager", now=NOV_23)
+
+
+class FakeBlob:
+    def __init__(self, store, name):
+        self.store, self.name, self.metadata = store, name, None
+
+    def upload_from_string(self, data, *, content_type, if_generation_match):
+        from google.api_core.exceptions import PreconditionFailed
+
+        if if_generation_match == 0 and self.name in self.store:
+            raise PreconditionFailed("an object has this name")
+        self.store[self.name] = {"body": data, "content_type": content_type, "metadata": dict(self.metadata)}
+
+    def generate_signed_url(self, **options):
+        self.signed_with = options
+        return f"https://storage.googleapis.com/reports-test/{self.name}?X-Goog-Algorithm=GOOG4-RSA-SHA256"
+
+
+class FakeGcs:
+    """Just what app/reports.py asks of google.cloud.storage.Client."""
+
+    def __init__(self):
+        self.objects, self.blobs = {}, []
+
+    def bucket(self, name):
+        assert name == "reports-test"
+        return self
+
+    def blob(self, name):
+        self.blobs.append(FakeBlob(self.objects, name))
+        return self.blobs[-1]
+
+    def list_blobs(self, name, *, prefix, max_results):
+        assert name == "reports-test"
+        return [key for key in self.objects if key.startswith(prefix)][:max_results]
+
+
+class VmCredentials:
+    """What google.auth.default() gives on a VM: a service account with no key, whose email reads "default" until
+    the first refresh."""
+
+    service_account_email, token, valid = "default", None, False
+
+    def refresh(self, request):
+        self.service_account_email = "credit-review-k3s@project.iam.gserviceaccount.com"
+        self.token, self.valid = "vm-token", True
+
+
+@pytest.fixture
+def gcs(monkeypatch):
+    import google.auth
+
+    monkeypatch.delenv("REPORTS_DIR", raising=False)
+    monkeypatch.setenv("REPORTS_BUCKET", "gs://reports-test")
+    fake = FakeGcs()
+    monkeypatch.setattr(reports, "_gcs", lambda: fake)
+    monkeypatch.setattr(google.auth, "default", lambda: (VmCredentials(), "project"))
+    return fake
+
+
+def test_in_cloud_storage_the_copy_carries_its_sha256_and_is_never_overwritten(gcs):
+    november()
+    made = reports.generate("2026-11", by="u_manager", now=NOV_23)
+    assert made["location"] == f"gs://reports-test/{made['key']}"
+    kept = gcs.objects[made["key"]]
+    assert kept["content_type"] == "application/pdf"
+    assert kept["metadata"] == {"sha256": hashlib.sha256(kept["body"]).hexdigest(), "generated-by": "u_manager",
+                                "format": "PDF/A-3U"}
+    assert made["sha256"] == kept["metadata"]["sha256"]
+    # The VM's account has no key: the link is signed through IAM with its token, for 15 minutes.
+    signed = gcs.blobs[0].signed_with
+    assert signed["service_account_email"] == "credit-review-k3s@project.iam.gserviceaccount.com"
+    assert signed["access_token"] == "vm-token" and signed["version"] == "v4"
+    assert signed["expiration"].total_seconds() == 900 and made["url"].startswith("https://storage.googleapis.com/")
+    with pytest.raises(reports.AlreadyStored):
+        reports.generate("2026-11", by="u_manager", now=NOV_23)
+
+
+def test_in_cloud_storage_a_link_that_cannot_be_signed_leaves_the_copy_kept(gcs, monkeypatch):
+    def refused(self, **options):
+        raise RuntimeError("signBlob refused")
+
+    monkeypatch.setattr(FakeBlob, "generate_signed_url", refused)
+    made = reports.generate("2026-11", by="u_manager", now=NOV_23)
+    assert made["url"] is None and made["key"] in gcs.objects
+
+
+def test_in_cloud_storage_the_schedule_makes_last_months_report_once(gcs):
+    november()
+    assert reports.run_due(DEC_2)["key"].endswith("-scheduled.pdf")
+    assert reports.run_due(DEC_2.replace(hour=1)) is None
+    assert len(gcs.objects) == 1
 
 
 def test_the_schedule_makes_last_months_report_once(bucket):

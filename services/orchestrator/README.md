@@ -118,14 +118,15 @@ A small archival PDF of a month's cases, kept outside the service's database, wh
   - seeded reviews.
 - **Where the data comes from:** the `cases` and `reviews` tables only. No agent or model is called.
 - **Months:** calendar months in UTC, by when a case closed.
-- **On demand:** `POST /reports/monthly/2026-11` with a manager's or an admin's token. The answer gives where the report is kept, its sha256, its figures and, for S3, a download link that works for 15 minutes. A month that has not ended is reported to date and says so. A month that has not begun is a 422.
+- **On demand:** `POST /reports/monthly/2026-11` with a manager's or an admin's token. The answer gives where the report is kept, its sha256, its figures and, for a bucket, a download link that works for 15 minutes. A month that has not ended is reported to date and says so. A month that has not begun is a 422.
 - **On its own:** at every start and then every `REPORT_CHECK_SECONDS` (default an hour), the service makes last month's report if none is kept yet. A service that was down on the 1st catches up when it starts.
 - **Where it is kept:**
-  - in `REPORTS_BUCKET` (S3) when set;
+  - in `REPORTS_BUCKET` when set: an S3 bucket, or a Google Cloud Storage one written `gs://<bucket>`;
   - else in `REPORTS_DIR`, which compose sets to the `reports` volume;
   - with neither set, no report is made and the endpoint answers 503.
-- **Copies:** every run keeps a new copy, named `monthly/<month>/credit-review-<month>-<UTC time>-<manual|scheduled>.pdf`. None is overwritten. In S3 the write is conditional, and the object carries its sha256 and its format in its metadata.
+- **Copies:** every run keeps a new copy, named `monthly/<month>/credit-review-<month>-<UTC time>-<manual|scheduled>.pdf`. None is overwritten. In a bucket the write is conditional, and the object carries its sha256 and its format in its metadata.
 - **S3 credentials:** boto3's own chain, that is the EC2 instance role or `AWS_PROFILE`, never keys in `.env`. Give the bucket Object Lock so no copy can be deleted early.
+- **Cloud Storage credentials:** Google's own chain, that is the VM's service account, never a key file. The account needs to create and read objects, and Token Creator on itself to sign the download link. Give the bucket a retention policy so no copy can be deleted early (`k8s/gcp/create.sh` does all three).
 
 To read a locally kept report: `docker compose cp orchestrator:/reports ./reports`.
 

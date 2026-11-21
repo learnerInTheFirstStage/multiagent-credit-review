@@ -1,0 +1,60 @@
+# The case queue (KAN-74). The Orchestrator publishes each new case and the workers take them. Port 15672 is the
+# management API, which KEDA reads the queue length from. On AWS this would be Amazon MQ instead.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+spec:
+  selector:
+    app: rabbitmq
+  ports:
+    - {name: amqp, port: 5672}
+    - {name: management, port: 15672}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3.13-management-alpine
+          env:
+            # A fixed node name, so the queue on the volume is the broker's own after a restart. Not rabbit@rabbitmq:
+            # that name resolves to the Service, and the broker cannot reach itself through it.
+            - {name: RABBITMQ_NODENAME, value: rabbit@localhost}
+            - {name: RABBITMQ_DEFAULT_USER, valueFrom: {secretKeyRef: {name: credit-review, key: RABBITMQ_USER}}}
+            - {name: RABBITMQ_DEFAULT_PASS, valueFrom: {secretKeyRef: {name: credit-review, key: RABBITMQ_PASSWORD}}}
+          ports:
+            - containerPort: 5672
+            - containerPort: 15672
+          # A TCP check on the AMQP port. Not compose's rabbitmq-diagnostics ping: each run starts a whole Erlang VM,
+          # which under load took longer than the probe's limit, so the broker was marked not ready and dropped
+          # from its Service, cutting off the workers and KEDA.
+          readinessProbe:
+            tcpSocket:
+              port: 5672
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/rabbitmq}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi

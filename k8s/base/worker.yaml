@@ -1,0 +1,115 @@
+# The case workers (KAN-74): the same image as the Orchestrator, taking one case at a time from RabbitMQ.
+# KEDA sets how many run, from the number of cases in the queue, counting those being worked on.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  # KEDA owns the count once it runs. This is the count before it does.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      # A case takes 60-180 s. On a stop, the worker finishes the case it holds before it exits (app/mq/worker.py),
+      # as compose's stop_grace_period: 10m allows. A worker killed anyway leaves its case unacknowledged, and
+      # RabbitMQ gives it to another worker.
+      terminationGracePeriodSeconds: 600
+      initContainers:
+        - name: wait-for-dependencies
+          image: credit-review-orchestrator
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -c
+            - |
+              import socket, time, urllib.request
+              def up(check):
+                  try:
+                      check()
+                      return True
+                  except Exception:
+                      return False
+              checks = {
+                  "postgres": lambda: socket.create_connection(("postgres", 5432), 2).close(),
+                  "rabbitmq": lambda: socket.create_connection(("rabbitmq", 5672), 2).close(),
+                  "bank": lambda: urllib.request.urlopen("http://bank:8000/health", timeout=2),
+                  "card": lambda: urllib.request.urlopen("http://card:8000/health", timeout=2),
+              }
+              while waiting := [name for name, check in checks.items() if not up(check)]:
+                  print("waiting for", ", ".join(waiting), flush=True)
+                  time.sleep(3)
+      containers:
+        - name: worker
+          image: credit-review-orchestrator
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "app.mq.worker"]
+          env:
+            - {name: ORCHESTRATOR_DB_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: ORCHESTRATOR_DB_PASSWORD}}}
+            - name: DATABASE_URL
+              value: postgresql+psycopg://orchestrator:$(ORCHESTRATOR_DB_PASSWORD)@postgres:5432/orchestrator
+            - {name: JWT_SECRET, valueFrom: {secretKeyRef: {name: credit-review, key: JWT_SECRET}}}
+            - {name: BANK_URL, value: "http://bank:8000"}
+            - {name: CARD_URL, value: "http://card:8000"}
+            - {name: LLM_MODEL, valueFrom: {secretKeyRef: {name: credit-review, key: LLM_MODEL}}}
+            - {name: LLM_API_KEY, valueFrom: {secretKeyRef: {name: credit-review, key: LLM_API_KEY}}}
+            - {name: LLM_STRUCTURED_OUTPUT, valueFrom: {secretKeyRef: {name: credit-review, key: LLM_STRUCTURED_OUTPUT}}}
+            - {name: LANGFUSE_PUBLIC_KEY, valueFrom: {secretKeyRef: {name: credit-review, key: LANGFUSE_PUBLIC_KEY}}}
+            - {name: LANGFUSE_SECRET_KEY, valueFrom: {secretKeyRef: {name: credit-review, key: LANGFUSE_SECRET_KEY}}}
+            - {name: LANGFUSE_BASE_URL, valueFrom: {secretKeyRef: {name: credit-review, key: LANGFUSE_BASE_URL}}}
+            - {name: SPECIALISTS, valueFrom: {configMapKeyRef: {name: settings, key: SPECIALISTS}}}
+            - {name: EMBEDDINGS_MODEL, valueFrom: {configMapKeyRef: {name: settings, key: EMBEDDINGS_MODEL}}}
+            - {name: RABBITMQ_USER, valueFrom: {secretKeyRef: {name: credit-review, key: RABBITMQ_USER}}}
+            - {name: RABBITMQ_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: RABBITMQ_PASSWORD}}}
+            - name: RABBITMQ_URL
+              value: amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@rabbitmq:5672/
+            # Pipe-validation mode (KAN-74): the worker sleeps instead of running the case, so no model is called.
+            - {name: MOCK_PROCESSING, valueFrom: {configMapKeyRef: {name: settings, key: MOCK_PROCESSING}}}
+            - {name: MOCK_SECONDS, valueFrom: {configMapKeyRef: {name: settings, key: MOCK_SECONDS}}}
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {memory: 1536Mi}
+---
+# KEDA: one worker per case in the queue, from 1 to 5. The count comes from RabbitMQ's management API, which
+# includes the cases workers hold, so a busy worker is not counted as spare.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker
+spec:
+  scaleTargetRef:
+    name: worker
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  pollingInterval: 5
+  cooldownPeriod: 60
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 60
+  triggers:
+    - type: rabbitmq
+      metadata:
+        protocol: http
+        queueName: cases
+        vhostName: /
+        mode: QueueLength
+        value: "1"
+      authenticationRef:
+        name: rabbitmq
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: rabbitmq
+spec:
+  secretTargetRef:
+    # http://user:password@rabbitmq.credit-review.svc.cluster.local:15672/, made by k8s/up.sh.
+    - parameter: host
+      name: credit-review
+      key: RABBITMQ_MANAGEMENT_URL
