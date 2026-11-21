@@ -3,6 +3,8 @@ name: credit-review
 # Only the gateway is reachable from outside (port 8080).
 # The 127.0.0.1 ports are for local development and are not exposed on a server.
 # Passwords fall back to local defaults. On a server, set real ones in a .env file.
+# Every service built here has pull_policy: build: `docker compose up` rebuilds it from this checkout each time (quick
+# when nothing changed), so no container keeps an image from before a pull.
 
 services:
   postgres:
@@ -24,6 +26,7 @@ services:
       retries: 12
 
   auth:
+    pull_policy: build
     build:
       context: .
       dockerfile: services/auth/Dockerfile
@@ -36,6 +39,7 @@ services:
       - "127.0.0.1:8001:8000"
 
   bank:
+    pull_policy: build
     build:
       context: .
       dockerfile: services/bank/Dockerfile
@@ -55,6 +59,7 @@ services:
       retries: 12
 
   card:
+    pull_policy: build
     build:
       context: .
       dockerfile: services/card/Dockerfile
@@ -77,6 +82,7 @@ services:
       retries: 12
 
   orchestrator:
+    pull_policy: build
     build:
       context: .
       dockerfile: services/orchestrator/Dockerfile
@@ -147,6 +153,7 @@ services:
       retries: 20
 
   worker:
+    pull_policy: build
     build:
       context: .
       dockerfile: services/orchestrator/Dockerfile
@@ -187,6 +194,7 @@ services:
         condition: service_healthy
 
   frontend:
+    pull_policy: build
     build:
       context: ./frontend
       # The same .env values the Orchestrator and Card check tokens with. Empty: the dev login page.
@@ -196,6 +204,7 @@ services:
         VITE_AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
 
   gateway:
+    pull_policy: build
     build: ./gateway
     depends_on:
       - auth

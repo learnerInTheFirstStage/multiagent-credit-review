@@ -777,6 +777,15 @@ def test_the_main_stack_builds_the_model_its_search_names():
     assert re.fullmatch(r"\$\{WITH_EMBEDDINGS:-1\}", main["build"]["args"]["WITH_EMBEDDINGS"])
 
 
+def test_the_main_stack_rebuilds_every_service_it_builds_on_each_up():
+    # A plain `up` after a pull kept the images already built: a Card from before the Auth0 change answered every
+    # approval with 401 while the Orchestrator beside it ran the new code.
+    services = yaml.safe_load((EVAL.parent / "docker-compose.yml").read_text())["services"]
+
+    kept = [name for name, service in services.items() if "build" in service and service.get("pull_policy") != "build"]
+    assert kept == [], f"a plain `docker compose up` would keep an older image of: {kept}"
+
+
 def test_the_runner_seeds_history_before_the_first_signal_and_stops_when_the_database_is_not_clean(
     monkeypatch, start, tmp_path
 ):

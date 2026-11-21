@@ -131,7 +131,7 @@ Compose falls back to local defaults for the passwords and the signing secret, s
 | `LLM_MODEL`, `LLM_API_KEY`, `LLM_STRUCTURED_OUTPUT` | Orchestrator | the model cases run on, as `provider:model`, for example `anthropic:claude-sonnet-5-5` or `openai:<model>` (both packages are installed; only Anthropic has been run). Empty by default: signals are stored and their cases wait as `queued`. `LLM_STRUCTURED_OUTPUT=json_schema` is recommended with Anthropic |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Orchestrator | LangFuse tracing. Empty by default: cases run without tracing. Keys go in your own `.env` only. Set the base URL your LangFuse project shows, or keys from another region are refused |
 | `SPECIALISTS` | Orchestrator | empty: the real Cash Flow and Card agents, which call Bank and Card. `stand_in`: the stand-ins, which answer from the data files with no service and no model |
-| `EMBEDDINGS_MODEL`, `WITH_EMBEDDINGS` | Orchestrator | the embedder for the search over past reviews. Default `fastembed:BAAI/bge-small-en-v1.5`, built into the image (`WITH_EMBEDDINGS=1`, which fetches the model from huggingface.co). Offline, set `WITH_EMBEDDINGS=0` and `EMBEDDINGS_MODEL=hash:384` together. After pulling this default, rebuild the Orchestrator once (`--build`): an older image has no fastembed and offers no search |
+| `EMBEDDINGS_MODEL`, `WITH_EMBEDDINGS` | Orchestrator | the embedder for the search over past reviews. Default `fastembed:BAAI/bge-small-en-v1.5`, built into the image (`WITH_EMBEDDINGS=1`, which fetches the model from huggingface.co). Offline, set `WITH_EMBEDDINGS=0` and `EMBEDDINGS_MODEL=hash:384` together. An image built before this default has no fastembed and offers no search; the next `up` rebuilds it |
 
 The Orchestrator also reads these. `docker-compose.yml` does not pass them yet, so on the main stack they keep the defaults shown; the evaluation overlay sets them (`eval/README.md`).
 
@@ -170,6 +170,6 @@ Reserved for later, so every service uses the same name: `AS_OF_DATE`.
 - Inside the Orchestrator, each agent folder exposes one entry function. The graph calls that function and nothing else in the folder. An agent reaches data only through the analysis tools, never through a database connection.
 - A change to `packages/contracts` or `data` needs all three owners.
 - No secrets and no real customer data in git.
-- `main` always starts with `docker compose up --build`.
+- `main` always starts with `docker compose up`. Every service built here is rebuilt from the checkout on each `up` (`pull_policy: build` in `docker-compose.yml`), with or without `--build`, so no container runs an image from before a pull. Expect those containers to restart on each `up`.
 
 Board: https://lqc0304.atlassian.net/jira/software/projects/KAN/boards/2
