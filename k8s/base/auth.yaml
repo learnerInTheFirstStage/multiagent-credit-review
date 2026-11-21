@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+spec:
+  selector:
+    app: auth
+  ports:
+    - port: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth
+  template:
+    metadata:
+      labels:
+        app: auth
+    spec:
+      initContainers:
+        # compose's depends_on postgres: service_healthy.
+        - name: wait-for-postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "until pg_isready -q -h postgres -p 5432; do sleep 2; done"]
+      containers:
+        - name: auth
+          image: credit-review-auth
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: AUTH_DB_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: AUTH_DB_PASSWORD}}}
+            - name: DATABASE_URL
+              value: postgresql+psycopg://auth:$(AUTH_DB_PASSWORD)@postgres:5432/auth
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 20
+            failureThreshold: 3
+            initialDelaySeconds: 30
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {memory: 512Mi}

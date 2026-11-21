@@ -1,0 +1,57 @@
+# One copy: Bank seeds its database when it starts, and two copies starting together have not been checked for races.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bank
+spec:
+  selector:
+    app: bank
+  ports:
+    - port: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bank
+spec:
+  replicas: 1
+  # Never two at once, even during a deploy: two copies starting together seed the same database and one
+  # fails (seen on Card: duplicate key customers_pkey).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: bank
+  template:
+    metadata:
+      labels:
+        app: bank
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "until pg_isready -q -h postgres -p 5432; do sleep 2; done"]
+      containers:
+        - name: bank
+          image: credit-review-bank
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: BANK_DB_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: BANK_DB_PASSWORD}}}
+            - name: DATABASE_URL
+              value: postgresql+psycopg://bank:$(BANK_DB_PASSWORD)@postgres:5432/bank
+            - {name: JWT_SECRET, valueFrom: {secretKeyRef: {name: credit-review, key: JWT_SECRET}}}
+          ports:
+            - containerPort: 8000
+          # /health answers once seeding is done.
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 20
+            failureThreshold: 3
+            initialDelaySeconds: 60
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}

@@ -1,0 +1,59 @@
+# One copy: Card seeds its database when it starts, as Bank does.
+apiVersion: v1
+kind: Service
+metadata:
+  name: card
+spec:
+  selector:
+    app: card
+  ports:
+    - port: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: card
+spec:
+  replicas: 1
+  # Never two at once, even during a deploy: two copies starting together seed the same database and one
+  # fails (seen on Card: duplicate key customers_pkey).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: card
+  template:
+    metadata:
+      labels:
+        app: card
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "until pg_isready -q -h postgres -p 5432; do sleep 2; done"]
+      containers:
+        - name: card
+          image: credit-review-card
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: CARD_DB_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: CARD_DB_PASSWORD}}}
+            - name: DATABASE_URL
+              value: postgresql+psycopg://card:$(CARD_DB_PASSWORD)@postgres:5432/card
+            - {name: JWT_SECRET, valueFrom: {secretKeyRef: {name: credit-review, key: JWT_SECRET}}}
+            # Empty: people's tokens are HS256 too (services/auth/README.md).
+            - {name: AUTH0_DOMAIN, valueFrom: {configMapKeyRef: {name: settings, key: AUTH0_DOMAIN}}}
+            - {name: AUTH0_AUDIENCE, valueFrom: {configMapKeyRef: {name: settings, key: AUTH0_AUDIENCE}}}
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 20
+            failureThreshold: 3
+            initialDelaySeconds: 60
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}

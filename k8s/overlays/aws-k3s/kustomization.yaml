@@ -1,0 +1,64 @@
+# k3s on one EC2 instance (k8s/aws/). Images from ECR, reports to S3 through the instance's role.
+# k8s/up.sh aws-k3s fills in IMAGE_REGISTRY, REPORTS_BUCKET_NAME and AWS_REGION_NAME from k8s/aws/state.env, so no
+# account id or bucket name is committed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - {name: credit-review-auth, newName: IMAGE_REGISTRY/credit-review/auth, newTag: latest}
+  - {name: credit-review-bank, newName: IMAGE_REGISTRY/credit-review/bank, newTag: latest}
+  - {name: credit-review-card, newName: IMAGE_REGISTRY/credit-review/card, newTag: latest}
+  - {name: credit-review-orchestrator, newName: IMAGE_REGISTRY/credit-review/orchestrator, newTag: latest}
+  - {name: credit-review-frontend, newName: IMAGE_REGISTRY/credit-review/frontend, newTag: latest}
+
+configMapGenerator:
+  - name: settings
+    behavior: merge
+    literals:
+      # The monthly report (KAN-73) goes to S3. The instance's role may write to this bucket only.
+      - REPORTS_BUCKET=REPORTS_BUCKET_NAME
+      - AWS_DEFAULT_REGION=AWS_REGION_NAME
+
+# :latest from ECR on every start, so a push and a redeploy run the new code.
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: auth}
+      spec: {template: {spec: {containers: [{name: auth, imagePullPolicy: Always}]}}}
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: bank}
+      spec: {template: {spec: {containers: [{name: bank, imagePullPolicy: Always}]}}}
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: card}
+      spec: {template: {spec: {containers: [{name: card, imagePullPolicy: Always}]}}}
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: orchestrator}
+      spec:
+        template:
+          spec:
+            initContainers: [{name: wait-for-dependencies, imagePullPolicy: Always}]
+            containers: [{name: orchestrator, imagePullPolicy: Always}]
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: worker}
+      spec:
+        template:
+          spec:
+            initContainers: [{name: wait-for-dependencies, imagePullPolicy: Always}]
+            containers: [{name: worker, imagePullPolicy: Always}]
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: frontend}
+      spec: {template: {spec: {containers: [{name: frontend, imagePullPolicy: Always}]}}}

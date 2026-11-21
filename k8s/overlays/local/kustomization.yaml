@@ -1,0 +1,19 @@
+# A kind cluster on a laptop (k8s/kind.yaml). The images are the ones compose builds, loaded into the cluster by
+# k8s/up.sh. The gateway answers on http://127.0.0.1:8088.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: Service
+      name: gateway
+    patch: |-
+      - op: add
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30080

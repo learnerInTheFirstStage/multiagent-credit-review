@@ -1,0 +1,65 @@
+# One Postgres, one database and one login per service, as in compose. On AWS this would be RDS instead.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            # A subfolder: a fresh volume may hold lost+found, which initdb refuses.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: POSTGRES_PASSWORD}}}
+            # Read by the init script, which makes one login per service.
+            - {name: AUTH_DB_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: AUTH_DB_PASSWORD}}}
+            - {name: BANK_DB_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: BANK_DB_PASSWORD}}}
+            - {name: CARD_DB_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: CARD_DB_PASSWORD}}}
+            - {name: ORCHESTRATOR_DB_PASSWORD, valueFrom: {secretKeyRef: {name: credit-review, key: ORCHESTRATOR_DB_PASSWORD}}}
+          ports:
+            - containerPort: 5432
+          # TCP, as compose's check: while the init script runs, Postgres listens on its socket only.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 2Gi
