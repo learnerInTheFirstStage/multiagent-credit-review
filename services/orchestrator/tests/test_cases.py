@@ -62,12 +62,15 @@ class FakeCard:
         self.calls = []
         self.is_down = False
         self.refuses: str | None = None
+        self.rejects_token = False
         self.takes = 0.0
 
     def __call__(self, action: dict, token: str | None) -> dict:
         time.sleep(self.takes)
         if self.is_down:
             raise CardError("the Card Service did not answer")
+        if self.rejects_token:
+            raise CardError("Card did not accept the approver's token (401)", token_rejected=True)
         if self.refuses:
             raise CardError(self.refuses, refused=True)
         self.calls.append((dict(action), token))
@@ -526,6 +529,20 @@ def test_a_refusal_from_card_does_not_ask_for_a_retry(start):
     assert service.case(case_id)["waiting_for"] == "retry"
 
 
+def test_when_card_does_not_take_the_sign_in_the_approver_is_not_told_a_resend_is_enough(start):
+    # Card on an older build, or without the Auth0 settings: every resend gets the same 401 until Card is put right.
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case()
+    service.card.rejects_token = True
+
+    failed = service.decide(case_id, APPROVE, analyst())
+
+    assert failed.status_code == 502
+    assert "did not accept your sign-in" in failed.json()["message"]
+    assert "again to retry" not in failed.json()["message"]
+    assert service.case(case_id)["waiting_for"] == "retry"
+
+
 def test_a_manager_can_close_a_case_card_never_confirmed_so_it_does_not_block_the_customer(start):
     service = start([*INVESTIGATION, report()])
     case_id = service.open_case()
@@ -598,26 +615,30 @@ def test_any_answer_but_a_clear_yes_from_card_is_a_card_error(monkeypatch, answe
 
 
 @pytest.mark.parametrize(
-    ("answer", "refused"),
+    ("answer", "refused", "token_rejected"),
     [
         pytest.param((422, {"json": {"detail": {"error": "invalid_request", "message": "not below the current limit"}}}),
-                     True, id="Card refuses the body"),
-        pytest.param((409, {"json": {"detail": {"error": "conflict", "message": "another action"}}}), True,
+                     True, False, id="Card refuses the body"),
+        pytest.param((409, {"json": {"detail": {"error": "conflict", "message": "another action"}}}), True, False,
                      id="Card has another action under this approval id"),
-        pytest.param((500, {"json": {"error": "boom"}}), False, id="Card fails"),
+        pytest.param((500, {"json": {"error": "boom"}}), False, False, id="Card fails"),
+        # An older Card image beside a newer Orchestrator, or a sign-in setting only one of them has.
         pytest.param((401, {"json": {"detail": {"error": "unauthorized", "message": "A valid bearer token is required"}}}),
-                     False, id="Card does not take the token"),
-        pytest.param(httpx.ConnectError("no route to card"), False, id="Card cannot be reached"),
+                     False, True, id="Card does not take the token"),
+        pytest.param(httpx.ConnectError("no route to card"), False, False, id="Card cannot be reached"),
     ],
 )
-def test_a_refusal_from_card_is_told_apart_from_card_failing(monkeypatch, answer, refused):
+def test_a_refusal_and_a_token_card_does_not_take_are_told_apart_from_card_failing(
+    monkeypatch, answer, refused, token_rejected
+):
     card_answers(monkeypatch, answer)
 
     with pytest.raises(CardError) as raised:
         card_client.carry_out(ACTION, "the-token")
-    assert raised.value.refused is refused
+    assert (raised.value.refused, raised.value.token_rejected) == (refused, token_rejected)
     if refused:
         assert answer[1]["json"]["detail"]["message"] in str(raised.value)
+
 
 
 @pytest.mark.parametrize("token", [None, ""])

@@ -419,6 +419,11 @@ def decide(
             # Sending the same approval again gets the same answer, so do not suggest it.
             message = (f"The approval is recorded, but {error}. Sending it again will not change that; "
                        "a manager can reject to close the case")
+        elif error.token_rejected:
+            # What to put right is in the log line above. The person can only sign in afresh or pass it on.
+            message = ("The approval is recorded, but Card did not accept your sign-in, so it did not carry out the "
+                       "action. Sign in again and send the approval again. If Card still does not accept it, Card is "
+                       "not set up as the Orchestrator is: ask whoever runs the system to rebuild Card")
         else:
             message = "The approval is recorded, but Card did not carry out the action. Send the approval again to retry"
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, message) from error
