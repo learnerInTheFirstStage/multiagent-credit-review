@@ -78,8 +78,43 @@ Two notes for the team, not changed here:
 
 The search ran in all 27 cases and changed no answer. The planted "always keep the limit" note in the seeded reviews came back 8 times and was ignored each time.
 
+## Requests the service has to refuse
+
+The five request checks (t_01 to t_05) did not run with the 27 cases. They were re-run on 2026-11-22 against `main` at 5cc8204, with no model: `LLM_MODEL` and `LLM_API_KEY` were empty, so the Orchestrator stores a signal and leaves its case queued. The stack was the evaluation's (`eval/docker-compose.eval.yml`: Auth0 off, the real specialists, the agent flow), and the checks were `eval/run.py`'s own, graded by its code:
+
+```
+LLM_MODEL= LLM_API_KEY= LANGFUSE_PUBLIC_KEY= LANGFUSE_SECRET_KEY= LANGFUSE_BASE_URL= docker compose -p kan87eval -f docker-compose.yml -f eval/docker-compose.eval.yml -f ports.override.yml up -d --build postgres bank card orchestrator
+services/orchestrator/.venv/bin/python eval/run.py --arm agent --api http://127.0.0.1:18404 --container "docker compose -p kan87eval exec -T orchestrator" --only c_001 --reps 1 --timeout 5 --out <a folder outside the repo>
+docker compose -p kan87eval -f docker-compose.yml -f eval/docker-compose.eval.yml -f ports.override.yml down -v
+```
+
+The stack started from a checkout with no `.env`, and the empty values on the first line keep a model or LangFuse key in the shell out of it. `ports.override.yml` only moved the Orchestrator's host port and dropped Bank's and Card's, since other stacks ran on the same machine:
+
+```
+services:
+  bank:
+    ports: !reset []
+  card:
+    ports: !reset []
+  orchestrator:
+    ports: !override
+      - "127.0.0.1:18404:8000"
+```
+
+t_03 and t_04 read a case that a run opened, so the runner sent one signal for c_001. With no model that case stayed queued, and its run is recorded as an error ("still queued after 5 seconds") and not graded.
+
+| Request | What is sent | Expected | Got | Right |
+|---|---|---|---|---|
+| t_01 | A signal with no review reasons | status 422, case_opened False | status 422, case_opened False | yes |
+| t_02 | A signal for a customer that is not in the data (c_099) | status 422, case_opened False | status 422, case_opened False | yes |
+| t_03 | The case page of a customer, with no token | status 401 | status 401 | yes |
+| t_04 | The case page of a customer, with the token of an analyst assigned to another customer | status 403 | status 403 | yes |
+| t_05 | A signal sent with an analyst's token | status 403, case_opened False | status 403, case_opened False | yes |
+
+All five were refused, as on 2026-11-18. These checks sign their tokens with `JWT_SECRET`, so they test the service with Auth0 off. With Auth0 on, a person's HS256 token is refused before any role or customer check, so by the code at `services/orchestrator/app/auth.py:104` t_04 and t_05 would read 401, not 403; that was not run. People's Auth0 tokens are not covered by these checks.
+
 ## Limits
 
 - One run of each case. Run-to-run stability is unknown, as on 2026-11-18.
-- The `eval/run.py` request checks (t_01 to t_05) and its summary did not run; grading used the same grader.
+- The `eval/run.py` summary did not run for the 27 cases; grading used the same grader. Its request checks ran on their own, above.
 - The reviewers' judgments of the tool calls are a reading against the rules and common practice, not a graded check.
