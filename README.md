@@ -366,3 +366,7 @@ Database passwords are applied when the Postgres volume is first created. After 
 - `scripts/README.md`: the smoke test and the end-to-end run
 - `demo/README.md`: loading the 2026-11-22 cases
 - `k8s/README.md`: the Kubernetes deployment
+
+## License
+
+MIT, see `LICENSE`.
