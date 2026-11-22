@@ -51,7 +51,7 @@ People sign in through Auth0, which issues their tokens. Each service checks the
 
 All three agents run in the Orchestrator Service: the main agent and the two specialists (Cash Flow, Card), which it calls as tools in-process. Each agent folder exposes one entry function. The specialists reach Bank and Card data only through the analysis tools. Besides their answers, the main agent reads the signal, the credit guidelines and the Orchestrator's own closed reviews. Bank and Card run no model. They own the data and serve read-only analysis tools over HTTP. The stand-ins in `services/orchestrator/app/agents/mock.py` answer from the data files instead; the tests use them.
 
-Each FastAPI service writes one JSON log line per event to stdout. A request that came through the gateway carries its `X-Request-ID` as `request_id`, and a case run's lines carry `case_id` (`packages/contracts/README.md`). With LangFuse keys set, each case is one LangFuse session: the investigation and each decision are traces in it, with every graph step and model call.
+Each FastAPI service writes one JSON log line per event to stdout. A request that came through the gateway carries its `X-Request-ID` as `request_id`, which the Orchestrator passes on to Bank and Card, and a case run's lines carry `case_id` (`packages/contracts/README.md`). The gateway's access log ends each line with the same id and leaves out query strings. The review app writes a JSON line to the browser console for each failed call, with the id, so a failure on screen can be found in the services' logs. With LangFuse keys set, each case is one LangFuse session: the investigation and each decision are traces in it, with every graph step and model call.
 
 ### The main agent
 

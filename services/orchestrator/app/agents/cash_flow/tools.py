@@ -28,6 +28,8 @@ import httpx
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, ValidationError
 
+from contracts.logs import trace_headers
+
 from app.agents.errors import outage
 from app.graph.causes import KIND_TOPIC
 
@@ -244,7 +246,8 @@ class BankTools:
             return {"error": "deadline_passed", "message": "The run's time was used up before this call."}
         url = f"{bank_url()}/customers/{self.customer_id}/tools/{path}"
         try:
-            response = self.http.get(url, params=params, headers={"Authorization": f"Bearer {self.token}"},
+            response = self.http.get(url, params=params,
+                                     headers={"Authorization": f"Bearer {self.token}", **trace_headers()},
                                      timeout=min(TIMEOUT_SECONDS, remaining))
         except httpx.TimeoutException:
             self._down(name, "timeout")

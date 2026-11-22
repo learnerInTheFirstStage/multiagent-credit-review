@@ -38,6 +38,12 @@ def bind(**fields):
         _bound.reset(token)
 
 
+def trace_headers() -> dict[str, str]:
+    """The header that passes the current request id on to another service, whose RequestLog then logs it."""
+    request_id = _bound.get().get("request_id")
+    return {"X-Request-ID": request_id} if request_id else {}
+
+
 class JsonFormatter(logging.Formatter):
     def __init__(self, service: str):
         super().__init__()
@@ -104,7 +110,11 @@ class RequestLog:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        request_id = dict(scope["headers"]).get(b"x-request-id", b"").decode("latin-1") or uuid.uuid4().hex
+        request_id = dict(scope["headers"]).get(b"x-request-id", b"").decode("latin-1")
+        # The id goes on to Bank and Card as a header, and httpx refuses a value that is not ASCII. The gateway
+        # sends 32 hex characters; a caller that bypassed it may send anything.
+        if not (request_id.isascii() and request_id.isprintable() and 0 < len(request_id) <= 128):
+            request_id = uuid.uuid4().hex
         started = time.perf_counter()
         status, logged = 500, False
 

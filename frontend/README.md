@@ -38,6 +38,7 @@ The login page depends on how the bundle was built:
 ## Files worth knowing
 
 - `src/api/client.ts` — fetch wrapper, token storage, typed `ApiError`
+- `src/lib/log.ts`: the app's log: a JSON line in the browser console for a failed call (method, path, status, the gateway's request ID), an event stream that falls back to polling, a page that failed to render (`src/components/AppErrorBoundary.tsx`, which shows a reload message instead of a blank page) and an uncaught error
 - `src/api/cases.ts` — all backend calls the UI makes
 - `src/auth/AuthContext.tsx` — current user + token across the app
 - `src/auth/auth0.ts`, `Auth0SignIn.tsx`, `WithAuth0.tsx` — the Auth0 sign-in, used only when the build has its settings

@@ -3,6 +3,8 @@
  * present in localStorage. All endpoints go through the gateway at /api/*.
  */
 
+import { log } from "../lib/log";
+
 // Storage keys for the session. Exported so AuthContext reads/writes the same
 // slots client.ts clears on a 401.
 export const TOKEN_KEY = "cr_token";
@@ -48,11 +50,20 @@ async function request<T>(
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  // The path without its query string, which can hold filter values.
+  const logged = { method, path: path.split("?")[0] };
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (error) {
+    // No answer at all: the network, or the gateway is down. No request ID, since nothing reached the gateway.
+    log.error("request did not reach the gateway", { ...logged, error: error instanceof Error ? error.name : String(error) });
+    throw error;
+  }
   if (!res.ok) {
     let payload: { error?: string; message?: string } = {};
     try {
@@ -60,6 +71,14 @@ async function request<T>(
     } catch {
       // ignore
     }
+    // A 401 is an expired or missing session, which the redirect below handles: a warning, not an error.
+    (res.status === 401 ? log.warning : log.error)("request failed", {
+      ...logged,
+      status: res.status,
+      code: payload.error ?? null,
+      // The gateway's X-Request-ID finds the same call in the gateway's and the services' logs.
+      request_id: res.headers.get("X-Request-ID"),
+    });
     if (res.status === 401) {
       // The token is gone, invalid, or expired. Clear the session and send
       // the user back to /login. Full-page navigation so the React tree

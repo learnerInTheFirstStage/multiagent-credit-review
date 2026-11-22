@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { log } from "../lib/log";
 import type { CaseRow } from "../types";
 
 // Same shape as CaseRow; the SSE handler patches both the list cache and the
@@ -92,8 +93,9 @@ export function useCaseEvents(token: string | null): LiveState {
         // a burst of events would cause a burst of GETs. The backend's silent
         // baseline (see events.py _stream) keeps the burst empty on first connect.
         qc.invalidateQueries({ queryKey: ["cases"] });
-      } catch {
+      } catch (error) {
         // Bad JSON on a single event is not worth going offline over.
+        log.warning("a live update could not be read", { error: error instanceof Error ? error.name : String(error) });
       }
     });
 
@@ -106,6 +108,8 @@ export function useCaseEvents(token: string | null): LiveState {
         // Hard failure: no reconnect. Hand over to polling immediately. The
         // fetch wrapper handles 401 — so if the token is truly bad, the next
         // ["cases"] poll fires clearSession() and the /login redirect.
+        // EventSource gives no status or headers, and its URL holds the token: only what happened is logged.
+        log.warning("live updates were refused, the queue falls back to polling");
         setState("offline");
         return;
       }
@@ -114,6 +118,7 @@ export function useCaseEvents(token: string | null): LiveState {
       setState("connecting");
       errorsRef.current += 1;
       if (errorsRef.current >= MAX_ERRORS_BEFORE_FALLBACK) {
+        log.warning("live updates dropped too often, the queue falls back to polling", { errors: errorsRef.current });
         source.close();
         setState("offline");
       }

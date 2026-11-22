@@ -27,6 +27,7 @@ from app.db.models import Case, Review
 from app.graph import build_graph, facts
 from app.graph.build import DECIDED, DOCUMENTS_SHOWED, MANAGER_CUT, MAX_REFUSALS
 from app.main import app
+from contracts.logs import bind
 from tests.conftest import bearer, needs_postgres, sender
 from tests.test_graph import (
     DOCUMENTS, DONE, GUIDELINES, INVESTIGATION, PAUSE, ask_bank, ask_card, gaps, report, scripted,
@@ -665,6 +666,15 @@ def test_the_card_call_carries_the_action_and_the_token(monkeypatch):
     assert sent[0]["url"] == "http://card.test/customers/c_010/actions"
     assert sent[0]["json"] == ACTION
     assert sent[0]["headers"] == {"Authorization": "Bearer the-token"}
+
+
+def test_the_card_call_passes_on_the_request_id_of_the_approval(monkeypatch):
+    sent = card_answers(monkeypatch, (200, {"json": {"applied": True}}))
+
+    with bind(request_id="rid-approval"):
+        card_client.carry_out(ACTION, "the-token")
+
+    assert sent[0]["headers"]["X-Request-ID"] == "rid-approval"
 
 
 @pytest.mark.parametrize(

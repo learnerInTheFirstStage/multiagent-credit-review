@@ -7,6 +7,8 @@ import os
 
 import httpx
 
+from contracts.logs import trace_headers
+
 # What Card's actions endpoint answers when it refuses an action for good: a bad body or limit, a role
 # that may not decide, an unknown customer, another action under the same approval_id.
 REFUSALS = {400, 403, 404, 409, 422}
@@ -51,7 +53,7 @@ def carry_out(action: dict, token: str | None) -> dict:
         response = httpx.post(
             f"{base}/customers/{action['customer_id']}/actions",
             json=action,
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {token}", **trace_headers()},
             timeout=10,
         )
         if response.status_code in REFUSALS:

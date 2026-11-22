@@ -20,7 +20,7 @@ A change here affects every service, so all three owners review it.
 docker compose logs --no-log-prefix orchestrator | grep <request id or case id>
 ```
 
-The Orchestrator does not pass the id on to Bank and Card yet, so their lines have an id of their own.
+The Orchestrator passes the id on to Bank and Card (`trace_headers()`), so one request can be followed through all three. A case run no request started, such as the startup pick-up, the periodic retry of cases waiting for Bank or Card, or a queue worker's run, has no id to pass, and Bank and Card make their own.
 
 A line holds ids, status codes and counts, never customer names, account numbers, tokens, or text that a model or a customer wrote: Langfuse keeps those.
 

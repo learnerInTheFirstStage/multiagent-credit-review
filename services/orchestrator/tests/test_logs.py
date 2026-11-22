@@ -24,9 +24,11 @@ from app.db import engine
 from contracts import Finding
 from contracts.logs import JsonFormatter, RequestLog, bind
 from tests._bank_standin import BankStandin
+from tests._card_service_helpers import CardStub
 from tests.test_cash_flow_regressions import ask
 from tests.test_graph import BANK_ONLY, DONE, FROM_THE_FACTS, INVESTIGATION, Run, ask_bank, call, gaps, report
 from tests.test_graph_flows import Searches, search
+from tests.test_specialist_outage import run_case
 
 log = logging.getLogger("test")
 
@@ -95,6 +97,17 @@ def test_a_call_that_did_not_come_through_the_gateway_gets_an_id_of_its_own(line
     assert first and second and first != second
 
 
+def test_an_id_that_could_not_be_passed_on_as_a_header_is_replaced_by_one_of_its_own(lines):
+    # Only a caller that bypassed the gateway can send these; httpx would refuse to send them on to Bank or Card.
+    sent = {"not ASCII": "r\xe9".encode("latin-1"), "too long": b"r" * 129}
+    web = client()
+    for value in sent.values():
+        web.get("/cases/case_1", headers={"X-Request-ID": value})
+
+    ids = [line["request_id"] for line in lines() if line["logger"] == "request"]
+    assert [name for name, request_id in zip(sent, ids) if request_id.encode() in sent.values()] == []
+
+
 def test_a_passing_health_check_is_not_logged(lines):
     client().get("/health")
 
@@ -132,6 +145,17 @@ def test_every_line_of_a_case_run_carries_the_case(lines):
 
     logged = lines()
     assert logged and all(line["case_id"] == "case_1" for line in logged)
+
+
+def test_a_case_run_in_a_request_passes_the_request_id_on_to_every_bank_and_card_call():
+    # The specialists call Bank and Card from the graph's own threads, so the id has to travel with the context.
+    bank, card = BankStandin(), CardStub("c_010")
+    with bind(request_id="rid-case"):
+        run_case("c_010", bank.client, card.client)
+
+    sent = bank.requests + card.requests
+    assert bank.requests and card.requests
+    assert [request.url.path for request in sent if request.headers.get("X-Request-ID") != "rid-case"] == []
 
 
 def invalid_answer(request):

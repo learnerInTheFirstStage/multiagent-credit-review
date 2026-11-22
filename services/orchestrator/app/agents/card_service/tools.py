@@ -26,6 +26,8 @@ import httpx
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+from contracts.logs import trace_headers
+
 from app.agents.errors import outage
 
 log = logging.getLogger(__name__)
@@ -139,7 +141,8 @@ class CardTools:
             return {"error": "out_of_time", "message": "The agent's time budget ran out before this call."}
         url = f"{card_url()}/customers/{self.customer_id}/tools/{path}"
         try:
-            response = self.http.get(url, params=params, headers={"Authorization": f"Bearer {self.token}"},
+            response = self.http.get(url, params=params,
+                                     headers={"Authorization": f"Bearer {self.token}", **trace_headers()},
                                      timeout=timeout)
         except httpx.HTTPError as error:
             self._down(name, "timeout" if isinstance(error, httpx.TimeoutException) else "unreachable")
