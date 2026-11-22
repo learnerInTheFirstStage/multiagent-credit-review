@@ -1,4 +1,4 @@
-"""Make a token for the Card Service, for local use until the Auth Service issues them.
+"""Make a token for the Card Service, for local use: a service's, or a person's that Card accepts only without Auth0.
 
     python -m app.dev_token --sub detection-job --scope snapshots:read
     python -m app.dev_token --sub card_service:case_dev --customers c_010

@@ -48,7 +48,7 @@ def test_mints_an_analyst_token(api, monkeypatch):
 
 def test_also_mints_a_service_token(api, monkeypatch):
     """Service role is the only unauthenticated role kept beside analyst and manager,
-    so a dev can post signals through curl without the real Auth Service."""
+    so a dev can post signals through curl without running app.dev_token in the container."""
     monkeypatch.setenv("DEV_LOGIN", "1")
     response = api.post(
         "/dev_login",

@@ -1,8 +1,8 @@
 """Dev-only endpoint: mint a JWT from a role + customer list.
 
-Behind DEV_LOGIN=1 only. The real Auth Service will own token issuance in
-production; this endpoint makes the demo frontend's login page runnable before
-Auth lands. See KAN-38.
+Behind DEV_LOGIN=1 only. People sign in through Auth0 when it is set
+(services/auth/README.md); this endpoint is the review app's sign-in on a
+local stack without Auth0. See KAN-38.
 
 POST /dev_login
   body: {"sub": "u_analyst", "role": "analyst", "customers": ["c_002", ...]}
@@ -24,8 +24,8 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 # Roles the dev endpoint is allowed to mint. The frontend only needs analyst and
-# manager; service is kept so a dev can post signals through curl without going
-# through the real Auth Service. "admin" is never minted here: an unauthenticated
+# manager; service is kept so a dev can post signals through curl without running
+# app.dev_token in the container. "admin" is never minted here: an unauthenticated
 # admin token is the one thing this endpoint must not hand out.
 ROLES = ("analyst", "manager", "service")
 TOKEN_TTL_SECONDS = 8 * 3600  # 8 hours, matches python -m app.dev_token --hours 8 default

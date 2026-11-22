@@ -106,7 +106,7 @@ services:
       SPECIALISTS: ${SPECIALISTS:-}
       # The same embedder here and in the evaluation, so the demo runs the search the evaluation measured.
       EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-fastembed:BAAI/bge-small-en-v1.5}
-      # Enables POST /dev_login for the demo frontend, until the real Auth Service lands.
+      # Enables POST /dev_login, the review app's sign-in when Auth0 is not set (services/auth/README.md).
       # Default is OFF: anyone who can reach the gateway could otherwise mint a service
       # or analyst token with this endpoint. Set DEV_LOGIN=1 in your local .env to use
       # the demo login page. Never set it on a host that reaches the internet.
