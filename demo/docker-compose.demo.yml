@@ -1,0 +1,21 @@
+# The demo's stack: all 27 golden-set customers on Bank, Card and the Orchestrator, as eval/docker-compose.eval.yml
+# has them, with sign-in left as .env sets it (Auth0 or the dev login). demo/load.sh uses it; see demo/README.md.
+services:
+  orchestrator:
+    environment:
+      SHARED_CUSTOMERS_FILE: /data/shared_customers.yaml:/eval/extra_customers.yaml
+      HISTORY_SEED_FILE: /eval/history.yaml:/eval/history_eval.yaml
+    volumes:
+      - ./eval/extra_customers.yaml:/eval/extra_customers.yaml:ro
+      - ./eval/history.yaml:/eval/history.yaml:ro
+      - ./eval/history_eval.yaml:/eval/history_eval.yaml:ro
+  bank:
+    environment:
+      SHARED_CUSTOMERS_YAML: /app/data/shared_customers.yaml:/eval/extra_customers.yaml
+    volumes:
+      - ./eval/extra_customers.yaml:/eval/extra_customers.yaml:ro
+  card:
+    environment:
+      SHARED_CUSTOMERS_YAML: /app/data/shared_customers.yaml:/eval/extra_customers.yaml
+    volumes:
+      - ./eval/extra_customers.yaml:/eval/extra_customers.yaml:ro

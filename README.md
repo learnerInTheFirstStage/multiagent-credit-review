@@ -9,7 +9,7 @@ All customers and data are simulated. This project is not affiliated with Ramp.
 - **Orchestrator**: takes a review signal at `POST /signals`, investigates the case on a LangGraph graph, writes a report that code checks, pauses for the analyst and, where needed, the manager, and sends an approved action to Card. It asks the real Cash Flow and Card agents (`SPECIALISTS=stand_in` switches to stand-ins that read the data files). If Bank or Card is down, the case waits and retries, then fails with the reason. It keeps closed reviews as history and traces every model and tool call to LangFuse. See `services/orchestrator/README.md`.
 - **Bank**: seeds every customer in `data/shared_customers.yaml` (and, on a stack started with `eval/docker-compose.eval.yml`, `eval/extra_customers.yaml`) as a complete bank feed (every movement of the week, 13 weeks of history, last year's same weeks) and serves the Cash Flow agent's read-only tools. See `services/bank/README.md`.
 - **Card**: seeds the same customers with about 14 months of card history. `GET /snapshots` gives each customer's limit, balance and last three repayments. Its read-only tools serve the Card agent, and `POST /customers/{id}/actions` carries out an approved `reduce_limit` or `pause_card` once per approval.
-- **Evaluation**: a golden set of 27 test customers with expected answers, graded by code (`eval/`). On the real model on 2026-11-17, 14 of them ran once each: the recommendation was right on 13 and the cause on 11. On 2026-11-18 c_010 ran from signal to Card's action following this README: `pause_card` under G-08b, approved by the analyst and the manager, card paused. On 2026-11-18 the full set ran once on Claude Sonnet 5.5: the recommendation was right on 24 of 27 and the cause on 23, with no wrong cut, for $11.51.
+- **Evaluation**: a golden set of 27 test customers with expected answers, graded by code (`eval/`). On the real model on 2026-11-17, 14 of them ran once each: the recommendation was right on 13 and the cause on 11. On 2026-11-18 c_010 ran from signal to Card's action following this README: `pause_card` under G-08b, approved by the analyst and the manager, card paused. On 2026-11-18 the full set ran once on Claude Sonnet 5.5: the recommendation was right on 24 of 27 and the cause on 23, with no wrong cut, for $11.51. On 2026-11-22 it ran again, on code whose investigation is `main`'s, with the same result and the same four misses, for $11.71 (`eval/golden-set-report-2026-11-22.md`); those cases can be loaded to show the review app (`demo/`).
 - **Frontend**: the React review app: a login page, the case queue, and a case page where the analyst, and the manager where needed, approves or rejects. People sign in through Auth0 when it is configured; otherwise the login page gets a token from the Orchestrator's `POST /dev_login`, which answers only when `DEV_LOGIN` is on. See `frontend/README.md`.
 - **Auth**: with `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` and `AUTH0_CLIENT_ID` set, the review app signs people in through Auth0 and the Orchestrator and Card take people's tokens from Auth0 only; services keep signing their own with `JWT_SECRET` (`services/auth/README.md`). Left empty, the review app's dev login (`DEV_LOGIN=1`) and `python -m app.dev_token` make people's tokens.
 
@@ -70,6 +70,8 @@ docker compose up --build
 To sign in on the review app with Auth0, put the three `AUTH0_*` values in `.env` and leave `DEV_LOGIN` empty (`services/auth/README.md`). For the dev login instead, copy `.env.example` to `.env` before starting: it sets `DEV_LOGIN=1`, which turns on the dev login (a name and a role, no password). Keep it to your machine: leave `DEV_LOGIN` empty on any host others can reach. Without a model (Configuration) the queue stays empty until a signal arrives, and a signal's case waits as `queued`.
 
 To start again with empty databases: `docker compose down -v`. A volume seeded by an older version fails at start, so run it after pulling data or schema changes too.
+
+To show the review app with the 27 golden-set cases the real model investigated on 2026-11-22, each waiting for the analyst: `demo/load.sh`. It deletes the local stack's volumes first and needs a model in `.env`; see `demo/README.md`.
 
 ### Run one case end to end
 
@@ -161,6 +163,7 @@ Database passwords are applied when the Postgres volume is first created. After 
 | `packages/contracts` | models shared by the services | all three |
 | `data` | test customers, one source for both data generators | all three |
 | `eval` | golden dataset runs and results | to be assigned |
+| `demo` | the 2026-11-22 run's cases, loaded on request for a demo | Vincent |
 | `infra/postgres` | creates the four databases | to be assigned |
 
 ## Working agreements

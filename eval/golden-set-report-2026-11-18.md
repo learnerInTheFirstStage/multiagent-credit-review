@@ -134,8 +134,8 @@ Opus did not run on the full set, so it has no overall figure. The POC stays on 
 - To keep cost down, each case ran once and only the agent arm ran, not fixed or fixed_rules (`eval/README.md`, "Running an arm"). A full run costs about $12. Run-to-run stability is unknown, and the intervals are wide.
 - The single-agent baseline (KAN-43) was cut and not built.
 - A rewording of the unexplained_outflow meaning was tried: a payment to a known vendor does not count, even with no earlier payment on record. Its Sonnet re-run (`20261118-190602-agent`) stopped before any case completed. A comparison was inconclusive: Claude Code subagents wrote the report drafts in place of the model the service calls, for c_007, c_107 and c_307 under both wordings on two fixed sets of investigator questions, 12 drafts in all. All 12 had the right recommendation and cause and none named unexplained_outflow, so the miss was not reproduced, and the investigator, which also sees the meanings, was not run. The rewording was not committed.
-- In these runs the model never called the past-case search, although search was on.
-- Main has changed since c5ffe0f (among others, PR #30's Credit Behavior agent change and KAN-69's prompt change on when to search), and no full run has been made since.
+- In these runs the model never called the past-case search, although search was on. On 2026-11-22, after KAN-69's prompt change, it searched once in every case.
+- Main has changed since c5ffe0f (among others, PR #30's Credit Behavior agent change and KAN-69's prompt change on when to search). A full run on 2026-11-22, on code whose investigation is main's, gave the same result: `golden-set-report-2026-11-22.md`.
 
 ## Every case
 
