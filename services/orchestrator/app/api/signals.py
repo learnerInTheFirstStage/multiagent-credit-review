@@ -1,4 +1,7 @@
+import importlib.util
 import logging
+from functools import cache
+from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
@@ -145,3 +148,50 @@ def receive_signal(
         else:
             log.warning("case %s stays queued: no model is configured", case.case_id)
     return SignalAccepted(case_id=case.case_id, status=CaseStatus(case.status), result=result)
+
+
+# The admin's "Send a test signal" page. The signal comes from the evaluation's builder, so the demo sends the
+# signal the evaluation measured.
+
+
+class Example(BaseModel):
+    customer_id: str
+    name: str
+
+
+@cache
+def _signal_for():
+    """signal_for from eval/signals.py: the repository's eval/ in a checkout, /eval in the image (Dockerfile).
+
+    Loaded on first use, so a missing file breaks these two endpoints only, not the service.
+    """
+    for folder in Path(__file__).resolve().parents:
+        if (path := folder / "eval" / "signals.py").exists():
+            spec = importlib.util.spec_from_file_location("eval_signals", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.signal_for
+    raise FileNotFoundError("eval/signals.py was not found above app/api")
+
+
+@router.get("/signals/examples", response_model=list[Example], dependencies=[Depends(may_send)])
+def list_examples() -> list[Example]:
+    """The customers the data files hold: the ones POST /signals accepts."""
+    customers = mock._data()["customers"]
+    return [Example(customer_id=customer_id, name=customer["name"]) for customer_id, customer in customers.items()]
+
+
+@router.get(
+    "/signals/examples/{customer_id}",
+    response_model=Signal,
+    # As built: no null name or mask on an account the data does not name.
+    response_model_exclude_unset=True,
+    dependencies=[Depends(may_send)],
+)
+def example_signal(customer_id: str) -> dict:
+    """The customer's signal, with a new signal_id on every call, so sending it again is not a duplicate."""
+    data = mock._data()
+    if customer_id not in data["customers"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"customer {customer_id} is not known")
+    signal = _signal_for()(data["customers"][customer_id], data["today"])
+    return {**signal, "signal_id": f"sig_{customer_id}_{uuid4().hex[:8]}"}

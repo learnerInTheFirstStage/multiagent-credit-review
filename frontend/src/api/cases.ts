@@ -1,5 +1,15 @@
 import { api } from "./client";
-import type { CaseList, CasePath, CaseStatus, CaseView, DecisionReason, WaitingFor } from "../types";
+import type {
+  CaseList,
+  CasePath,
+  CaseStatus,
+  CaseView,
+  DecisionReason,
+  Signal,
+  SignalAccepted,
+  SignalExample,
+  WaitingFor,
+} from "../types";
 
 const BASE = "/api/orchestrator";
 
@@ -36,6 +46,21 @@ export function postDecision(caseId: string, input: DecisionInput): Promise<Case
 /** Run a case that waits for Bank or Card, or failed for want of them, again now. Answers with it investigating. */
 export function postRetry(caseId: string): Promise<CaseView> {
   return api.post<CaseView>(`${BASE}/cases/${caseId}/retry`);
+}
+
+/** The test customers an admin can send a signal for. Admin only. */
+export function listSignalExamples(): Promise<SignalExample[]> {
+  return api.get<SignalExample[]>(`${BASE}/signals/examples`);
+}
+
+/** The customer's signal, built from the test data, with a new signal_id on every call. Admin only. */
+export function readSignalExample(customerId: string): Promise<Signal> {
+  return api.get<Signal>(`${BASE}/signals/examples/${customerId}`);
+}
+
+/** Opens a case for the signal, or adds it to the customer's open case. Admin only (or a service). */
+export function postSignal(signal: Signal): Promise<SignalAccepted> {
+  return api.post<SignalAccepted>(`${BASE}/signals`, signal);
 }
 
 /** Dev-only mint of a JWT for the demo. Orchestrator exposes this when DEV_LOGIN=1. */

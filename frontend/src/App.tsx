@@ -5,6 +5,7 @@ import { LiveStateChip } from "./components/LiveStateChip";
 import LoginPage from "./pages/LoginPage";
 import QueuePage from "./pages/QueuePage";
 import CaseDetailPage from "./pages/CaseDetailPage";
+import SendSignalPage from "./pages/SendSignalPage";
 
 function TopBar({ liveState }: { liveState: ReturnType<typeof useCaseEvents> }) {
   const { user, signOut } = useAuth();
@@ -19,6 +20,14 @@ function TopBar({ liveState }: { liveState: ReturnType<typeof useCaseEvents> }) 
         </Link>
         {user && (
           <div className="flex min-w-0 items-center gap-2 text-sm">
+            {user.role === "admin" && (
+              <Link
+                to="/signals/new"
+                className="whitespace-nowrap text-xs text-slate-500 hover:text-brand-700 border border-slate-200 rounded px-2 py-1"
+              >
+                Send signal
+              </Link>
+            )}
             <LiveStateChip state={liveState} />
             <div className="min-w-0 text-right">
               <div className="truncate max-w-[9rem] sm:max-w-none text-slate-900" title={user.name ?? user.sub}>
@@ -68,6 +77,7 @@ function AppRoutes() {
       <Route element={<AuthedLayout />}>
         <Route path="/" element={<QueuePage />} />
         <Route path="/cases/:caseId" element={<CaseDetailPage />} />
+        <Route path="/signals/new" element={<SendSignalPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

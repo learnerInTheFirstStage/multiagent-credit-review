@@ -292,3 +292,23 @@ export interface AuthState {
   token: string | null;
   user: User | null;
 }
+
+// A test customer an admin can send a signal for (GET /signals/examples).
+export interface SignalExample {
+  customer_id: string;
+  name: string;
+}
+
+// A signal as the Orchestrator builds it for a test customer. Shown and sent back as it came.
+export interface Signal {
+  signal_id: string;
+  customer_id: string;
+  [field: string]: unknown;
+}
+
+// opened: a new case. joined: the customer already had an open case. duplicate: this signal_id was received before.
+export interface SignalAccepted {
+  case_id: string;
+  status: CaseStatus;
+  result: "opened" | "joined" | "duplicate";
+}

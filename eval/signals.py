@@ -7,6 +7,9 @@ signal needs are not in the data file and are filled in:
 - cash_30d_avg_cents: taken to be the cash of a week ago.
 - repayment due dates: the 5th of the last three months.
 - repayment amounts: the monthly card spend, or the amount of the failed or late one.
+
+The Orchestrator image copies this file alone, for the admin's test signals (app/api/signals.py there). So it
+imports only the standard library and yaml, and reads no file when imported.
 """
 
 from datetime import date

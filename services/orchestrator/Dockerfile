@@ -24,6 +24,8 @@ ENV EMBEDDINGS_MODEL=hash:384
 COPY services/orchestrator/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt /packages/contracts
 
+# The builder of a test customer's signal, for the admin's test signals (app/api/signals.py).
+COPY eval/signals.py /eval/signals.py
 COPY services/orchestrator/app ./app
 
 EXPOSE 8000

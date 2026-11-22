@@ -1,12 +1,19 @@
 import copy
+import sys
 from pathlib import Path
 
 import pytest
+import yaml
 from sqlalchemy import func, select
 
 from app.api import signals
+from app.auth import PEOPLE
 from app.db.models import Case, SignalRow
 from tests.conftest import bearer
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "eval"))
+
+from signals import FILES, customers, signal_for  # noqa: E402  the evaluation's builder, not app.api.signals
 
 # The example in API doc section 3: two review reasons at once.
 SIGNAL = {
@@ -345,3 +352,58 @@ def test_an_empty_name_in_the_data_file_setting_is_skipped(client, monkeypatch):
     monkeypatch.setenv("SHARED_CUSTOMERS_FILE", f"{root / 'data' / 'shared_customers.yaml'}:")
 
     assert client.post("/signals", json=SIGNAL).status_code == 201
+
+
+# The admin's test signals (GET /signals/examples).
+
+
+def admin() -> dict:
+    return bearer(sub="u_admin", role="admin", customers=None)
+
+
+def test_each_example_is_the_evaluations_signal_and_opens_a_case(client):
+    # Offered: the customers of the data file POST /signals checks against, and no one else.
+    in_the_file = {customer["id"] for customer in yaml.safe_load(FILES[0].read_text())["customers"]}
+    listed = client.get("/signals/examples", headers=admin()).json()
+    assert {example["customer_id"] for example in listed} == in_the_file
+
+    today, data = customers()
+    failed = {}
+    for customer_id in sorted(in_the_file):
+        example = client.get(f"/signals/examples/{customer_id}", headers=admin()).json()
+        built = signal_for(data[customer_id], today)
+        sent = client.post("/signals", json=example, headers=admin())
+        if {**example, "signal_id": None} != {**built, "signal_id": None}:
+            failed[customer_id] = "not the evaluation's signal"
+        elif sent.status_code != 201:
+            failed[customer_id] = sent.text
+    assert failed == {}
+
+
+def test_a_new_example_after_a_send_joins_the_open_case_instead_of_being_a_duplicate(client):
+    first = client.get("/signals/examples/c_010", headers=admin()).json()
+    opened = client.post("/signals", json=first, headers=admin()).json()
+    second = client.get("/signals/examples/c_010", headers=admin()).json()
+    joined = client.post("/signals", json=second, headers=admin()).json()
+
+    assert second["signal_id"] != first["signal_id"]
+    assert (opened["result"], joined["result"]) == ("opened", "joined")
+    assert joined["case_id"] == opened["case_id"]
+
+
+def test_a_person_who_may_not_send_is_refused_the_examples_even_of_an_unknown_customer(client):
+    # 403 before 404, so the examples do not tell such a person which customer ids exist.
+    refused = [role for role in PEOPLE if role not in signals.MAY_SEND]
+    answers = {
+        (role, path): client.get(path, headers=bearer(role=role)).status_code
+        for role in refused
+        for path in ("/signals/examples", "/signals/examples/c_010", "/signals/examples/c_099")
+    }
+
+    assert refused
+    assert {asked: status for asked, status in answers.items() if status != 403} == {}
+
+
+def test_no_example_for_a_customer_the_service_does_not_hold(client):
+    # c_110 is one of the evaluation's own customers: the builder knows it, but POST /signals here refuses it.
+    assert client.get("/signals/examples/c_110", headers=admin()).status_code == 404
