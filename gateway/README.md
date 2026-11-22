@@ -5,7 +5,7 @@ Nginx. The only container with a public port (8080 locally).
 | Path | Goes to |
 |---|---|
 | `/health` | the gateway itself |
-| `/api/auth/...` | Auth Service |
+| `/api/auth/...` | Auth placeholder: `/health` only. People sign in through Auth0 (`services/auth/README.md`) |
 | `/api/orchestrator/...` | Orchestrator Service |
 | everything else | frontend |
 

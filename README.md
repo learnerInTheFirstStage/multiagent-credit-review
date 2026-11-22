@@ -7,7 +7,7 @@ All customers and data are simulated. This project is not affiliated with Ramp.
 ## Status
 
 - **Orchestrator**: takes a review signal at `POST /signals`, investigates the case on a LangGraph graph, writes a report that code checks, pauses for the analyst and, where needed, the manager, and sends an approved action to Card. It asks the real Cash Flow and Card agents (`SPECIALISTS=stand_in` switches to stand-ins that read the data files). If Bank or Card is down, the case waits and retries, then fails with the reason. It keeps closed reviews as history and traces every model and tool call to LangFuse. See `services/orchestrator/README.md`.
-- **Bank**: seeds every customer in `data/shared_customers.yaml` and `eval/extra_customers.yaml` as a complete bank feed (every movement of the week, 13 weeks of history, last year's same weeks) and serves the Cash Flow agent's read-only tools. See `services/bank/README.md`.
+- **Bank**: seeds every customer in `data/shared_customers.yaml` (and, on a stack started with `eval/docker-compose.eval.yml`, `eval/extra_customers.yaml`) as a complete bank feed (every movement of the week, 13 weeks of history, last year's same weeks) and serves the Cash Flow agent's read-only tools. See `services/bank/README.md`.
 - **Card**: seeds the same customers with about 14 months of card history. `GET /snapshots` gives each customer's limit, balance and last three repayments. Its read-only tools serve the Card agent, and `POST /customers/{id}/actions` carries out an approved `reduce_limit` or `pause_card` once per approval.
 - **Evaluation**: a golden set of 27 test customers with expected answers, graded by code (`eval/`). On the real model on 2026-11-17, 14 of them ran once each: the recommendation was right on 13 and the cause on 11. On 2026-11-18 c_010 ran from signal to Card's action following this README: `pause_card` under G-08b, approved by the analyst and the manager, card paused. On 2026-11-18 the full set ran once on Claude Sonnet 5.5: the recommendation was right on 24 of 27 and the cause on 23, with no wrong cut, for $11.51.
 - **Frontend**: the React review app: a login page, the case queue, and a case page where the analyst, and the manager where needed, approves or rejects. People sign in through Auth0 when it is configured; otherwise the login page gets a token from the Orchestrator's `POST /dev_login`, which answers only when `DEV_LOGIN` is on. See `frontend/README.md`.
@@ -17,19 +17,20 @@ All customers and data are simulated. This project is not affiliated with Ramp.
 
 ```mermaid
 flowchart LR
-  browser[Browser] --> gateway[API gateway, Nginx]
+  browser[Browser] -->|sign in| auth0[Auth0, hosted]
+  browser --> gateway[API gateway, Nginx]
   gateway --> frontend[Frontend]
-  gateway --> auth[Auth Service]
   gateway --> orch[Orchestrator Service with all three agents]
   orch -->|read-only analysis tools| bank[Bank Service]
   orch -->|analysis tools and approved actions| card[Card Service]
-  auth --> authdb[(auth)]
   orch --> orchdb[(orchestrator)]
   bank --> bankdb[(bank)]
   card --> carddb[(card)]
 ```
 
-Four FastAPI services, each with its own Postgres database and login role. The gateway exposes only the frontend, Auth and the Orchestrator. The Bank and Card services are called by the Orchestrator only.
+Three FastAPI services do the work, each with its own Postgres database and login role. The gateway exposes the frontend, the Orchestrator and the Auth placeholder's `/health`; Bank and Card are called by the Orchestrator only.
+
+People sign in through Auth0, which issues their tokens. Each service checks the tokens it receives itself: every one checks a service's token against `JWT_SECRET`, and the Orchestrator and Card check a person's against Auth0's keys. Bank takes service tokens only (`services/bank/README.md`). Without Auth0 settings, people's tokens are signed with `JWT_SECRET` too, by the dev login (`DEV_LOGIN=1`) or `python -m app.dev_token`. `services/auth` is a placeholder that answers `/health` behind `/api/auth/` and keeps the Auth0 setup; it issues no tokens.
 
 All three agents run in the Orchestrator Service: the main agent and the two specialists (Cash Flow, Card), which it calls as tools in-process. Bank and Card run no model. They own the data and serve read-only analysis tools over HTTP. The stand-ins in `services/orchestrator/app/agents/mock.py` answer from the data files instead; the tests use them.
 
@@ -62,11 +63,11 @@ docker compose up --build
 | URL | What |
 |---|---|
 | http://localhost:8080 | the review app (React) |
-| http://localhost:8080/api/auth/health | Auth through the gateway |
+| http://localhost:8080/api/auth/health | the Auth placeholder through the gateway |
 | http://localhost:8080/api/orchestrator/health | Orchestrator through the gateway |
 | http://localhost:8001/health to :8004 | auth, bank, card, orchestrator directly (local only) |
 
-To sign in on the review app, copy `.env.example` to `.env` before starting: it sets `DEV_LOGIN=1`, which turns on the dev login (a name and a role, no password). Keep it to your machine: leave `DEV_LOGIN` empty on any host others can reach. Without a model (Configuration) the queue stays empty until a signal arrives, and a signal's case waits as `queued`.
+To sign in on the review app with Auth0, put the three `AUTH0_*` values in `.env` and leave `DEV_LOGIN` empty (`services/auth/README.md`). For the dev login instead, copy `.env.example` to `.env` before starting: it sets `DEV_LOGIN=1`, which turns on the dev login (a name and a role, no password). Keep it to your machine: leave `DEV_LOGIN` empty on any host others can reach. Without a model (Configuration) the queue stays empty until a signal arrives, and a signal's case waits as `queued`.
 
 To start again with empty databases: `docker compose down -v`. A volume seeded by an older version fails at start, so run it after pulling data or schema changes too.
 
@@ -111,7 +112,7 @@ Every pull request, and every push to main, runs these three suites and the fron
 `eval/run.py` sends every golden-set customer through a fresh stack and grades the answers: recommendation, cause, hand-over, citations, precision and recall of cuts, cost and time. It costs about $0.45 a case and run. To try a few cases once:
 
 ```bash
-INVESTIGATION_FLOW=agent docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build
+INVESTIGATION_FLOW=agent docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres bank card orchestrator
 services/orchestrator/.venv/bin/python eval/run.py --arm agent --only c_013 c_009 --reps 1 --container "docker compose -p goldenset exec -T orchestrator"
 docker compose -p goldenset down -v
 ```
@@ -143,7 +144,7 @@ The Orchestrator also reads these. `docker-compose.yml` does not pass them yet, 
 
 Database passwords are applied when the Postgres volume is first created. After changing one, run `docker compose down -v` and start again.
 
-Reserved for later, so every service uses the same name: `AS_OF_DATE`.
+`AS_OF_DATE`: the day Bank and Card read their data on. Unset, they use the data file's `signal_date`; set it to that date or leave it. The Orchestrator does not read it, and `docker-compose.yml` does not pass it yet.
 
 ## Layout
 

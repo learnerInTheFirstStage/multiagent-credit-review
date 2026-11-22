@@ -1,4 +1,4 @@
-"""Make a token for local use, until the Auth Service issues them.
+"""Make a token for local use: a service's, or a person's that the Orchestrator and Card accept only without Auth0.
 
     python -m app.dev_token --role analyst --sub u_analyst --customers c_002 c_010
     python -m app.dev_token --role service --sub signal-generator

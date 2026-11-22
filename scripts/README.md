@@ -9,7 +9,7 @@ One customer's signal goes to the Orchestrator. The agent asks the real Cash Flo
 
 ```bash
 docker compose -p e2e --env-file <main checkout>/.env -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build
-python scripts/e2e.py                  # c_010, the analyst approves
+services/orchestrator/.venv/bin/python scripts/e2e.py   # c_010, the analyst approves (environment: Run the tests in the root README)
 docker compose -p e2e down -v
 ```
 

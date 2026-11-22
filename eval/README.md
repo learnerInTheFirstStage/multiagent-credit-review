@@ -1,6 +1,6 @@
 # eval
 
-The golden dataset run: every test customer through the Orchestrator, scored on cause, recommendation, evidence and correct handoff, next to what the engine would do alone. KAN-42 and KAN-56. Auth is not started: the runner calls the Orchestrator directly with dev tokens. Every case is closed by a rejection, so no card action is ever sent.
+The golden dataset run: every test customer through the Orchestrator, scored on cause, recommendation, evidence and correct handoff, next to what the engine would do alone. KAN-42 and KAN-56. Auth is not started: the runner calls the Orchestrator directly with dev tokens signed with `JWT_SECRET` (`app.dev_token`), and the overlay turns Auth0 off on the Orchestrator and Card whatever `.env` says. Every case is closed by a rejection, so no card action is ever sent.
 
 Who answers the graph's questions is `SPECIALISTS` on the stack, and `--specialists` on the runner:
 
@@ -32,7 +32,7 @@ With the real specialists (the default):
 
 ```
 INVESTIGATION_FLOW=fixed_rules docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres bank card orchestrator
-python eval/run.py --arm fixed_rules --container "docker compose -p goldenset exec -T orchestrator"
+services/orchestrator/.venv/bin/python eval/run.py --arm fixed_rules --container "docker compose -p goldenset exec -T orchestrator"
 docker compose -p goldenset down -v
 ```
 
@@ -42,7 +42,7 @@ With the stand-ins:
 
 ```
 SPECIALISTS=stand_in INVESTIGATION_FLOW=fixed_rules docker compose -p goldenset -f docker-compose.yml -f eval/docker-compose.eval.yml up -d --build postgres bank card orchestrator
-python eval/run.py --arm fixed_rules --specialists stand_in --container "docker compose -p goldenset exec -T orchestrator"
+services/orchestrator/.venv/bin/python eval/run.py --arm fixed_rules --specialists stand_in --container "docker compose -p goldenset exec -T orchestrator"
 docker compose -p goldenset down -v
 ```
 
@@ -64,7 +64,7 @@ A run whose case waits for Bank or Card (`waiting_for_data`), or failed because 
 
 `about` at the top of the summary holds the arm, the specialists, whether search was on and with which embedder, how many reviews were seeded, every value of `services/orchestrator/app/policy.py` as one JSON line, and the first twelve hex digits of the SHA-256 of `app/graph/prompts.py`. Both are read inside the container.
 
-Once a held-out run exists, a later run with another policy line or another prompt hash is a dev run, and is reported as one.
+Once a held-out run exists, a later run with another policy line or another prompt hash is a dev run, and is reported as one. Nothing checks this for you: compare the two lines in `about` by hand.
 
 ## Counted run by run
 
@@ -82,7 +82,7 @@ The last section of `summary.md` counts runs, not cases: each run is one decisio
 
 With `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` (and `LANGFUSE_BASE_URL`) set where the runner runs, and the `langfuse` package installed there, the runner reads each case's generations from LangFuse 30 seconds after the last run, into `usage.json`. A case is one LangFuse session, named by the service's case id. Without the keys or the package, or when LangFuse fails, the section says why usage was not recorded, and the runs grade the same. After two failed reads in a row the runner asks for no more.
 
-LangFuse records every model call twice: a generation from the LangChain callback (`ChatAnthropic`), and the Anthropic SDK's generation (`anthropic.messages.create`) inside it. The runner counts only a generation whose parent is not a generation, told apart by `type` and `parentObservationId`, not by name. Its cost counts the thinking tokens, which are billed as output; the SDK's copy leaves reasoning out. For the same reason, LangFuse's own total for a trace shows about double. Input and output tokens add back the parts LangFuse keeps apart, such as `input_cache_read` and `output_reasoning`.
+The service drops the Anthropic SDK's own span of each call before sending a trace (`services/orchestrator/app/runtime.py`, `_exported`), so LangFuse holds one generation per model call, from the LangChain callback (`ChatAnthropic`). Traces from before that change also hold the SDK's copy (`anthropic.messages.create`) inside it. The runner counts only a generation whose parent is not a generation, told apart by `type` and `parentObservationId`, not by name. Its cost counts the thinking tokens, which are billed as output; the SDK's copy leaves reasoning out. On a trace from before that change, LangFuse's own total shows about double. Input and output tokens add back the parts LangFuse keeps apart, such as `input_cache_read` and `output_reasoning`.
 
 Wall time runs from the case's `created_at` to its `updated_at`, read from the case list (`GET /cases?status=needs_approval`) before the decision moves `updated_at`. When the list cannot be read, the runner's own clock is used, to within its 2-second poll. The summary says how many runs were timed each way.
 
