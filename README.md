@@ -34,6 +34,37 @@ People sign in through Auth0, which issues their tokens. Each service checks the
 
 All three agents run in the Orchestrator Service: the main agent and the two specialists (Cash Flow, Card), which it calls as tools in-process. Bank and Card run no model. They own the data and serve read-only analysis tools over HTTP. The stand-ins in `services/orchestrator/app/agents/mock.py` answer from the data files instead; the tests use them.
 
+## Data the agents read, and what leaves the company
+
+Every customer and record is simulated. The table is what the code on `main` does; the last list is what it does not do yet.
+
+| Data | The agents read it | Sent to the model provider (Anthropic) | Sent to LangFuse (cloud) |
+|---|---|---|---|
+| The case customer's Bank and Card records: amounts, dates, categories, payee kind, repayments, card balances | yes, through read-only tools | yes | yes |
+| Account name and last 4 digits; merchant names; card nicknames | yes | yes | yes |
+| Text the customer typed (transaction memos) | yes | yes, marked as untrusted text; withheld from the gap reviewer and the report writer | yes, unmarked |
+| Credit guidelines | yes | yes | yes |
+| Earlier reviews of the same customer | typed fields only: dates, outcome, cause, action | yes | yes |
+| Other customers' closed reviews (past-case search) | as background, never cited | yes, ids and figures masked; analyst notes marked | yes |
+| Payee names, customer company names, full account and card numbers | no: Bank and Card do not return them | no | no |
+| Who decided this case: Auth0 sub and email, and the decision note | no | no | yes, in the case state |
+| Tokens, model and LangFuse keys, `JWT_SECRET`, passwords | no | no | no |
+
+How the code holds to it:
+
+- The agents reach data only through Bank's and Card's read-only tools. Each call carries a service token for the one customer of the case, valid for 3 minutes; Bank and Card refuse any other customer (403). The customer comes from the case, never from a model.
+- Bank returns a payee's kind, not its name (`services/bank/app/ledger.py`). Neither service returns the customer's company name or a card number.
+- Text the customer or a person wrote is marked as untrusted before a model reads it, and withheld from the gap reviewer's and the report writer's briefs (`services/orchestrator/app/graph/facts.py`).
+- Past-case results have ids and figures replaced before the investigator reads them (`services/orchestrator/app/retrieval.py`), and a report cannot cite them.
+- No key or token goes into a prompt or a trace.
+
+Not done yet (acceptable on simulated data, to close before real data):
+
+- LangFuse is a third-party cloud service and receives everything above: raw tool results with memos unmarked, and the case state with approvers' emails and notes. With real data: self-host it, or mask before export.
+- The investigator's question goes to the specialists as written, checked only for figures, so words from a past-case result or a gap pass can reach them unmarked.
+- Merchant names, card nicknames and account names go to the provider as they are. With real customers they would be replaced by categories or withheld.
+- The signal contract does not limit an account mask to 4 digits (`packages/contracts`).
+
 ## Quick start
 
 You need git, Docker and Python 3.12. A model API key is needed only to run cases (steps 3 and 4).
