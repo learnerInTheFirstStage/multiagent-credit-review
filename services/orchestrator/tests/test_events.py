@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import events
+from app.api.cases import CaseRow
 from app.db import Base, SessionLocal, engine
 from app.db.models import Case, CaseStatus
 from app.main import app
@@ -105,9 +106,7 @@ def test_a_payload_carries_the_fields_the_queue_row_shows():
     snapshot = events._scan({"c_001"})
     (_, payload) = snapshot[case_id]
 
-    assert set(payload) == {
-        "case_id", "customer_id", "status", "created_at", "updated_at", "outage", "signal_reasons",
-    }
+    assert set(payload) == set(CaseRow.model_fields)
 
 
 def test_the_endpoint_streams_text_event_stream(api):

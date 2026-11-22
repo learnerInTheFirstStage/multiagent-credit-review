@@ -18,16 +18,19 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import object_session
 
 from app import card_client, guidelines, history, policy, runner, runtime
+from app.api import events
 from app.api.cases import MAY_DECIDE
 from app.agents import mock
 from app.card_client import CardError
 from app.db import Base, SessionLocal, engine
 from app.db.models import Case, Review
 from app.graph import build_graph, facts
-from app.graph.build import MAX_REFUSALS
+from app.graph.build import DECIDED, DOCUMENTS_SHOWED, MANAGER_CUT, MAX_REFUSALS
 from app.main import app
 from tests.conftest import bearer, needs_postgres, sender
-from tests.test_graph import DONE, GUIDELINES, INVESTIGATION, PAUSE, ask_bank, ask_card, gaps, report, scripted
+from tests.test_graph import (
+    DOCUMENTS, DONE, GUIDELINES, INVESTIGATION, PAUSE, ask_bank, ask_card, gaps, report, scripted,
+)  # fmt: skip
 from tests.test_signals import SIGNAL  # c_010
 
 SEED_FILE = Path(__file__).resolve().parents[3] / "eval" / "history.yaml"
@@ -282,9 +285,14 @@ def test_with_no_model_a_signal_is_kept_and_its_case_waits(client):
         "status": "queued",
         "waiting_for": None,
         "report": None,
+        "guidelines": [],
+        "approval_outcomes": None,
         "decisions": [],
+        "documents_request": None,
         "action": None,
         "outage": None,
+        "card_refusal": None,
+        "past_review": None,
     }
     decision = client.post(f"/cases/{accepted['case_id']}/decision", json=APPROVE, headers=analyst())
     assert decision.status_code == 503
@@ -366,20 +374,37 @@ def test_a_manager_may_decide_the_analyst_step(start):
     assert service.decide(case_id, APPROVE, manager()).json()["status"] == "done"
 
 
+def test_a_managers_approval_at_the_analyst_step_is_the_managers_and_goes_to_card(start):
+    service = start([*INVESTIGATION, report(**PAUSE)])
+    case_id = service.open_case()
+    as_manager = service.client.get(f"/cases/{case_id}", headers=manager()).json()
+
+    # Each reader is told what their own approval does: an analyst's goes up to a manager, a manager's to Card.
+    assert service.case(case_id)["approval_outcomes"]["pause_card"]["next"] == "manager"
+    assert as_manager["approval_outcomes"]["pause_card"]["next"] == "card"
+    done = service.decide(case_id, APPROVE, manager()).json()
+
+    assert done["status"] == "done" and [d["step"] for d in done["decisions"]] == ["analyst"]
+    [(action, _)] = service.card.calls
+    # Card checks a pause comes with the manager's authority.
+    assert (action["approved_by"], action["approval_id"]) == ("u_manager", f"{case_id}:manager")
+
+
 def test_one_person_cannot_give_both_approvals(start):
     service = start([*INVESTIGATION, report(**PAUSE)])
     case_id = service.open_case()
-    assert service.decide(case_id, APPROVE, manager()).json()["waiting_for"] == "manager"
+    assert service.decide(case_id, APPROVE, analyst()).json()["waiting_for"] == "manager"
 
+    # The analyst, now holding a manager's role, is still the person who approved the step before.
     for decision in (APPROVE, REJECT):
-        assert service.decide(case_id, decision, manager()).status_code == 403
+        assert service.decide(case_id, decision, bearer(role="manager")).status_code == 403
     assert service.card.calls == []
     assert service.case(case_id)["waiting_for"] == "manager"
 
-    second = service.decide(case_id, APPROVE, bearer(sub="u_manager_2", role="manager"))
+    second = service.decide(case_id, APPROVE, manager())
 
     assert second.json()["status"] == "done"
-    assert [d["by"] for d in second.json()["decisions"]] == ["u_manager", "u_manager_2"]
+    assert [d["by"] for d in second.json()["decisions"]] == ["u_analyst", "u_manager"]
 
 
 @pytest.mark.parametrize("body", [{"decision": "maybe"}, {}, {"decision": "approve", "by": "u_someone_else"}])
@@ -404,6 +429,16 @@ def test_a_decision_records_the_role_it_was_made_in_and_when(start):
     assert before <= datetime.fromisoformat(decision["decided_at"]) <= datetime.now(UTC)
     [review] = reviews_of(case_id)
     assert review.decisions == [decision]
+
+
+def test_a_decision_keeps_who_decided_by_sub_and_shows_them_by_the_email_their_token_carries(start):
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case()
+
+    named = bearer(sub="auth0|manager", role="manager", name="manager@credit-review.demo")
+    [decision] = service.decide(case_id, APPROVE, named).json()["decisions"]
+
+    assert (decision["by"], decision["by_name"]) == ("auth0|manager", "manager@credit-review.demo")
 
 
 def test_a_case_that_is_not_waiting_cannot_be_decided(start):
@@ -526,7 +561,42 @@ def test_a_refusal_from_card_does_not_ask_for_a_retry(start):
     assert failed.status_code == 502
     assert "not below the current limit" in failed.json()["message"]
     assert "again to retry" not in failed.json()["message"]
-    assert service.case(case_id)["waiting_for"] == "retry"
+    case = service.case(case_id)  # as a reload reads it
+    assert case["waiting_for"] == "retry"
+    assert case["card_refusal"] == service.card.refuses
+
+    # Card's limit was put right, so the resend goes through, and the page no longer says Card refused it.
+    service.card.refuses = None
+    retried = service.decide(case_id, APPROVE, analyst()).json()
+    assert (retried["status"], retried["card_refusal"]) == ("done", None)
+
+
+def test_a_refusal_card_later_applied_is_cleared_by_the_catch_up_at_the_next_start(start):
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case()
+    service.card.refuses = "Card refused the action (422): limit_cents 5800000 is not below the current limit 5800000"
+    service.decide(case_id, APPROVE, analyst())
+    # The resend went through at Card and in the graph. The process died before the table was written.
+    service.card.refuses = None
+    app.state.graph.invoke(None, runner.thread(case_id), context={"approver_token": "t"})
+
+    runner.run_case(app.state.graph, case_id)  # the pick-up at the next start
+
+    case = service.case(case_id)
+    assert (case["status"], case["card_refusal"]) == ("done", None)
+    assert case["action"]["result"] is not None
+
+
+def test_a_card_failure_is_not_shown_as_a_refusal(start):
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case()
+    service.card.refuses = "Card refused the action (422): limit_cents 5800000 is not below the current limit 5800000"
+    service.decide(case_id, APPROVE, analyst())
+    service.card.refuses, service.card.is_down = None, True
+
+    # The resend met an outage, not a refusal: Card may have applied it, so sending it again can help.
+    assert service.decide(case_id, APPROVE, analyst()).status_code == 502
+    assert service.case(case_id)["card_refusal"] is None
 
 
 def test_when_card_does_not_take_the_sign_in_the_approver_is_not_told_a_resend_is_enough(start):
@@ -735,6 +805,21 @@ def test_a_decision_the_table_missed_is_caught_up_at_the_next_start(client):
     assert runner.unfinished() == []
 
 
+def test_a_case_a_decision_left_part_way_names_nobody_in_the_queue_once_its_pick_up_fails(client, monkeypatch):
+    # The request for documents was approved in the graph, then the process died before drafting it.
+    case_id = queued_case(client)
+    graph = graph_on([*INVESTIGATION, report(**DOCUMENTS)], FakeCard())
+    runner.run_case(graph, case_id)
+    approve = Command(resume={"decision": "approve", "by": "u_analyst"})
+    graph.invoke(approve, runner.thread(case_id), interrupt_before=["request_documents"])
+    monkeypatch.setattr("app.graph.build.documents_request", lambda *_: 1 / 0)
+
+    runner.run_case(graph, case_id)
+
+    [row] = client.get("/cases", params={"status": "failed"}, headers=analyst()).json()["cases"]
+    assert row["waiting_for"] == runner.waiting_for(graph.get_state(runner.thread(case_id))) is None
+
+
 def test_a_decision_made_the_moment_a_run_pauses_is_not_overwritten_by_the_run(client):
     case_id = queued_case(client)
     graph = graph_on([*INVESTIGATION, report()], FakeCard())
@@ -801,7 +886,12 @@ def _manager_rejects(service, case_id):
 
 
 def _approve_hand_over(service, case_id):
-    assert service.decide(case_id, {**APPROVE, "decided": "request_documents"}, analyst()).status_code == 200
+    assert service.decide(case_id, {**APPROVE, "decided": "keep_limit"}, analyst()).status_code == 200
+
+
+def _documents_keep_the_limit(service, case_id):
+    assert service.decide(case_id, APPROVE, analyst()).json()["status"] == "awaiting_documents"
+    assert service.decide(case_id, {**APPROVE, "decided": "keep_limit"}, analyst()).status_code == 200
 
 
 def _close_unconfirmed(service, case_id):
@@ -818,6 +908,7 @@ def _close_unconfirmed(service, case_id):
         pytest.param(report(), _reject, "rejected", id="rejected"),
         pytest.param(report(**PAUSE), _manager_rejects, "rejected", id="the manager rejects"),
         pytest.param(HAND_OVER, _approve_hand_over, "done", id="a hand-over approved"),
+        pytest.param(report(**DOCUMENTS), _documents_keep_the_limit, "done", id="what the documents showed recorded"),
         pytest.param(report(), _close_unconfirmed, "failed", id="a manager closes what Card never confirmed"),
     ],
 )
@@ -1157,8 +1248,9 @@ def test_a_seed_file_that_is_missing_or_broken_does_not_stop_the_start(
     assert [record.name for record in caplog.records if record.name in ("app.main", "app.history")] == [logged_by]
 
 
-def test_seeded_cases_are_not_in_the_queue_and_have_a_case_page_with_no_report(monkeypatch, tmp_path):
-    seeds = seed_file(tmp_path / "history.yaml", [seed_entry("seed_c_010_2025", "2025-11-10")])
+def test_a_seeded_review_is_not_in_the_queue_and_its_page_shows_what_it_recorded(monkeypatch, tmp_path):
+    entry = seed_entry("seed_c_010_2025", "2025-11-10")
+    seeds = seed_file(tmp_path / "history.yaml", [entry])
     monkeypatch.setenv("HISTORY_SEED_FILE", str(seeds))
     Base.metadata.drop_all(engine)
     serving(monkeypatch, graph_on([*INVESTIGATION, report()], FakeCard()))
@@ -1172,23 +1264,20 @@ def test_seeded_cases_are_not_in_the_queue_and_have_a_case_page_with_no_report(m
         decided = client.post("/cases/seed_c_010_2025/decision", json=APPROVE, headers=analyst())
 
     assert [row["case_id"] for row in queue["cases"]] == [case_id]
-    assert [row["case_id"] for row in done["cases"]] == ["seed_c_010_2025"]
-    assert page.json() == {
-        "case_id": "seed_c_010_2025",
-        "customer_id": "c_010",
-        "status": "done",
-        "waiting_for": None,
-        "report": None,  # a seed has no graph state
-        "decisions": [],
-        "action": None,
-        "outage": None,
-    }
+    assert [(row["case_id"], row["imported"]) for row in done["cases"]] == [("seed_c_010_2025", True)]
+    shown = page.json()
+    assert (shown["status"], shown["report"], shown["waiting_for"], shown["action"]) == ("done", None, None, None)
+    # Not an empty case: what the seed recorded, word for word.
+    past = shown["past_review"]
+    for key in ("as_of", "outcome", "review_reasons", "current_limit_cents", "engine_limit_cents", "likely_cause",
+                "recommendation", "confidence", "guideline_ids", "claims", "decisions"):
+        assert past[key] == entry[key], key
     assert path.json() == {"case_id": "seed_c_010_2025", **EMPTY_PATH}
     assert decided.status_code == 409
     assert [review.case_id for review in reviews_of("seed_c_010_2025")] == ["seed_c_010_2025"]
 
 
-# A note, and what the person decided on a hand-over
+# A note, a reason, and what the person decided on a hand-over
 
 
 def test_a_note_longer_than_the_limit_is_refused(start):
@@ -1211,19 +1300,49 @@ def test_a_note_longer_than_the_limit_is_refused(start):
     assert review.decisions[0]["note"] == "x" * 500
 
 
+def test_a_rejection_keeps_its_reason_on_the_decision_and_with_the_review(start):
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case()
+
+    rejected = service.decide(case_id, {**REJECT, "reason": "wrong_cause"}, analyst()).json()
+
+    assert rejected["status"] == "rejected"
+    assert unstamped(rejected["decisions"]) == [
+        {"step": "analyst", "decision": "reject", "by": "u_analyst", "reason": "wrong_cause"}
+    ]
+    [review] = reviews_of(case_id)
+    assert review.decisions == rejected["decisions"]
+
+
+def test_a_reason_that_is_not_one_of_the_labels_is_refused(start):
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case()
+
+    refused = service.decide(case_id, {**APPROVE, "reason": "looks_fine"}, analyst())
+
+    assert refused.status_code == 422
+    assert refused.json()["error"] == "invalid_request"
+    assert service.case(case_id)["waiting_for"] == "analyst"
+    assert service.card.calls == []
+    assert reviews_of(case_id) == []
+
+
 def test_a_manager_closing_what_card_never_confirmed_may_say_why(start):
     service = start([*INVESTIGATION, report()])
     case_id = service.open_case()
     service.card.is_down = True
     service.decide(case_id, APPROVE, analyst())
 
-    closed = service.decide(case_id, {**REJECT, "note": "  Card applied it, checked by phone.\x00 "}, manager())
+    closed = service.decide(
+        case_id, {**REJECT, "note": "  Card applied it, checked by phone.\x00 ", "reason": "data_problem"}, manager()
+    )
 
     assert unstamped(closed.json()["decisions"])[-1] == {
         "step": "retry",
         "decision": "reject",
         "by": "u_manager",
         "note": "Card applied it, checked by phone.",
+        "reason": "data_problem",
     }
     [review] = reviews_of(case_id)
     assert review.decisions == closed.json()["decisions"]
@@ -1301,17 +1420,408 @@ def test_what_the_person_decided_is_accepted_only_when_approving_a_hand_over(sta
     assert service.case(case_id)["report"]["recommendation"] == "needs_human"
     assert service.decide(case_id, {**APPROVE, "decided": "close_the_account"}, analyst()).status_code == 422
 
-    answer = service.decide(case_id, {**APPROVE, "decided": "pause_card"}, analyst())
+    answer = service.decide(case_id, {**APPROVE, "decided": "keep_limit"}, analyst())
 
     case = answer.json()
     assert case["status"] == "done"
     assert unstamped(case["decisions"]) == [
-        {"step": "analyst", "decision": "approve", "by": "u_analyst", "decided": "pause_card"}
+        {"step": "analyst", "decision": "approve", "by": "u_analyst", "decided": "keep_limit"}
     ]
     assert case["action"] is None
-    assert service.card.calls == []  # a person decided it: nothing goes to Card for it
+    assert service.card.calls == []  # the limit stays: nothing goes to Card
     [review] = reviews_of(case_id)
-    assert review.human_decision == "pause_card"
+    assert review.human_decision == "keep_limit"
+
+
+def test_a_pause_decided_on_a_hand_over_needs_another_persons_manager_approval_and_goes_out_with_their_token(start):
+    service = start([*INVESTIGATION, HAND_OVER])
+    case_id = service.open_case()
+
+    first = service.decide(case_id, {**APPROVE, "decided": "pause_card"}, analyst())
+
+    assert (first.json()["status"], first.json()["waiting_for"]) == ("needs_manager", "manager")
+    assert service.decide(case_id, APPROVE, analyst()).status_code == 403
+    assert service.card.calls == []
+
+    headers = manager()
+    second = service.decide(case_id, APPROVE, headers)
+
+    assert second.json()["status"] == status_in_table(case_id) == "done"
+    [(action, token)] = service.card.calls
+    assert (action["type"], action["approved_by"], action["approval_id"]) == (
+        "pause_card", "u_manager", f"{case_id}:manager"
+    )  # fmt: skip
+    assert f"Bearer {token}" == headers["Authorization"]
+    [review] = reviews_of(case_id)
+    assert review.human_decision == "pause_card"  # the analyst's, though the manager decided last
+
+
+@pytest.mark.parametrize(
+    "engine_limit_cents", [SIGNAL["current_limit_cents"], 0], ids=["not below the current limit", "zero"]
+)
+def test_a_decided_reduction_card_would_refuse_is_refused_before_anything_is_recorded(start, engine_limit_cents):
+    service = start([*INVESTIGATION, HAND_OVER])
+    case_id = service.open_case(engine_limit_cents=engine_limit_cents)
+    page = service.case(case_id)
+    assert page["report"]["recommendation"] == "needs_human"
+    assert list(page["approval_outcomes"]) == [choice for choice in DECIDED if choice != "reduce_limit"]
+
+    answer = service.decide(case_id, {**APPROVE, "decided": "reduce_limit"}, analyst())
+
+    assert answer.status_code == 409
+    assert service.case(case_id) == page
+    assert service.card.calls == []
+    # Another outcome may still be picked.
+    assert service.decide(case_id, {**APPROVE, "decided": "keep_limit"}, analyst()).json()["status"] == "done"
+
+
+# An approved request for documents waits for the customer
+
+
+def awaiting_documents(start, **changes) -> tuple[Service, str, dict]:
+    """A case whose request for documents the analyst approved, with its page. changes go into the signal."""
+    service = start([*INVESTIGATION, report(**DOCUMENTS)])
+    case_id = service.open_case(**changes)
+    return service, case_id, service.decide(case_id, APPROVE, analyst()).json()
+
+
+def test_an_approved_request_for_documents_keeps_the_case_open_with_the_request_on_its_page(start):
+    service, case_id, case = awaiting_documents(start)
+
+    assert (case["status"], case["waiting_for"]) == ("awaiting_documents", "documents")
+    assert status_in_table(case_id) == "awaiting_documents"
+    assert case["report"]["recommendation"] == "request_documents"  # still shown while the case waits
+    [approval] = case["decisions"]
+    request = case["documents_request"]
+    assert (request["requested_by"], request["requested_at"]) == (approval["by"], approval["decided_at"])
+    due = datetime.fromisoformat(approval["decided_at"]).date() + timedelta(days=policy.DOCUMENTS_DUE_DAYS)
+    assert request["due"] == due.isoformat()
+    assert service.card.calls == [] and case["action"] is None
+    assert reviews_of(case_id) == []  # still open
+    queue = service.client.get("/cases", headers=analyst()).json()
+    # The queue shows when the documents fall due, so an overdue request is seen from the list.
+    assert [(row["case_id"], row["documents_due"]) for row in queue["cases"]] == [(case_id, request["due"])]
+    closed = service.decide(case_id, {**APPROVE, "decided": "keep_limit"}, analyst()).json()
+    done = service.client.get("/cases", params={"status": closed["status"]}, headers=analyst()).json()
+    assert [row["documents_due"] for row in done["cases"] if row["case_id"] == case_id] == [None]
+
+
+@pytest.mark.parametrize(
+    ("decided", "headers"),
+    [
+        pytest.param("reduce_limit", analyst, id="an analyst's reduction"),
+        pytest.param("pause_card", manager, id="a manager's pause"),
+    ],
+)
+def test_documents_are_no_longer_shown_due_once_recorded_while_card_is_retried(start, decided, headers):
+    service, case_id, _ = awaiting_documents(start)
+    service.card.is_down = True
+
+    assert service.decide(case_id, {**APPROVE, "decided": decided}, headers()).status_code == 502
+
+    rows = service.client.get("/cases", headers=analyst()).json()["cases"]
+    assert [(row["waiting_for"], row["documents_due"]) for row in rows if row["case_id"] == case_id] == [("retry", None)]
+
+
+def test_a_case_awaiting_documents_is_left_waiting_by_a_pick_up_and_cannot_be_retried(start):
+    service, case_id, page = awaiting_documents(start)
+
+    assert case_id in runner.unfinished()
+    runner.run_case(app.state.graph, case_id)  # a pick-up after a restart
+
+    assert service.case(case_id) == page
+    assert service.client.post(f"/cases/{case_id}/retry", headers=analyst()).status_code == 409
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(APPROVE, id="an approval that does not say what they showed"),
+        pytest.param({**APPROVE, "decided": "request_documents"}, id="an approval that asks again"),
+        pytest.param({**REJECT, "decided": "keep_limit"}, id="a rejection that says what they showed"),
+    ],
+)
+def test_the_documents_step_refuses_an_answer_that_does_not_fit_it(start, body):
+    service, case_id, page = awaiting_documents(start)
+
+    answer = service.decide(case_id, body, analyst())
+
+    assert (answer.status_code, answer.json()["error"]) == (409, "conflict")
+    assert service.case(case_id) == page
+
+
+def test_a_decision_from_a_page_the_case_has_moved_on_from_is_refused(start):
+    service, case_id, page = awaiting_documents(start)
+
+    # A second analyst's page still shows the analyst step: their pick must not be taken as what the documents showed.
+    stale = service.decide(case_id, {**APPROVE, "decided": "reduce_limit", "step": "analyst"}, analyst())
+
+    assert stale.status_code == 409 and "moved on to the documents step" in stale.json()["message"]
+    assert service.case(case_id) == page and service.card.calls == []
+    current = service.decide(case_id, {**APPROVE, "decided": "keep_limit", "step": "documents"}, analyst()).json()
+    assert (current["status"], current["decisions"][-1]["step"]) == ("done", "documents")
+
+
+def test_a_pause_the_documents_showed_needs_a_managers_approval_and_goes_out_with_their_token(start):
+    service, case_id, _ = awaiting_documents(start)
+
+    # An analyst who records a pause sends it up to a manager.
+    first = service.decide(case_id, {**APPROVE, "decided": "pause_card"}, analyst()).json()
+
+    assert (first["status"], first["waiting_for"]) == ("needs_manager", "manager")
+    refused = service.decide(case_id, APPROVE, bearer(role="manager"))
+    assert refused.status_code == 403 and "the documents step" in refused.json()["message"]
+    headers = manager()
+    second = service.decide(case_id, APPROVE, headers).json()
+    assert second["status"] == status_in_table(case_id) == "done"
+    [(action, token)] = service.card.calls
+    assert (action["type"], action["approved_by"], action["approval_id"]) == (
+        "pause_card", "u_manager", f"{case_id}:manager"
+    )  # fmt: skip
+    assert f"Bearer {token}" == headers["Authorization"]
+    assert second["documents_request"] == first["documents_request"]  # kept after the case closes
+
+
+def test_a_pause_a_manager_records_at_the_documents_step_goes_to_card_at_once(start):
+    service, case_id, _ = awaiting_documents(start)
+
+    done = service.decide(case_id, {**APPROVE, "decided": "pause_card"}, manager()).json()
+
+    assert done["status"] == "done"
+    [(action, _)] = service.card.calls
+    assert (action["approved_by"], action["approval_id"]) == ("u_manager", f"{case_id}:manager")
+
+
+def test_a_signal_for_a_customer_awaiting_documents_joins_the_case(start):
+    service, case_id, _ = awaiting_documents(start)
+
+    joined = service.send({**SIGNAL, "signal_id": "sig_552"}).json()
+
+    assert (joined["result"], joined["case_id"], joined["status"]) == ("joined", case_id, "awaiting_documents")
+
+
+# What the case page says approving does, and which guidelines apply
+
+PAUSE_ACTION = {"type": "pause_card"}
+WHY_PAUSE = ["pause"]  # a pause always needs a manager's authority
+
+
+def went_to(service: Service, page: dict) -> tuple[str, list[dict]]:
+    """Where an approval took the case, in the words of approval_outcomes, and what reached Card as its action."""
+    if page["waiting_for"] == "manager":
+        went = "manager"
+    elif page["status"] == "awaiting_documents":
+        went = "awaiting_documents"
+    else:
+        went = "card" if service.card.calls else "done"
+    sent = [{key: action[key] for key in ("type", "limit_cents") if key in action} for action, _ in service.card.calls]
+    return went, sent
+
+
+def test_a_pause_says_a_manager_comes_next_and_the_manager_step_says_card(start):
+    service = start([*INVESTIGATION, report(**PAUSE)])
+    case_id = service.open_case()
+    assert service.case(case_id)["approval_outcomes"] == {
+        "pause_card": {"next": "manager", "action": PAUSE_ACTION, "manager_because": WHY_PAUSE}
+    }
+
+    first = service.decide(case_id, APPROVE, analyst()).json()
+
+    assert went_to(service, first) == ("manager", [])
+    assert first["approval_outcomes"] == {
+        "pause_card": {"next": "card", "action": PAUSE_ACTION, "manager_because": WHY_PAUSE}
+    }
+    second = service.decide(case_id, APPROVE, manager()).json()
+    assert went_to(service, second) == ("card", [PAUSE_ACTION])
+    assert second["approval_outcomes"] is None  # closed: nobody is asked
+
+
+@pytest.mark.parametrize(
+    ("over_the_cut", "then"),
+    [pytest.param(0, "card", id="a cut of exactly the share"), pytest.param(1, "manager", id="one cent more")],
+)
+def test_a_reduction_says_card_up_to_the_managers_share_and_always_sets_the_engines_limit(start, over_the_cut, then):
+    engine_limit_cents = round(SIGNAL["current_limit_cents"] * (1 - MANAGER_CUT)) - over_the_cut
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case(engine_limit_cents=engine_limit_cents)
+    reduction = {"type": "reduce_limit", "limit_cents": engine_limit_cents}
+    why = ["cut_over_half"] if then == "manager" else []
+    assert service.case(case_id)["approval_outcomes"] == {
+        "reduce_limit": {"next": then, "action": reduction, "manager_because": why}
+    }
+
+    page = service.decide(case_id, APPROVE, analyst()).json()
+
+    assert went_to(service, page) == (then, [reduction] if then == "card" else [])
+
+
+@pytest.mark.parametrize(
+    ("choice", "then"),
+    [
+        pytest.param("keep_limit", "done", id="keep the limit"),
+        pytest.param("reduce_limit", "card", id="reduce, by a cut under the manager's share"),
+        pytest.param("pause_card", "manager", id="pause"),
+        pytest.param("request_documents", "awaiting_documents", id="ask for documents"),
+    ],
+)
+def test_a_hand_over_offers_every_choice_and_each_does_what_the_page_says(start, choice, then):
+    assert 1 - SIGNAL["engine_limit_cents"] / SIGNAL["current_limit_cents"] <= MANAGER_CUT  # the reduction's then
+    service = start([*INVESTIGATION, HAND_OVER])
+    case_id = service.open_case()
+    outcomes = service.case(case_id)["approval_outcomes"]
+    assert list(outcomes) == list(DECIDED)
+    assert outcomes[choice]["next"] == then
+    action = outcomes[choice]["action"]
+
+    page = service.decide(case_id, {**APPROVE, "decided": choice}, analyst()).json()
+
+    if then == "manager":
+        assert went_to(service, page) == ("manager", [])
+        assert page["approval_outcomes"] == {choice: {"next": "card", "action": action, "manager_because": WHY_PAUSE}}
+        page = service.decide(case_id, APPROVE, manager()).json()
+        then = "card"
+    assert went_to(service, page) == (then, [action] if action else [])
+
+
+def test_the_documents_step_offers_what_the_documents_can_show_and_each_does_what_the_page_says(start):
+    service, case_id, page = awaiting_documents(start)
+    outcomes = page["approval_outcomes"]
+    assert list(outcomes) == list(DOCUMENTS_SHOWED)  # never request_documents again
+    assert outcomes["pause_card"] == {"next": "manager", "action": PAUSE_ACTION, "manager_because": WHY_PAUSE}
+
+    closed = service.decide(case_id, {**APPROVE, "decided": "reduce_limit"}, analyst()).json()
+
+    expected = outcomes["reduce_limit"]
+    assert went_to(service, closed) == (expected["next"], [expected["action"]])
+    assert closed["approval_outcomes"] is None
+
+
+def test_the_documents_step_does_not_offer_a_reduction_card_would_refuse(start):
+    service, case_id, page = awaiting_documents(start, engine_limit_cents=SIGNAL["current_limit_cents"])
+    assert page["waiting_for"] == "documents"
+
+    assert list(page["approval_outcomes"]) == [choice for choice in DOCUMENTS_SHOWED if choice != "reduce_limit"]
+    answer = service.decide(case_id, {**APPROVE, "decided": "reduce_limit"}, analyst())
+    assert answer.status_code == 409
+    assert service.card.calls == []
+
+
+def test_the_manager_confirms_what_the_documents_showed_not_the_hand_overs_request_for_them(start):
+    service = start([*INVESTIGATION, HAND_OVER])
+    case_id = service.open_case()
+    service.decide(case_id, {**APPROVE, "decided": "request_documents"}, analyst())
+
+    page = service.decide(case_id, {**APPROVE, "decided": "pause_card"}, analyst()).json()
+
+    assert page["approval_outcomes"] == {
+        "pause_card": {"next": "card", "action": PAUSE_ACTION, "manager_because": WHY_PAUSE}
+    }
+
+
+def test_a_case_waiting_for_a_card_retry_offers_no_outcomes(start):
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case()
+    _card_is_down(service, case_id)
+
+    page = service.case(case_id)
+
+    assert (page["waiting_for"], page["approval_outcomes"]) == ("retry", None)
+
+
+def test_the_case_page_shows_the_guidelines_the_report_cites_once_each_in_its_order(start):
+    cites = ["G-11", "G-07", "G-11"]  # not the order of the guidelines the case ran on
+    service = start([*INVESTIGATION, report(guideline_ids=cites)])
+    case_id = service.open_case()
+
+    shown = service.case(case_id)["guidelines"]
+
+    assert [guideline["id"] for guideline in shown] == ["G-11", "G-07"]
+    ran_on = {guideline["id"]: guideline for guideline in GUIDELINES}
+    fields = ("title", "when", "allows")
+    for guideline in shown:
+        assert [guideline[key] for key in fields] == [ran_on[guideline["id"]][key] for key in fields]
+    assert [guideline["note"] for guideline in shown] == [ran_on["G-11"]["note"], None]  # G-07 has none
+
+
+def test_the_guidelines_of_a_draft_code_never_passed_are_not_shown(start):
+    # The draft cites a guideline but fails the check, and the model has nothing left for the redraft.
+    service = start([*INVESTIGATION, report(evidence=[{"claim": "A wire left.", "evidence_ids": ["txn_0000"]}])])
+    case_id = service.open_case()
+
+    page = service.case(case_id)
+
+    assert state_of(case_id)["report"]["guideline_ids"] != []
+    assert (page["status"], page["report"], page["guidelines"]) == ("failed", None, [])
+
+
+# The queue row: whose move it is, and what the checked report recommends
+
+
+def row_against_page(service: Service, case_id: str) -> dict:
+    """The case's queue row, once checked to say what its case page says: the status, whose move it is, and the
+    checked report's recommendation and confidence. The stream of row changes carries the row as it is."""
+    page = service.case(case_id)
+    rows = service.client.get("/cases", params={"status": page["status"]}, headers=analyst()).json()["cases"]
+    [row] = [row for row in rows if row["case_id"] == case_id]
+    report = page["report"] or {}
+    assert (row["status"], row["waiting_for"], row["recommendation"], row["confidence"]) == (
+        page["status"], page["waiting_for"], report.get("recommendation"), report.get("confidence")
+    )  # fmt: skip
+    _, streamed = events._scan({page["customer_id"]})[case_id]
+    shown = [key for key in row if key not in ("created_at", "updated_at")]
+    assert {key: streamed[key] for key in shown} == {key: row[key] for key in shown}
+    return row
+
+
+def _card_is_down_for_the_manager(service, case_id):
+    service.card.is_down = True
+    assert service.decide(case_id, APPROVE, manager()).status_code == 502
+    service.card.is_down = False
+
+
+def _manager_approves(service, case_id):
+    assert service.decide(case_id, APPROVE, manager()).status_code == 200
+
+
+def _manager_closes(service, case_id):
+    assert service.decide(case_id, REJECT, manager()).status_code == 200
+
+
+def _documents_show_keep_limit(service, case_id):
+    assert service.decide(case_id, {**APPROVE, "decided": "keep_limit"}, analyst()).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("draft", "steps", "waits"),
+    [
+        pytest.param(
+            report(**PAUSE), [_approve, _card_is_down_for_the_manager, _manager_approves],
+            ["analyst", "manager", "retry", None], id="a pause, sent again after Card failed",
+        ),
+        pytest.param(
+            report(**DOCUMENTS), [_approve, _documents_show_keep_limit],
+            ["analyst", "documents", None], id="a request for documents",
+        ),
+        pytest.param(
+            report(), [_card_is_down, _manager_closes],
+            ["analyst", "retry", None], id="a manager closes what Card never confirmed",
+        ),
+    ],
+)  # fmt: skip
+def test_a_queue_row_says_whose_move_it_is_and_what_the_report_recommends_as_the_case_page_does(
+    start, draft, steps, waits
+):
+    service = start([*INVESTIGATION, draft])
+    case_id = service.open_case()
+    rows = [row_against_page(service, case_id)]
+
+    for step in steps:
+        step(service, case_id)
+        rows.append(row_against_page(service, case_id))
+
+    assert [row["waiting_for"] for row in rows] == waits
+    # Kept after the case closes, as the page keeps the report.
+    assert {row["recommendation"] for row in rows} == {draft.tool_calls[0]["args"]["recommendation"]}
 
 
 # The path page
@@ -1352,7 +1862,19 @@ def test_the_path_page_lists_each_question_with_its_topic_and_focus_and_obeys_th
     ]
     assert page["questions"][2]["account_id"] == "acct_c010_a"
     assert "acct_c010_a" in page["questions"][2]["returned"]
-    assert page["questions"] == state_of(case_id)["asked"]
+    # Each question carries what its specialist answered, from the answer in step with it. A refused call was never
+    # answered.
+    state = state_of(case_id)
+    for question, answer in zip(page["questions"], state["answers"], strict=True):
+        if question["outcome"] == "answered":
+            assert question["answer"] == {
+                "findings": answer["response"]["findings"],
+                "could_not_determine": answer["response"]["could_not_determine"],
+            }
+        else:
+            assert "answer" not in question
+    assert any(question["answer"]["findings"] for question in page["questions"] if "answer" in question)
+    assert [{k: v for k, v in q.items() if k != "answer"} for q in page["questions"]] == state["asked"]
     assert page["searches"] == []
     assert [draft["result"] for draft in page["drafts"]] == ["passed"]
     assert page["history"] == ["hist_c_010_summary"]
@@ -1430,6 +1952,18 @@ def test_the_path_page_lists_every_record_of_the_case_with_its_raw_figures_and_n
     assert "Ignore the rules" not in json.dumps(page["records"])
 
 
+def test_the_path_page_shows_no_answers_when_questions_and_answers_are_out_of_step(start):
+    service = start([*INVESTIGATION, report()])
+    case_id = service.open_case()
+    # One answer more than questions, as a case begun before the questions were kept has.
+    app.state.graph.update_state(runner.thread(case_id), {"answers": [{"agent": "cash_flow", "question": "-"}]})
+
+    page = service.client.get(f"/cases/{case_id}/path", headers=analyst()).json()
+
+    # No answer under a question it may not belong to.
+    assert page["questions"] and all("answer" not in question for question in page["questions"])
+
+
 @pytest.mark.parametrize(
     ("drafts", "handed_over_by"),
     [
@@ -1491,8 +2025,11 @@ def test_the_case_page_is_what_it_was(start):
     first = service.decide(case_id, APPROVE, analyst()).json()
     second = service.decide(case_id, {**APPROVE, "note": "Seen."}, bearer(sub="u_manager", role="manager")).json()
 
-    # One key more: why a case waits for Bank or Card, or failed for want of them (tests/test_outage_wait.py).
-    keys = {"case_id", "customer_id", "status", "waiting_for", "report", "decisions", "action", "outage"}
+    # Keys added since: why a case waits for Bank or Card, or failed for want of them (tests/test_outage_wait.py),
+    # what the customer is asked for once request_documents is approved, the guidelines the report cites, what
+    # approving does, Card's refusal, and a seeded review's record.
+    keys = {"case_id", "customer_id", "status", "waiting_for", "report", "guidelines", "approval_outcomes",
+            "decisions", "documents_request", "action", "outage", "card_refusal", "past_review"}  # fmt: skip
     assert set(first) == set(second) == keys
     assert first["outage"] is None and second["outage"] is None
     # A decision gains a note only when one was given.

@@ -13,6 +13,7 @@ import pytest
 from pydantic import Field
 
 from app.agents.cash_flow import cash_flow
+from app.agents.cash_flow import findings as written
 from contracts import InvestigateRequest
 from tests._bank_standin import BankStandin
 from tests._cash_flow_helpers import ScriptedChatModel
@@ -134,6 +135,21 @@ def test_a_stale_account_is_reported_even_when_the_model_says_otherwise():
 
     stale = [finding for finding in response.findings if "has not reported" in finding.claim]
     assert stale and stale[0].evidence_ids == ["acct_c005_a"]
+
+
+def test_the_stale_account_is_named_as_bank_names_it_and_not_by_its_id():
+    response, _ = run([answer()] * 2, ask("c_005", "accounts"))
+    record = next(item for item in response.evidence if item.id == "acct_c005_a")
+
+    [stale] = [finding for finding in response.findings if "has not reported" in finding.claim]
+    assert stale.claim.startswith(f"{record.data['name']} ••{record.data['mask']} has not reported")
+    assert "acct_c005_a" not in stale.claim
+
+
+def test_a_stale_account_with_no_name_is_named_by_its_id():
+    record = {"id": "acct_c005_a", "kind": "linked_account", "data": {"is_stale": True, "days_stale": 5}}
+
+    assert written.linked_account(record).claim.startswith("Account acct_c005_a has not reported for 5 days.")
 
 
 def test_with_no_model_the_findings_are_written_from_the_records(monkeypatch):

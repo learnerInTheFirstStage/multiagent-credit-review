@@ -17,8 +17,8 @@ const MAX_ERRORS_BEFORE_FALLBACK = 3;
  * Subscribes to GET /cases/events as long as `token` is set.
  *
  * On each `case.updated` event:
- * - patches `qc.getQueryData(["case", id])` so an open case page updates in place,
- *   without a GET;
+ * - patches `qc.getQueryData(["case", id])` so an open case page updates in place
+ *   when only row fields changed; a new status or step waits for the re-fetch;
  * - invalidates `["cases"]` so the queue re-fetches (merging open / closed sets
  *   is non-trivial, so letting Query re-run is simpler than patching).
  *
@@ -69,10 +69,15 @@ export function useCaseEvents(token: string | null): LiveState {
         // (a no-op) when nothing is cached: SSE sends row-shaped data, so
         // writing it as the detail cache would create a partial CaseView (no
         // report, decisions, path) that CaseDetailPage would render as real.
+        // A new status or step is not patched in: with the old decisions, report
+        // and Card answer it shows a state the case was never in (a closed case
+        // with no action, read as "recorded but not carried out"). The re-fetch
+        // below brings the whole new state at once.
         const hadDetail = qc.getQueryData(["case", payload.case_id]) !== undefined;
-        qc.setQueryData<CaseRow & { [k: string]: unknown }>(
-          ["case", payload.case_id],
-          (previous) => (previous ? { ...previous, ...payload } : previous),
+        qc.setQueryData<CaseRow & { [k: string]: unknown }>(["case", payload.case_id], (previous) =>
+          previous && previous.status === payload.status && previous.waiting_for === payload.waiting_for
+            ? { ...previous, ...payload }
+            : previous,
         );
         // If the detail page is actually open, re-fetch the full CaseView so
         // report / decisions / path are fresh too, not just the row fields.
@@ -80,12 +85,12 @@ export function useCaseEvents(token: string | null): LiveState {
           qc.invalidateQueries({ queryKey: ["case", payload.case_id] });
           qc.invalidateQueries({ queryKey: ["case-path", payload.case_id] });
         }
-        // The queue cache is parameterised by the "Show closed" toggle; patching
-        // every variant would be messy. One invalidate re-runs any cached
-        // ["cases", ...] query. Note: `invalidateQueries` with its v5 defaults
-        // cancels in-flight GETs and starts a new one, so a burst of events
-        // would cause a burst of GETs. The backend's silent baseline (see
-        // events.py _stream) keeps the burst empty on first connect.
+        // The queue keeps several caches (open, closed, the reads of who
+        // approved last); patching every one would be messy. One invalidate
+        // re-runs any active ["cases", ...] query. Note: `invalidateQueries`
+        // with its v5 defaults cancels in-flight GETs and starts a new one, so
+        // a burst of events would cause a burst of GETs. The backend's silent
+        // baseline (see events.py _stream) keeps the burst empty on first connect.
         qc.invalidateQueries({ queryKey: ["cases"] });
       } catch {
         // Bad JSON on a single event is not worth going offline over.

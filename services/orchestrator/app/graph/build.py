@@ -1,4 +1,5 @@
-"""The case graph: nine steps from a stored signal to an approved action.
+"""The case graph: nine steps from a stored signal to an approved action, and two more when the customer is asked
+for documents.
 
 Code fixes the order of the steps. The model decides three things: which
 question to ask next, whether anything is still unexplained, and what the
@@ -9,7 +10,7 @@ flows, which exist to be compared with this one, code asks the questions.
 import json
 import logging
 from collections.abc import Callable
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 from langchain_core.exceptions import OutputParserException
@@ -106,6 +107,17 @@ UNREADABLE = "That call could not be read. Send it again."
 # In the summary of a report given up on: the draft's figures are not repeated to the analyst.
 FIGURES_NOT_SHOWN = "It stated figures that are not in the evidence it cited."
 DECIDED = ("keep_limit", "reduce_limit", "pause_card", "request_documents")
+# What a person may record at the documents step: what the customer's documents showed.
+DOCUMENTS_SHOWED = ("keep_limit", "reduce_limit", "pause_card")
+# Why a person decided as they did, at any step: one label later reviews and the monthly report can count.
+DECISION_REASONS = ("agree", "wrong_cause", "wrong_action", "missing_evidence", "data_problem", "other")
+# Why the case was flagged, for each review reason (contracts.signal.ReviewReason), as the customer's request says it.
+REASON_TOLD = {
+    "large_cut": "the cash in your linked bank accounts no longer supports your current limit",
+    "failed_repayment": "a card repayment failed",
+    "incomplete_data": "we cannot see recent data from every linked bank account",
+    "large_limit": "your limit is large enough that a person reviews it",
+}
 
 
 class GapReview(BaseModel):
@@ -115,6 +127,7 @@ class GapReview(BaseModel):
 
 
 DECISION_SHAPE = 'A decision must look like {"decision": "approve" or "reject", "by": who decided}.'
+DOCUMENTS_SHAPE = 'Approving the documents step needs "decided", what they showed: ' + ", ".join(DOCUMENTS_SHOWED)
 
 
 def _person_decides(state: CaseState, step: str) -> dict:
@@ -124,11 +137,12 @@ def _person_decides(state: CaseState, step: str) -> dict:
     side effects. An answer that is not a decision pauses the case again. Raising
     instead would leave that answer stored as the reply to the pause for good.
 
-    A note, what the person decided on a hand-over, and the role and time the API
-    stamps from the token and its clock (by_role, decided_at) are kept only when
-    given: a decision without them looks as it did before they existed. What the
-    person decided is kept only where it means something (1.9): the analyst
-    approving a report that hands the case over.
+    A note, a reason (one of DECISION_REASONS), what the person decided on a
+    hand-over, and the role and time the API stamps from the token and its clock
+    (by_role, decided_at) are kept only when given: a decision without them looks
+    as it did before they existed. What the person decided is kept only where it
+    means something (1.9): the analyst approving a report that hands the case
+    over, and an approval at the documents step, which is no decision without it.
     """
     shown = {"case_id": state["case_id"], "step": step, "report": state["report"]}
     while True:
@@ -140,18 +154,25 @@ def _person_decides(state: CaseState, step: str) -> dict:
             and answer["by"]
         ):
             decision = {"step": step, "decision": answer["decision"], "by": answer["by"]}
-            for stamp in ("by_role", "decided_at"):
+            for stamp in ("by_role", "by_name", "decided_at"):
                 if isinstance(answer.get(stamp), str) and answer[stamp]:
                     decision[stamp] = answer[stamp]
             note = answer.get("note")
             if isinstance(note, str) and (note := note.replace("\x00", "").strip()[:NOTE_MAX]):
                 decision["note"] = note
+            if answer.get("reason") in DECISION_REASONS:
+                decision["reason"] = answer["reason"]
             approves_a_hand_over = (
                 step == "analyst"
                 and decision["decision"] == "approve"
                 and state["report"]["recommendation"] == "needs_human"
             )
             if approves_a_hand_over and answer.get("decided") in DECIDED:
+                decision["decided"] = answer["decided"]
+            if step == "documents" and decision["decision"] == "approve":
+                if answer.get("decided") not in DOCUMENTS_SHOWED:
+                    shown = {**shown, "problem": DOCUMENTS_SHAPE}
+                    continue
                 decision["decided"] = answer["decided"]
             return decision
         shown = {**shown, "problem": DECISION_SHAPE}
@@ -167,13 +188,158 @@ def _cut_off(reply) -> bool:
     return metadata.get("stop_reason") == "max_tokens" or metadata.get("finish_reason") == "length"
 
 
-def _needs_manager(state: CaseState) -> bool:
-    recommendation = state["report"]["recommendation"]
-    if recommendation == "pause_card":
-        return True
-    current = state["signal"]["current_limit_cents"]
-    cut = 1 - state["signal"]["engine_limit_cents"] / current if current else 0
-    return recommendation == "reduce_limit" and cut > MANAGER_CUT
+def _choice(report: dict, decisions: list[dict]) -> str:
+    """What approving carries out: the last thing a person decided (what the documents showed, or on a hand-over what
+    the analyst decided), else the recommendation ("needs_human" on a hand-over decided without one).
+    _person_decides keeps "decided" only there."""
+    decided = [decision["decided"] for decision in decisions if "decided" in decision]
+    return decided[-1] if decided else report["recommendation"]
+
+
+def manager_because(choice: str, signal: dict) -> list[str]:
+    """Why a choice needs a manager's authority, as codes the case page puts in words; empty when an analyst's is
+    enough. "pause": a card pause. "cut_over_half": a cut of more than MANAGER_CUT of the limit. Card checks the same
+    rule again."""
+    if choice == "pause_card":
+        return ["pause"]
+    current = signal["current_limit_cents"]
+    cut = 1 - signal["engine_limit_cents"] / current if current else 0
+    return ["cut_over_half"] if choice == "reduce_limit" and cut > MANAGER_CUT else []
+
+
+def needs_manager(choice: str, signal: dict) -> bool:
+    """Whether a choice needs a manager's authority (manager_because says why)."""
+    return bool(manager_because(choice, signal))
+
+
+def action_for(choice: str, signal: dict) -> dict | None:
+    """What Card is sent for a choice, or None. A reduction always sets the engine's limit."""
+    if choice == "reduce_limit":
+        return {"type": "reduce_limit", "limit_cents": signal["engine_limit_cents"]}
+    if choice == "pause_card":
+        return {"type": "pause_card"}
+    return None
+
+
+def can_reduce(signal: dict) -> bool:
+    """Whether a person may pick reduce_limit: Card takes the engine's limit only above 0 and below the current one."""
+    return 0 < signal["engine_limit_cents"] < signal["current_limit_cents"]
+
+
+def _next_after(step: str, choice: str, signal: dict, role: str | None = None) -> str:
+    """Where approving a choice at a step leads, for an approver in this role. The approval steps route by it and the
+    case page shows it.
+
+    A manager's approval is the manager's authority whichever step they take: as in delegated credit authority, one
+    person acting within their own authority signs alone, and only an action above an analyst's goes up to a manager.
+    So a manager who approves at the analyst or documents step is not sent to another manager.
+    """
+    if choice == "request_documents":
+        return "awaiting_documents"
+    if step != "manager" and role != "manager" and needs_manager(choice, signal):
+        return "manager"
+    return "card" if action_for(choice, signal) else "done"
+
+
+def approval_level(approval: dict, choice: str, signal: dict) -> str:
+    """The authority an approval was given with, as Card checks it: "manager" for the manager step, or for a manager
+    who approved, at the analyst or documents step, an action that needs a manager; else "analyst"."""
+    if approval["step"] == "manager" or (approval.get("by_role") == "manager" and needs_manager(choice, signal)):
+        return "manager"
+    return "analyst"
+
+
+def approval_outcomes(state: CaseState, step: str | None, role: str | None = None) -> dict[str, dict] | None:
+    """What approving does, for an approver in this role, per choice the person can make at the step the case waits
+    at: next, and the action Card would be sent. None when the case waits for nobody, or for a Card retry."""
+    if step not in ("analyst", "manager", "documents"):
+        return None
+    signal = state["signal"]
+    if step == "analyst" and state["report"]["recommendation"] != "needs_human":
+        choices = (state["report"]["recommendation"],)
+    elif step == "manager":
+        choices = (_choice(state["report"], state["decisions"]),)
+    else:
+        # What a person picks on a hand-over or at the documents step, without a reduction the decision would refuse.
+        picks = DECIDED if step == "analyst" else DOCUMENTS_SHOWED
+        choices = [choice for choice in picks if choice != "reduce_limit" or can_reduce(signal)]
+    return {
+        choice: {
+            "next": _next_after(step, choice, signal, role),
+            "action": action_for(choice, signal),
+            "manager_because": manager_because(choice, signal),
+        }
+        for choice in choices
+    }
+
+
+def documents_request(signal: dict, approval: dict) -> dict:
+    """What the customer is asked for once request_documents is approved, drafted by code from the signal alone: its
+    review reasons, each bank account and its last sync, and the failed repayments. The limit stays as it is while
+    the case waits. Nothing is sent to the customer: the person does that.
+
+    Due DOCUMENTS_DUE_DAYS after the approval's day. A decision stamped before decided_at existed counts from now.
+    The customer reads each account as their bank names it (facts.account_label), never by our id, and each day in
+    words; the due field stays YYYY-MM-DD.
+    """
+    as_of = signal["as_of"]
+    week_start = (date.fromisoformat(as_of) - timedelta(days=WINDOW_DAYS)).isoformat()
+    since, until = facts.written_date(week_start), facts.written_date(as_of)
+    accounts = signal["snapshot"]["bank"]["accounts"]
+    behind = [account for account in accounts if date.fromisoformat(account["last_synced"]) < date.fromisoformat(as_of)]
+
+    def named(account: dict) -> str:
+        last = facts.written_date(account["last_synced"])
+        return facts.account_label(account) or f"the linked bank account that last updated on {last}"
+
+    asked_for = []
+    if behind:
+        # Only what is missing: the accounts that stopped reporting. Reconnecting the feed is the customer's quickest
+        # way to send it, and the statements cover the gap.
+        for account in behind:
+            if facts.account_label(account):
+                last = facts.written_date(account["last_synced"])
+                asked_for.append(
+                    f"Reconnect {named(account)}, or send its statements from {last}, when its feed last updated, "
+                    f"to {until}"
+                )
+            else:
+                # The account is named by that day already: it is said once.
+                asked_for.append(f"Reconnect {named(account)}, or send its statements from that day to {until}")
+    else:
+        for account in accounts:
+            asked_for.append(f"Statements for {named(account)} from {since} to {until}")
+    reasons = signal["review_reasons"]
+    if "large_cut" in reasons:
+        asked_for.append(f"Invoices or contracts behind the largest payments in and out from {since} to {until}")
+    for repayment in signal["snapshot"]["card"]["repayments"]:
+        if repayment["status"] == "failed":
+            amount = facts.usd(repayment["amount_cents"])
+            asked_for.append(
+                f"Proof of the {amount} card repayment due {facts.written_date(repayment['due'])}, or why it failed"
+            )
+
+    requested_at = approval.get("decided_at") or datetime.now(UTC).isoformat(timespec="seconds")
+    due = (datetime.fromisoformat(requested_at).date() + timedelta(days=policy.DOCUMENTS_DUE_DAYS)).isoformat()
+    why = [REASON_TOLD[reason] for reason in reasons]
+    why = why[0] if len(why) == 1 else ", ".join(why[:-1]) + " and " + why[-1]
+    message = "\n".join([
+        f"We are reviewing the credit limit on your card because {why}.",
+        f"To finish the review, please send us by {facts.written_date(due)}:",
+        *(f"- {item}" for item in asked_for),
+        f"Your limit stays at {facts.usd(signal['current_limit_cents'])} while we wait for them.",
+        f"If we have not heard from you by {facts.written_date(due)}, we will finish the review with the information "
+        "we have.",
+    ])
+    return {
+        "asked_for": asked_for,
+        "message": message,
+        "due": due,
+        "requested_at": requested_at,
+        "requested_by": approval["by"],
+        # For showing who asked, as a decision's by_name is: None when the approver's token carried no email.
+        "requested_by_name": approval.get("by_name"),
+    }
 
 
 def _cited(report: dict) -> list[str]:
@@ -349,10 +515,12 @@ def _report_problems(state: CaseState) -> list[tuple[list[str], str]]:
         # One line however many defects: with one redraft, a defect told only on the second draft is a give-up.
         problems.append(([code for code, _ in found], " ".join(sentence for _, sentence in found)))
 
-    # Step 9 sets the engine's limit, so a "reduction" must be one.
-    if recommendation == "reduce_limit" and signal["engine_limit_cents"] >= signal["current_limit_cents"]:
+    # Step 9 sets the engine's limit, so a "reduction" must be one Card can set: the rule a person's pick follows too.
+    if recommendation == "reduce_limit" and not can_reduce(signal):
         problems.append((
-            ["not_a_reduction"], "It recommends reduce_limit, but the engine's limit is not below the current limit."
+            ["not_a_reduction"],
+            "It recommends reduce_limit, but the engine's limit is not one Card can set: "
+            "it must be above 0 and below the current limit.",
         ))
 
     # A cause rests on a record of this case that shows it (2.D.4). no_clear_cause claims nothing.
@@ -939,19 +1107,40 @@ def build_graph(
 
     def analyst_approval(
         state: CaseState,
-    ) -> Command[Literal["manager_approval", "act", "__end__"]]:
+    ) -> Command[Literal["manager_approval", "request_documents", "act", "__end__"]]:
         decision = _person_decides(state, "analyst")
         update = {"decisions": [decision]}
         if decision["decision"] == "reject":
             return Command(goto=END, update={**update, "status": "rejected"})
-        if state["report"]["recommendation"] == "needs_human":
-            # Nothing to carry out: the person decided by hand.
-            return Command(goto=END, update={**update, "status": "done"})
-        if _needs_manager(state):
+        # A hand-over's decided action goes the way a recommendation does. A manager's approval needs no other manager.
+        then = _next_after("analyst", _choice(state["report"], [decision]), state["signal"], decision.get("by_role"))
+        if then == "awaiting_documents":
+            return Command(goto="request_documents", update=update)
+        if then == "manager":
+            return Command(goto="manager_approval", update={**update, "status": "needs_manager"})
+        return Command(goto="act", update=update)
+
+    def request_documents(state: CaseState) -> dict:
+        # Its own step, as act is: the approval step before it runs again from its first line when resumed.
+        # Nothing goes to Card, and nothing to the customer: the person sends the request.
+        return {
+            "documents_request": documents_request(state["signal"], state["decisions"][-1]),
+            "status": "awaiting_documents",
+        }
+
+    def documents_approval(state: CaseState) -> Command[Literal["manager_approval", "act", "__end__"]]:
+        # A person records what the customer's documents showed. It is carried out as a decided hand-over is.
+        decision = _person_decides(state, "documents")
+        update = {"decisions": [decision]}
+        if decision["decision"] == "reject":
+            return Command(goto=END, update={**update, "status": "rejected"})
+        if _next_after("documents", decision["decided"], state["signal"], decision.get("by_role")) == "manager":
             return Command(goto="manager_approval", update={**update, "status": "needs_manager"})
         return Command(goto="act", update=update)
 
     def manager_approval(state: CaseState) -> Command[Literal["act", "__end__"]]:
+        # Confirms the choice the approval before it made, the analyst step's or the documents step's: act reads it from
+        # the decisions.
         decision = _person_decides(state, "manager")
         update = {"decisions": [decision]}
         if decision["decision"] == "reject":
@@ -960,20 +1149,18 @@ def build_graph(
 
     def act(state: CaseState, runtime: Runtime[RunContext]) -> dict:
         # Its own step: a resumed approval step runs again from its first line, this one does not.
-        recommendation = state["report"]["recommendation"]
-        action = None
-        if recommendation == "reduce_limit":
-            action = {"type": "reduce_limit", "limit_cents": state["report"]["engine_limit_cents"]}
-        elif recommendation == "pause_card":
-            action = {"type": "pause_card"}
+        choice = _choice(state["report"], state["decisions"])
+        action = action_for(choice, state["signal"])
         if action is not None:
             approval = state["decisions"][-1]
             action |= {
                 "case_id": state["case_id"],
                 "customer_id": state["signal"]["customer_id"],
                 "approved_by": approval["by"],
-                # The same if this step runs again, so Card can apply each approval once.
-                "approval_id": f"{state['case_id']}:{approval['step']}",
+                # The same if this step runs again, so Card can apply each approval once. Card knows two steps, by
+                # authority: a manager's approval of an action that needs a manager is the manager step wherever it was
+                # given, and the documents step is otherwise decided as the analyst step is.
+                "approval_id": f"{state['case_id']}:{approval_level(approval, choice, state['signal'])}",
             }
             token = (runtime.context or {}).get("approver_token")
             action["result"] = carry_out(action, token)
@@ -988,6 +1175,8 @@ def build_graph(
     graph.add_node("draft_report", draft_report)
     graph.add_node("check_report", check_report)
     graph.add_node("analyst_approval", analyst_approval)
+    graph.add_node("request_documents", request_documents)
+    graph.add_node("documents_approval", documents_approval)
     graph.add_node("manager_approval", manager_approval)
     graph.add_node("act", act)
 
@@ -999,5 +1188,6 @@ def build_graph(
     graph.add_edge("fetch_guidelines", "draft_report")
     graph.add_edge("draft_report", "check_report")
     graph.add_conditional_edges("check_report", after_check, ["draft_report", "analyst_approval"])
+    graph.add_edge("request_documents", "documents_approval")
     graph.add_edge("act", END)
     return graph.compile(checkpointer=checkpointer, name="credit-review-case")

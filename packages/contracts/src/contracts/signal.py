@@ -17,6 +17,10 @@ class LinkedAccount(BaseModel):
     id: str = Field(min_length=1)
     # Shows a feed that stopped reporting.
     last_synced: IsoDate
+    # How a person knows the account, as a bank feed names it: "Chase Business Checking", and the last digits of
+    # its number, "4821". The id stays the key.
+    name: str | None = None
+    mask: str | None = None
 
 
 class BankSnapshot(BaseModel):

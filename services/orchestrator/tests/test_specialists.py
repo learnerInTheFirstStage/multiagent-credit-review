@@ -189,13 +189,29 @@ def test_c_004_a_tax_payment_and_one_weak_week():
     assert "Payments listed for the window: 7, $340,000 in all. No other payment went out." in claims(answer)
 
 
+def linked(customer_id: str, account_id: str) -> dict:
+    """A linked account as the data file has it."""
+    accounts = mock._data()["customers"][customer_id]["snapshot"]["bank"]["linked_accounts"]
+    return next(account for account in accounts if account["id"] == account_id)
+
+
+def named(customer_id: str, account_id: str) -> str:
+    """A linked account as a person reads it: its name in the data file and the last digits of its number."""
+    account = linked(customer_id, account_id)
+    return f"{account['name']} ••{account['mask']}"
+
+
 def test_c_005_an_account_stopped_reporting_and_what_it_holds_is_not_known():
     answer = ask(mock.cash_flow, "c_005")
+    account, label = linked("c_005", "acct_c005_a"), named("c_005", "acct_c005_a")
 
     stale = next(e for e in answer.evidence if e.id == "acct_c005_a")
-    assert stale.data == {"active": True, "days_stale": 5, "last_synced": "2026-11-05", "is_stale": True}
-    assert "Account acct_c005_a has not reported for 5 days." in claims(answer)
-    assert answer.could_not_determine == ["What acct_c005_a holds since it stopped reporting"]
+    assert stale.data == {
+        "active": True, "days_stale": 5, "last_synced": "2026-11-05", "is_stale": True,
+        "name": account["name"], "mask": account["mask"],
+    }  # fmt: skip
+    assert f"{label} has not reported for 5 days." in claims(answer)
+    assert answer.could_not_determine == [f"What {label} holds since it stopped reporting"]
     # No claim about where the money went, or that the books do not balance: neither can be known.
     assert "large payment" not in claims(answer) and "reconcile" not in claims(answer)
 
@@ -204,7 +220,7 @@ def test_c_006_each_side_holds_half_of_the_clue():
     bank, card = ask(mock.cash_flow, "c_006"), ask(mock.credit_behavior, "c_006")
 
     assert "Weekly inflows have almost stopped" in claims(bank)
-    assert "The linked accounts are: acct_c006_a." in claims(bank)
+    assert f"The linked accounts are: {named('c_006', 'acct_c006_a')}." in claims(bank)
     assert "changed from acct_c006_a to acct_external_new_c006." in claims(card)
     # That the new account is out of the bank's sight is for the main agent to work out.
     assert "linked" not in card.model_dump_json()
@@ -243,7 +259,12 @@ def test_c_010_the_repayment_failed_and_nobody_knows_why():
     answer = ask(mock.credit_behavior, "c_010")
 
     latest = next(e for e in answer.evidence if e.id == "rep_c_010_3")
-    assert latest.data == {"sequence": 3, "of": 3, "status": "failed", "amount_cents": 5000000, "paid_since": "not_recorded"}
+    events = mock._data()["customers"]["c_010"]["signal_window"]["card_events"]
+    amount = next(event["amount_cents"] for event in events if event["kind"] == "failed_repayment")
+    assert (latest.data["status"], latest.data["amount_cents"]) == ("failed", amount)
+    # The file does not say whether it was paid since. The record gives no reason for the failure, as Card's would.
+    assert latest.data["paid_since"] == "not_recorded"
+    assert not {"ach_return_code", "return_reason"} & set(latest.data)
     assert "oldest first: paid, paid, failed." in claims(answer)
     assert answer.could_not_determine == ["Why the repayment failed"]
 
@@ -351,8 +372,9 @@ def test_repayments_are_listed_as_they_are_whatever_their_order(odd_data):
     answer = ask(mock.credit_behavior, "c_050")
 
     assert "The last 3 repayments, oldest first: late, failed, paid." in claims(answer)
-    # Each amount goes on the repayment it belongs to.
-    assert [e.data.get("amount_cents") for e in answer.evidence if e.kind == "card_repayment"] == [1, 2, None]
+    # Each event's amount goes on the repayment it belongs to. Any other is the monthly card spend, as Card sizes it.
+    monthly = mock._data()["customers"]["c_050"]["baselines"]["card"]["monthly_card_spend_cents"]
+    assert [e.data["amount_cents"] for e in answer.evidence if e.kind == "card_repayment"] == [1, 2, monthly]
     assert answer.could_not_determine == ["Why the repayment failed"]
 
 
@@ -668,7 +690,12 @@ def test_this_weeks_inflows_are_set_against_the_level_the_data_holds_as_a_ratio(
     answer = on(mock.cash_flow, customer_id, "income")
 
     assert [evidence.id for evidence in answer.evidence] == [f"agg_{customer_id}_inflows"]
-    assert answer.evidence[0].data == inflows
+    data = dict(answer.evidence[0].data)
+    series = [week["inflow_cents"] for week in data.pop("series")]
+    assert data == inflows
+    # Week by week, the record says the same: it starts at the level the week is set against and ends on this week.
+    level = inflows.get("weekly_inflow_3mo_ago_cents", inflows.get("weekly_inflow_typical_cents", series[-1]))
+    assert (len(series), series[0], series[-1]) == (inflows["weeks"], level, inflows["weekly_inflow_cents"])
 
 
 def test_inflows_are_set_against_three_months_ago_when_the_data_also_holds_a_usual_level(one_file):
@@ -907,12 +934,13 @@ def test_payments_listed_above_the_fall_are_set_out_next_to_the_income_that_came
 
 
 def test_a_stale_account_gets_no_shares_no_summary_and_no_word_on_the_books(one_file):
+    label = named("c_005", "acct_c005_a")
     assert on(mock.cash_flow, "c_005", "transactions").could_not_determine == [
-        "Which payments left through acct_c005_a since it stopped reporting"
+        f"Which payments left through {label} since it stopped reporting"
     ]
     books = on(mock.cash_flow, "c_005", "reconciliation")
     assert (books.findings, books.evidence) == ([], [])
-    assert books.could_not_determine == ["Whether balances and transactions agree: acct_c005_a is not reporting."]
+    assert books.could_not_determine == [f"Whether balances and transactions agree: {label} is not reporting."]
     assert "agg_c_005_payments" not in ask(mock.cash_flow, "c_005").model_dump_json()
 
     # A fall and a payment, with two accounts that do not report: one a day behind, one closed.
@@ -980,13 +1008,25 @@ def test_asked_about_a_linked_account_the_bank_gives_that_account_alone():
     stale = on(mock.cash_flow, "c_005", "accounts", account_id="acct_c005_a")
     fine = on(mock.cash_flow, "c_005", "accounts", account_id="acct_c005_b")
 
+    label = named("c_005", "acct_c005_a")
     assert claims(stale) == (
-        "acct_c005_a is one of the linked accounts. | "
-        "Account acct_c005_a has not reported for 5 days. Its balance since then is not in the figures."
+        f"{label} is one of the linked accounts. | "
+        f"{label} has not reported for 5 days. Its balance since then is not in the figures."
     )
-    assert stale.could_not_determine == ["What acct_c005_a holds since it stopped reporting"]
-    assert claims(fine) == "acct_c005_b is one of the linked accounts."
+    assert stale.could_not_determine == [f"What {label} holds since it stopped reporting"]
+    assert claims(fine) == f"{named('c_005', 'acct_c005_b')} is one of the linked accounts."
     assert [evidence.id for evidence in fine.evidence] == ["acct_c005_b"] and fine.could_not_determine == []
+
+
+def test_an_account_whose_last_digits_the_file_leaves_empty_is_named_without_them(one_file):
+    # Regression: mask: null was written as "••None".
+    named = '{id: acct_c050_a, name: "Chase Business Checking", mask: null,'
+    one_file((ODD % ("[]", "[]")).replace("{id: acct_c050_a,", named))
+
+    answer = on(mock.cash_flow, "c_050", "accounts", account_id="acct_c050_a")
+
+    assert "Chase Business Checking has not reported for 1 day." in claims(answer)
+    assert "None" not in answer.model_dump_json()
 
 
 def test_the_bank_side_names_an_outside_account_only_when_asked_about_it(both_files):

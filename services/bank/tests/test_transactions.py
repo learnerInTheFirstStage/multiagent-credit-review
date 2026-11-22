@@ -76,7 +76,7 @@ def test_a_stale_account_means_no_shares_and_no_summary(client, auth_headers):
     assert ids[0] == "bal_c_005" and sorted(ids[1:]) == [f"txn_c_005_{n:02d}" for n in range(1, 9)]
     assert not [r for r in body["evidence"] if "share_of_fall_bp" in r["data"]]
     assert evidence_by_id(body)["bal_c_005"]["data"]["change_cents"] == -35_000_000
-    assert "acct_c005_a" in body["data"]["not_available"][0]
+    assert "did not report" in body["data"]["not_available"][0]
 
 
 def test_filters_choose_what_is_listed_never_what_a_record_says(client, auth_headers):

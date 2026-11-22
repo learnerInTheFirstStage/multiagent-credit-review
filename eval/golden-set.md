@@ -74,7 +74,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c001_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "U.S. Bank Business Checking",
+          "mask": "3916"
         }
       ]
     },
@@ -144,7 +146,7 @@ income:
 - Weekly inflows are steady at about $100,000 over the last 13 weeks. (agg_c_001_inflows)
 
 accounts:
-- The linked accounts are: acct_c001_a. (acct_c001_a)
+- The linked accounts are: U.S. Bank Business Checking ••3916. (acct_c001_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_001_reconciliation, bal_c_001)
@@ -198,7 +200,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c002_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Wells Fargo Business Checking",
+          "mask": "7364"
         }
       ]
     },
@@ -272,7 +276,7 @@ payee_history about txn_c_002_03:
 - Cannot determine: The payment history of that payee is not in the data.
 
 accounts:
-- The linked accounts are: acct_c002_a. (acct_c002_a)
+- The linked accounts are: Wells Fargo Business Checking ••7364. (acct_c002_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_002_reconciliation, bal_c_002)
@@ -326,7 +330,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c003_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Bank of America Business Checking",
+          "mask": "5937"
         }
       ]
     },
@@ -393,7 +399,7 @@ income:
 - Weekly inflows have shrunk to $30,000, from $170,000 three months ago. (agg_c_003_inflows)
 
 accounts:
-- The linked accounts are: acct_c003_a. (acct_c003_a)
+- The linked accounts are: Bank of America Business Checking ••5937. (acct_c003_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_003_reconciliation, bal_c_003)
@@ -445,7 +451,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c004_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "PNC Business Checking",
+          "mask": "3158"
         }
       ]
     },
@@ -513,7 +521,7 @@ income:
 - Inflows this week were $60,000 against a usual $120,000. One week is too short to call a trend. (agg_c_004_inflows)
 
 accounts:
-- The linked accounts are: acct_c004_a. (acct_c004_a)
+- The linked accounts are: PNC Business Checking ••3158. (acct_c004_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_004_reconciliation, bal_c_004)
@@ -568,11 +576,15 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c005_a",
-          "last_synced": "2026-11-05"
+          "last_synced": "2026-11-05",
+          "name": "Chase Business Checking",
+          "mask": "4821"
         },
         {
           "id": "acct_c005_b",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Truist Business Checking",
+          "mask": "6402"
         }
       ]
     },
@@ -633,18 +645,18 @@ transactions:
 - $9,000 was paid in running costs to a payee the customer pays every week. (txn_c_005_06)
 - $4,000 was paid in running costs to a payee the customer pays every week. (txn_c_005_07)
 - $3,000 was paid in running costs to a payee the customer pays every week. (txn_c_005_08)
-- Cannot determine: Which payments left through acct_c005_a since it stopped reporting
+- Cannot determine: Which payments left through Chase Business Checking ••4821 since it stopped reporting
 
 income:
 - Weekly inflows are steady at about $80,000 over the last 13 weeks. (agg_c_005_inflows)
 
 accounts:
-- Account acct_c005_a has not reported for 5 days. Its balance since then is not in the figures. (acct_c005_a)
-- The linked accounts are: acct_c005_a, acct_c005_b. (acct_c005_a, acct_c005_b)
-- Cannot determine: What acct_c005_a holds since it stopped reporting
+- Chase Business Checking ••4821 has not reported for 5 days. Its balance since then is not in the figures. (acct_c005_a)
+- The linked accounts are: Chase Business Checking ••4821, Truist Business Checking ••6402. (acct_c005_a, acct_c005_b)
+- Cannot determine: What Chase Business Checking ••4821 holds since it stopped reporting
 
 reconciliation:
-- Cannot determine: Whether balances and transactions agree: acct_c005_a is not reporting.
+- Cannot determine: Whether balances and transactions agree: Chase Business Checking ••4821 is not reporting.
 
 prior_year:
 - Cannot determine: Figures for the same weeks last year are not in the data.
@@ -695,7 +707,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c006_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Capital One Business Checking",
+          "mask": "8275"
         }
       ]
     },
@@ -762,7 +776,7 @@ income:
 - Weekly inflows have almost stopped: $5,000 against a usual $95,000. (agg_c_006_inflows)
 
 accounts:
-- The linked accounts are: acct_c006_a. (acct_c006_a)
+- The linked accounts are: Capital One Business Checking ••8275. (acct_c006_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_006_reconciliation, bal_c_006)
@@ -816,7 +830,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c007_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Citi Business Checking",
+          "mask": "2649"
         }
       ]
     },
@@ -929,7 +945,7 @@ payee_history about txn_c_007_01:
 - Cannot determine: The payment history of that payee is not in the data.
 
 accounts:
-- The linked accounts are: acct_c007_a. (acct_c007_a)
+- The linked accounts are: Citi Business Checking ••2649. (acct_c007_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_007_reconciliation, bal_c_007)
@@ -981,7 +997,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c008_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Chase Business Checking",
+          "mask": "5713"
         }
       ]
     },
@@ -1061,7 +1079,7 @@ payee_history about txn_c_008_03:
 - The payee of txn_c_008_03 was never paid before. (txn_c_008_03)
 
 accounts:
-- The linked accounts are: acct_c008_a. (acct_c008_a)
+- The linked accounts are: Chase Business Checking ••5713. (acct_c008_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_008_reconciliation, bal_c_008)
@@ -1115,7 +1133,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c009_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Wells Fargo Business Checking",
+          "mask": "9058"
         }
       ]
     },
@@ -1189,7 +1209,7 @@ payee_history about txn_c_009_01:
 - This payment of $45,000 is 100% of the most it was usually paid ($45,000). (agg_c_009_payee_history, txn_c_009_01)
 
 accounts:
-- The linked accounts are: acct_c009_a. (acct_c009_a)
+- The linked accounts are: Wells Fargo Business Checking ••9058. (acct_c009_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_009_reconciliation, bal_c_009)
@@ -1244,7 +1264,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c010_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Bank of America Business Checking",
+          "mask": "7290"
         }
       ]
     },
@@ -1315,7 +1337,7 @@ income:
 - Weekly inflows are steady at about $80,000 over the last 13 weeks. (agg_c_010_inflows)
 
 accounts:
-- The linked accounts are: acct_c010_a. (acct_c010_a)
+- The linked accounts are: Bank of America Business Checking ••7290. (acct_c010_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_010_reconciliation, bal_c_010)
@@ -1370,7 +1392,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c011_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "PNC Business Checking",
+          "mask": "4386"
         }
       ]
     },
@@ -1444,7 +1468,7 @@ payee_history about txn_c_011_01:
 - This payment of $170,000 is 425% of the most it was usually paid ($40,000). (agg_c_011_payee_history, txn_c_011_01)
 
 accounts:
-- The linked accounts are: acct_c011_a. (acct_c011_a)
+- The linked accounts are: PNC Business Checking ••4386. (acct_c011_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_011_reconciliation, bal_c_011)
@@ -1498,7 +1522,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c012_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "U.S. Bank Business Checking",
+          "mask": "6147"
         }
       ]
     },
@@ -1571,7 +1597,7 @@ payee_history about txn_c_012_01:
 - Cannot determine: The payment history of that payee is not in the data.
 
 accounts:
-- The linked accounts are: acct_c012_a. (acct_c012_a)
+- The linked accounts are: U.S. Bank Business Checking ••6147. (acct_c012_a)
 
 reconciliation:
 - The transactions in the window add up to $95,000, but the balance fell by $290,000. The other $195,000 matches no transaction: balances and transactions do not reconcile. (agg_c_012_reconciliation, bal_c_012)
@@ -1628,7 +1654,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c102_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Wells Fargo Business Checking",
+          "mask": "7364"
         }
       ]
     },
@@ -1705,7 +1733,7 @@ payee_history about txn_c_102_03:
 - Cannot determine: The payment history of that payee is not in the data.
 
 accounts:
-- The linked accounts are: acct_c102_a. (acct_c102_a)
+- The linked accounts are: Wells Fargo Business Checking ••7364. (acct_c102_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_102_reconciliation, bal_c_102)
@@ -1761,7 +1789,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c106_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Capital One Business Checking",
+          "mask": "8275"
         }
       ]
     },
@@ -1829,7 +1859,7 @@ income:
 - Weekly inflows have almost stopped: $5,000 against a usual $95,000. (agg_c_106_inflows)
 
 accounts:
-- The linked accounts are: acct_c106_a. (acct_c106_a)
+- The linked accounts are: Capital One Business Checking ••8275. (acct_c106_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_106_reconciliation, bal_c_106)
@@ -1886,7 +1916,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c110_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Bank of America Business Checking",
+          "mask": "7290"
         }
       ]
     },
@@ -1957,7 +1989,7 @@ income:
 - Weekly inflows are steady at about $80,000 over the last 13 weeks. (agg_c_110_inflows)
 
 accounts:
-- The linked accounts are: acct_c110_a. (acct_c110_a)
+- The linked accounts are: Bank of America Business Checking ••7290. (acct_c110_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_110_reconciliation, bal_c_110)
@@ -2016,7 +2048,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c111_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Bank of America Business Checking",
+          "mask": "7290"
         }
       ]
     },
@@ -2087,7 +2121,7 @@ income:
 - Weekly inflows are steady at about $80,000 over the last 13 weeks. (agg_c_111_inflows)
 
 accounts:
-- The linked accounts are: acct_c111_a. (acct_c111_a)
+- The linked accounts are: Bank of America Business Checking ••7290. (acct_c111_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_111_reconciliation, bal_c_111)
@@ -2143,7 +2177,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c103_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Bank of America Business Checking",
+          "mask": "5937"
         }
       ]
     },
@@ -2210,7 +2246,7 @@ income:
 - Weekly inflows have shrunk to $30,000, from $170,000 three months ago. (agg_c_103_inflows)
 
 accounts:
-- The linked accounts are: acct_c103_a. (acct_c103_a)
+- The linked accounts are: Bank of America Business Checking ••5937. (acct_c103_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_103_reconciliation, bal_c_103)
@@ -2264,7 +2300,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c201_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "U.S. Bank Business Checking",
+          "mask": "3916"
         }
       ]
     },
@@ -2338,7 +2376,7 @@ payee_history about txn_c_201_03:
 - Cannot determine: The payment history of that payee is not in the data.
 
 accounts:
-- The linked accounts are: acct_c201_a. (acct_c201_a)
+- The linked accounts are: U.S. Bank Business Checking ••3916. (acct_c201_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_201_reconciliation, bal_c_201)
@@ -2392,7 +2430,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c208_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Chase Business Checking",
+          "mask": "5713"
         }
       ]
     },
@@ -2476,7 +2516,7 @@ payee_history about txn_c_208_04:
 - Cannot determine: The payment history of that payee is not in the data.
 
 accounts:
-- The linked accounts are: acct_c208_a. (acct_c208_a)
+- The linked accounts are: Chase Business Checking ••5713. (acct_c208_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_208_reconciliation, bal_c_208)
@@ -2532,7 +2572,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c203_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Bank of America Business Checking",
+          "mask": "5937"
         }
       ]
     },
@@ -2604,7 +2646,7 @@ payee_history about txn_c_203_02:
 - Cannot determine: The payment history of that payee is not in the data.
 
 accounts:
-- The linked accounts are: acct_c203_a. (acct_c203_a)
+- The linked accounts are: Bank of America Business Checking ••5937. (acct_c203_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_203_reconciliation, bal_c_203)
@@ -2662,7 +2704,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c307_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Citi Business Checking",
+          "mask": "2649"
         }
       ]
     },
@@ -2775,7 +2819,7 @@ payee_history about txn_c_307_01:
 - Cannot determine: The payment history of that payee is not in the data.
 
 accounts:
-- The linked accounts are: acct_c307_a. (acct_c307_a)
+- The linked accounts are: Citi Business Checking ••2649. (acct_c307_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_307_reconciliation, bal_c_307)
@@ -2833,7 +2877,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c314_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "PNC Business Checking",
+          "mask": "3158"
         }
       ]
     },
@@ -2953,7 +2999,7 @@ income:
 - Inflows this week were $60,000 against a usual $120,000. One week is too short to call a trend. (agg_c_314_inflows)
 
 accounts:
-- The linked accounts are: acct_c314_a. (acct_c314_a)
+- The linked accounts are: PNC Business Checking ••3158. (acct_c314_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_314_reconciliation, bal_c_314)
@@ -3007,7 +3053,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c301_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "U.S. Bank Business Checking",
+          "mask": "3916"
         }
       ]
     },
@@ -3129,7 +3177,7 @@ income:
 - Weekly inflows are steady at about $100,000 over the last 13 weeks. (agg_c_301_inflows)
 
 accounts:
-- The linked accounts are: acct_c301_a. (acct_c301_a)
+- The linked accounts are: U.S. Bank Business Checking ••3916. (acct_c301_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_301_reconciliation, bal_c_301)
@@ -3185,7 +3233,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c303_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Bank of America Business Checking",
+          "mask": "5937"
         }
       ]
     },
@@ -3292,7 +3342,7 @@ income:
 - Weekly inflows have shrunk to $30,000, from $170,000 three months ago. (agg_c_303_inflows)
 
 accounts:
-- The linked accounts are: acct_c303_a. (acct_c303_a)
+- The linked accounts are: Bank of America Business Checking ••5937. (acct_c303_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_303_reconciliation, bal_c_303)
@@ -3346,7 +3396,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c304_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "PNC Business Checking",
+          "mask": "3158"
         }
       ]
     },
@@ -3468,7 +3520,7 @@ income:
 - Inflows this week were $60,000 against a usual $120,000. One week is too short to call a trend. (agg_c_304_inflows)
 
 accounts:
-- The linked accounts are: acct_c304_a. (acct_c304_a)
+- The linked accounts are: PNC Business Checking ••3158. (acct_c304_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_304_reconciliation, bal_c_304)
@@ -3526,7 +3578,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c107_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Citi Business Checking",
+          "mask": "2649"
         }
       ]
     },
@@ -3639,7 +3693,7 @@ payee_history about txn_c_107_01:
 - Cannot determine: The payment history of that payee is not in the data.
 
 accounts:
-- The linked accounts are: acct_c107_a. (acct_c107_a)
+- The linked accounts are: Citi Business Checking ••2649. (acct_c107_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_107_reconciliation, bal_c_107)
@@ -3693,7 +3747,9 @@ The signal the case starts with:
       "accounts": [
         {
           "id": "acct_c013_a",
-          "last_synced": "2026-11-10"
+          "last_synced": "2026-11-10",
+          "name": "Capital One Business Checking",
+          "mask": "7045"
         }
       ]
     },
@@ -3762,7 +3818,7 @@ income:
 - Weekly inflows are steady at about $76,000 over the last 13 weeks. (agg_c_013_inflows)
 
 accounts:
-- The linked accounts are: acct_c013_a. (acct_c013_a)
+- The linked accounts are: Capital One Business Checking ••7045. (acct_c013_a)
 
 reconciliation:
 - Balances and transactions reconcile: the transactions listed for the window add up to the whole change. (agg_c_013_reconciliation, bal_c_013)

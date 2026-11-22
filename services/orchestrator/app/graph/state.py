@@ -40,6 +40,8 @@ class CaseState(TypedDict, total=False):
     drafts: int
     check: dict
     decisions: Annotated[list[dict], operator.add]
+    # What the customer is asked for once request_documents is approved, drafted by code. Kept after the case closes.
+    documents_request: dict | None
     action: dict | None
     # The Orchestrator's own records, written once when the case opens: signal facts and earlier reviews.
     facts: list[dict]

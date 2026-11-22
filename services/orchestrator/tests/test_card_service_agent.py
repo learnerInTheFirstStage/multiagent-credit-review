@@ -18,7 +18,7 @@ from app.agents.card_service import card_service
 from app.agents.card_service.agent import MAX_TOOL_CALLS
 from app.graph import build
 from contracts import InvestigateRequest, InvestigateResponse
-from tests._card_service_helpers import CardStub, ScriptedChatModel, answer, recorded, request
+from tests._card_service_helpers import RECORDED, CardStub, ScriptedChatModel, answer, recorded, request
 
 FAILED = "rep_c_010_202611"
 BALANCE = "bal_card_c_010_20261110"
@@ -304,3 +304,32 @@ def test_same_signature_and_kinds_as_the_stand_in():
     assert real.agent == stand_in.agent == "credit_behavior"
     # Every kind the stand-in returns, the real agent returns too, so the graph's rules meet them.
     assert {e.kind for e in stand_in.evidence} <= {e.kind for e in real.evidence}
+
+
+def differences(kind: str, tool: str, keys: tuple[str, ...], *, latest: bool = False) -> list[tuple]:
+    """Where the stand-in's records of a kind differ from the recorded Card's on these keys, paired in order.
+
+    Card may list more than the stand-in holds: its first are compared, or with latest=True its last."""
+    found = []
+    for customer_id in sorted({key.split("/")[0] for key in RECORDED}):
+        stand_in = mock.credit_behavior(InvestigateRequest(**request(customer_id, None))).evidence
+        ours = [e.data for e in stand_in if e.kind == kind]
+        cards = [e["data"] for e in recorded(customer_id, tool)["evidence"] if e["kind"] == kind]
+        cards = cards[-len(ours):] if latest else cards[: len(ours)]
+        found += [(customer_id, number, key, mine.get(key), card.get(key))
+                  for number, (mine, card) in enumerate(zip(ours, cards, strict=True), 1)
+                  for key in keys if mine.get(key) != card.get(key)]
+    return found
+
+
+def test_the_stand_in_dates_and_sizes_a_repayment_as_card_does():
+    # The last three, oldest first on both sides. Card also names the paying account and why a debit came back:
+    # the stand-in leaves both out.
+    as_card = ("status", "due", "amount_cents", "statement_period_start", "statement_period_end", "payment_method",
+               "days_late", "returned_on")
+    assert differences("card_repayment", "repayments", as_card, latest=True) == []
+
+
+def test_the_stand_in_dates_the_card_balance_as_card_does():
+    # Card's first balance is the day asked about, and the stand-in holds that day alone.
+    assert differences("card_balance", "utilization", ("date", "credit_limit_cents", "balance_cents")) == []

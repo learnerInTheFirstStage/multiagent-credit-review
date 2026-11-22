@@ -33,7 +33,7 @@ customers:
       bank:
         cash_now_cents: 48000000
         cash_week_ago_cents: 120000000
-        linked_accounts: [{id: acct_c102_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c102_a, name: "Wells Fargo Business Checking", mask: "7364", active: true, days_stale: 0}]
       card: {credit_limit_cents: 22000000, utilization_pct: 0.28, last_3_repayments: [paid, paid, paid]}
     signal_window:
       bank_events:
@@ -63,7 +63,7 @@ customers:
       bank:
         cash_now_cents: 30000000
         cash_week_ago_cents: 44000000
-        linked_accounts: [{id: acct_c103_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c103_a, name: "Bank of America Business Checking", mask: "5937", active: true, days_stale: 0}]
       card: {credit_limit_cents: 12500000, utilization_pct: 0.40, last_3_repayments: [paid, paid, paid]}
     signal_window:
       bank_events:
@@ -89,7 +89,7 @@ customers:
       bank:
         cash_now_cents: 21800000
         cash_week_ago_cents: 33800000
-        linked_accounts: [{id: acct_c106_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c106_a, name: "Capital One Business Checking", mask: "8275", active: true, days_stale: 0}]
       card: {credit_limit_cents: 8000000, utilization_pct: 0.45, last_3_repayments: [paid, paid, paid]}
     signal_window:
       bank_events:
@@ -116,7 +116,7 @@ customers:
       bank:
         cash_now_cents: 29000000
         cash_week_ago_cents: 52000000
-        linked_accounts: [{id: acct_c110_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c110_a, name: "Bank of America Business Checking", mask: "7290", active: true, days_stale: 0}]
       card: {credit_limit_cents: 10000000, utilization_pct: 0.92, last_3_repayments: [paid, paid, failed]}
     signal_window:
       bank_events:
@@ -146,7 +146,7 @@ customers:
       bank:
         cash_now_cents: 29000000
         cash_week_ago_cents: 52000000
-        linked_accounts: [{id: acct_c111_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c111_a, name: "Bank of America Business Checking", mask: "7290", active: true, days_stale: 0}]
       card: {credit_limit_cents: 10000000, utilization_pct: 0.92, last_3_repayments: [paid, paid, failed]}
     signal_window:
       bank_events:
@@ -176,7 +176,7 @@ customers:
       bank:
         cash_now_cents: 49200000
         cash_week_ago_cents: 90000000
-        linked_accounts: [{id: acct_c201_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c201_a, name: "U.S. Bank Business Checking", mask: "3916", active: true, days_stale: 0}]
       card: {credit_limit_cents: 17000000, utilization_pct: 0.35, last_3_repayments: [paid, paid, paid]}
     signal_window:
       bank_events:
@@ -205,7 +205,7 @@ customers:
       bank:
         cash_now_cents: 45400000
         cash_week_ago_cents: 83600000
-        linked_accounts: [{id: acct_c208_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c208_a, name: "Chase Business Checking", mask: "5713", active: true, days_stale: 0}]
       card: {credit_limit_cents: 19000000, utilization_pct: 0.38, last_3_repayments: [paid, paid, paid]}
     signal_window:
       bank_events:
@@ -235,7 +235,7 @@ customers:
       bank:
         cash_now_cents: 29800000
         cash_week_ago_cents: 44000000
-        linked_accounts: [{id: acct_c203_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c203_a, name: "Bank of America Business Checking", mask: "5937", active: true, days_stale: 0}]
       card: {credit_limit_cents: 12500000, utilization_pct: 0.85, last_3_repayments: [paid, paid, late]}
     signal_window:
       bank_events:
@@ -267,7 +267,7 @@ customers:
       bank:
         cash_now_cents: 49500000
         cash_week_ago_cents: 90000000
-        linked_accounts: [{id: acct_c301_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c301_a, name: "U.S. Bank Business Checking", mask: "3916", active: true, days_stale: 0}]
       card: {credit_limit_cents: 17000000, utilization_pct: 0.35, last_3_repayments: [paid, paid, paid]}
     signal_window:
       bank_events:
@@ -295,7 +295,7 @@ customers:
       bank:
         cash_now_cents: 30000000
         cash_week_ago_cents: 44000000
-        linked_accounts: [{id: acct_c303_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c303_a, name: "Bank of America Business Checking", mask: "5937", active: true, days_stale: 0}]
       card: {credit_limit_cents: 12500000, utilization_pct: 0.85, last_3_repayments: [paid, paid, late]}
     signal_window:
       bank_events:
@@ -321,7 +321,7 @@ customers:
       bank:
         cash_now_cents: 40600000
         cash_week_ago_cents: 62000000
-        linked_accounts: [{id: acct_c307_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c307_a, name: "Citi Business Checking", mask: "2649", active: true, days_stale: 0}]
       card: {credit_limit_cents: 13000000, utilization_pct: 0.50, last_3_repayments: [paid, paid, paid]}
     signal_window:
       bank_events:
@@ -353,7 +353,7 @@ customers:
       bank:
         cash_now_cents: 36000000
         cash_week_ago_cents: 64000000
-        linked_accounts: [{id: acct_c314_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c314_a, name: "PNC Business Checking", mask: "3158", active: true, days_stale: 0}]
       card: {credit_limit_cents: 15000000, utilization_pct: 0.58, last_3_repayments: [paid, paid, paid]}
     signal_window:
       bank_events:
@@ -379,7 +379,7 @@ customers:
       bank:
         cash_now_cents: 36000000
         cash_week_ago_cents: 64000000
-        linked_accounts: [{id: acct_c304_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c304_a, name: "PNC Business Checking", mask: "3158", active: true, days_stale: 0}]
       card: {credit_limit_cents: 15000000, utilization_pct: 0.58, last_3_repayments: [paid, paid, paid]}
     signal_window:
       bank_events:
@@ -406,7 +406,7 @@ customers:
       bank:
         cash_now_cents: 40600000
         cash_week_ago_cents: 66000000
-        linked_accounts: [{id: acct_c107_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c107_a, name: "Citi Business Checking", mask: "2649", active: true, days_stale: 0}]
       card: {credit_limit_cents: 13000000, utilization_pct: 0.50, last_3_repayments: [paid, paid, late]}
     signal_window:
       bank_events:
@@ -444,7 +444,7 @@ customers:
       bank:
         cash_now_cents: 41500000
         cash_week_ago_cents: 41640000
-        linked_accounts: [{id: acct_c013_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c013_a, name: "Capital One Business Checking", mask: "7045", active: true, days_stale: 0}]
       card: {credit_limit_cents: 10000000, utilization_pct: 0.88, last_3_repayments: [paid, paid, failed]}
     signal_window:
       bank_events:

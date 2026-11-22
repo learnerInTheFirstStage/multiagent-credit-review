@@ -14,6 +14,7 @@ from app import dev_token
 from app.api import signals
 from app.db import Base, SessionLocal, engine
 from app.db.models import Case, SignalRow
+from app.graph import facts
 from app.main import app
 from tests.conftest import bearer, sender
 from tests.test_signals import SIGNAL  # c_010
@@ -102,8 +103,10 @@ def test_the_queue_shows_a_token_only_its_own_customers_the_longest_waiting_firs
     assert first["status"] == "queued"
     # outage: why the case waits for Bank or Card, or failed for want of them (tests/test_outage_wait.py).
     # signal_reasons: the review reasons the case's signals named, in arrival order (tests/test_cases.py).
+    # recommendation, confidence and waiting_for as on the case page (tests/test_cases.py); cut_share_bp below.
     assert set(first) == {
         "case_id", "customer_id", "status", "created_at", "updated_at", "outage", "signal_reasons",
+        "recommendation", "confidence", "cut_share_bp", "waiting_for", "imported", "documents_due",
     }
     assert first["outage"] is None
 
@@ -146,6 +149,41 @@ def test_the_queue_is_read_a_page_at_a_time_and_the_total_counts_every_match(api
     assert [row["case_id"] for row in second["cases"]] == [cases["c_007"]]
     assert second["total"] == 3
     assert past_the_end == {"cases": [], "total": 3}
+
+
+def cut_on_record(signal: dict) -> int | None:
+    """The engine's cut as the signal's own record of the limit gives it, the one a report cites."""
+    window = {"start": signal["as_of"], "end": signal["as_of"]}  # the limit's record does not use it
+    [limit] = [record for record in facts.signal_facts(signal, window) if record["id"] == "sig_limit"]
+    return limit["data"].get("cut_share_bp")
+
+
+@pytest.mark.parametrize(
+    "engine_limit_cents",
+    [
+        pytest.param(SIGNAL["current_limit_cents"] // 3, id="a cut that is not a whole basis point"),
+        pytest.param(SIGNAL["current_limit_cents"], id="no cut"),
+    ],
+)
+def test_a_queue_row_carries_the_engines_cut_as_the_signals_record_of_it_says(api, engine_limit_cents):
+    signal = {**SIGNAL, "engine_limit_cents": engine_limit_cents}
+    api.post("/signals", json=signal, headers=sender())
+
+    [row] = api.get("/cases", headers=bearer()).json()["cases"]
+
+    assert row["cut_share_bp"] == cut_on_record(signal)
+    assert (row["recommendation"], row["confidence"], row["waiting_for"]) == (None, None, None)  # nobody ran it
+
+
+def test_a_queue_row_keeps_the_cut_of_the_signal_the_case_runs_on_when_another_joins(api):
+    api.post("/signals", json=SIGNAL, headers=sender())
+    # Sorts after the first, as received_at can tie within a second.
+    joined = {**SIGNAL, "signal_id": "sig_552", "engine_limit_cents": SIGNAL["current_limit_cents"] // 3}
+    assert api.post("/signals", json=joined, headers=sender()).json()["result"] == "joined"
+
+    [row] = api.get("/cases", headers=bearer()).json()["cases"]
+
+    assert row["cut_share_bp"] == cut_on_record(SIGNAL) != cut_on_record(joined)
 
 
 @pytest.mark.parametrize(

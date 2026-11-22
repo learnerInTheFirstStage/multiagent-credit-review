@@ -263,6 +263,14 @@ def test_the_fact_that_separates_the_two_failed_repayments_is_in_the_evidence_a_
     assert unpaid["still_unpaid"] is True and "repaid_after_days" not in unpaid
 
 
+def test_a_repayment_is_due_and_sized_the_same_in_the_signal_and_in_the_card_sides_record(both_files):
+    # A report may cite either: sig_repayments, which code makes from the signal, or the card side's own records.
+    for cid, customer in DATA.items():
+        records = [e.data for e in ask(SIDES["credit_behavior"], cid).evidence if e.kind == "card_repayment"]
+        ours = [{key: data.get(key) for key in ("due", "amount_cents", "status")} for data in records]
+        assert ours == signal_for(customer, TODAY)["snapshot"]["card"]["repayments"], cid
+
+
 def test_the_review_document_is_what_the_data_and_the_stand_ins_give_today():
     # eval/golden-set.md is what a person signs off. It is generated, and goes stale without anyone noticing.
     made = subprocess.run(

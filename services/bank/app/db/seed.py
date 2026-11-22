@@ -37,6 +37,8 @@ id, a category and a counterparty: nothing is counted that is not listed.
   txn_<customer>_y<n>_<nn> for the n-th of those weeks. Each week's totals are a prior_year_weekly row.
   Last year's large payments are among those running costs: a row to the story's vendor would give
   it a payee history, which the rules read (G-02).
+- A linked account's `name` and `mask` (the last digits of its number) are stored as the file gives
+  them, and left empty when it gives none.
 """
 
 from __future__ import annotations
@@ -421,6 +423,8 @@ def seed(session: Session, yaml_paths: list[Path] | None = None) -> dict:
                     opened_at=opened,
                     last_reported_at=plan.as_of - timedelta(days=int(account.get("days_stale", 0))),
                     active=bool(account.get("active", True)),
+                    name=account.get("name"),
+                    mask=account.get("mask"),
                 )
             )
         session.flush()  # accounts before the rows that point at them

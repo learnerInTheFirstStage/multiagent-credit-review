@@ -31,6 +31,8 @@ class User(BaseModel):
     role: Literal["analyst", "manager", "admin", "service"]
     # The customers this user may see. A service token names none here.
     customers: list[str] = []
+    # The person's email from the Auth0 Action, for showing who decided in place of the sub. sub stays who decided.
+    name: str | None = None
     # Passed on to Card when this user approves an action. Never stored.
     token: str = Field(exclude=True, repr=False)
 
@@ -73,7 +75,11 @@ def _person(token: str, domain: str, audience: str) -> dict:
     if role not in PEOPLE:
         # No service signs in through Auth0, and a person with no role has nothing to do here.
         raise jwt.InvalidTokenError("no person's role")
-    return {"sub": claims["sub"], "role": role, "customers": claims.get(f"{CLAIMS}customers", [])}
+    person = {"sub": claims["sub"], "role": role, "customers": claims.get(f"{CLAIMS}customers", [])}
+    # Only a non-empty string: a token from before the Action added it, or a malformed one, just shows the sub.
+    if isinstance(email := claims.get(f"{CLAIMS}email"), str) and email.strip():
+        person["name"] = email.strip()
+    return person
 
 
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> User:

@@ -14,8 +14,9 @@ evidence but not written about.
 
 Amounts and shares are written with app.graph.facts.usd and .pct, as the case graph shows them, so every
 finding here passes the figure check (guardrails.check). Nothing here repeats text a customer wrote: a
-value goes into a sentence only if it is an id, a date or a number. A record that lacks a field a sentence
-needs gets the shorter sentence, or none.
+value goes into a sentence only if it is an id, a date or a number, or a linked account's name that
+app.graph.facts.account_label lets through (a bank's name for the account, never six words of text). A
+record that lacks a field a sentence needs gets the shorter sentence, or none.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.agents.cash_flow.tools import OUT_OF_VIEW, on_topic
-from app.graph.facts import pct, usd
+from app.graph.facts import account_label, pct, usd
 from contracts import Finding
 
 log = logging.getLogger(__name__)
@@ -152,8 +153,13 @@ def weekly_inflow_series(record: dict) -> Finding | None:
     return _found(sentence, record, confidence="medium" if trend == "too_short_to_tell" else "high")
 
 
+def _account(record: dict) -> str:
+    """A linked account as a person reads it, "Chase Business Checking ••4821", else "Account <id>"."""
+    return account_label(record["data"]) or f"Account {record['id']}"
+
+
 def linked_account(record: dict) -> Finding | None:
-    d, account = record["data"], record["id"]
+    d, account = record["data"], _account(record)
     synced = f" It last reported on {d['last_synced']}." if _DAY.match(str(d.get("last_synced", ""))) else ""
     days = d.get("days_stale")
     if d.get("is_stale") is True:
@@ -163,9 +169,9 @@ def linked_account(record: dict) -> Finding | None:
             silent = f"has not reported for {_days(days)}"
         else:
             silent = "has not reported"
-        return _found(f"Account {account} {silent}.{synced} Its balance since then is not in the figures.", record)
+        return _found(f"{account} {silent}.{synced} Its balance since then is not in the figures.", record)
     if d.get("is_stale") is False:
-        return _found(f"Account {account} is linked and reporting.{synced}", record)
+        return _found(f"{account} is linked and reporting.{synced}", record)
     return None
 
 
@@ -217,7 +223,7 @@ _WRITERS: dict[str, Callable[[dict], Finding | None]] = {
 
 # What a hard fact says when its record lacks the fields a longer sentence needs. No figures.
 _SHORT = {
-    "linked_account": "Account {id} is not reporting.",
+    "linked_account": "{account} is not reporting.",
     "balance_reconciliation": "Balances and transactions do not reconcile.",
     "weekly_inflow_series": "Weekly inflows have stopped or are shrinking.",
     "bank_transaction": "A large part of the fall went to an account out of view or to a new payee.",
@@ -263,7 +269,7 @@ def hard_facts(records: dict[str, dict], request: dict[str, Any]) -> list[Findin
     out = []
     for record in records.values():
         if on_topic(record, request) and is_hard_fact(record):
-            finding = write(record, records) or _found(_SHORT[record["kind"]].format(id=record["id"]), record)
+            finding = write(record, records) or _found(_SHORT[record["kind"]].format(account=_account(record)), record)
             out.append(finding)
     return out
 
@@ -283,7 +289,8 @@ def _about_account(account: str, records: dict[str, dict]) -> list[Finding]:
     if not linked:
         return out
     if account in records and records[account]["kind"] == "linked_account":
-        return [_found(f"{account} is one of the linked accounts.", records[account]), *out]
+        named = account_label(records[account]["data"]) or account
+        return [_found(f"{named} is one of the linked accounts.", records[account]), *out]
     out.insert(0, _found(f"{account} is not one of the linked accounts.", *linked))
     sent = [r for r in records.values() if r["kind"] == "bank_transaction" and r["data"].get("to_account") == account]
     out += [f for r in sent if (f := bank_transaction(r)) is not None]

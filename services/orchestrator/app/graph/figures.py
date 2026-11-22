@@ -22,6 +22,9 @@ _IDS = re.compile(
     r"(?:(?:txn|acct|bal|agg|rep|ctx|crd|sig|hist|xs|case|seed)_[A-Za-z\d_]+|c_\d{3}|G-\d{2}[a-z]?)"
     r"(?![A-Za-z\d])"
 )
+# So do the last digits of an account number after two bullets, the way code names a linked account ("Chase
+# Business Checking ••4821", facts.account_label). A longer run of digits after the bullets is a figure still.
+_MASK = re.compile(r"••[A-Za-z\d]{2,4}(?![A-Za-z\d]|[.,]\d)")
 
 # Not inside a word, and not the decimals of a number. A full stop after a letter ends a sentence: "fell.90,000".
 _FREE = r"(?<!\w)(?<!\d\.)"
@@ -156,6 +159,7 @@ def _size(match: re.Match) -> str:
 def _scan(text: str, *, marked_only: bool = False) -> list[_Found]:
     written, found = text, []
     text = _take(text, _IDS, lambda match: None, found)
+    text = _take(text, _MASK, lambda match: None, found)
     # With the ids gone, an underscore is markdown: "_90,000_" is 90,000.
     text = text.replace("_", " ")
     # Before the dates and years: the number after a $ or a × is never one. A number taken here, as by

@@ -25,6 +25,8 @@ _WITHHELD = {"withheld": "text written by the customer or a person"}
 _AVERAGE_DAYS = 30  # the signal's cash_30d_avg_cents
 _SHOWN_REVIEWS = 3  # earlier reviews that get a record of their own
 _OWN_IDS = ("sig_", "hist_", "xs_")  # the prefixes of the records only the Orchestrator makes (1.4)
+_ACCOUNT_NAME = re.compile(r"[A-Za-z][A-Za-z .&'-]{0,63}")
+_MASK = re.compile(r"[A-Za-z0-9]{2,4}")
 
 
 def _record(id: str, kind: str, data: dict) -> dict:
@@ -51,6 +53,27 @@ def pct(bp: int) -> str:
     if 0 < bp < 50:
         return "under 1%"
     return f"{(bp + 50) // 100}%"
+
+
+def written_date(day: str) -> str:
+    """A YYYY-MM-DD day as a customer reads it: "Dec 5, 2026"."""
+    when = date.fromisoformat(day)
+    return f"{when:%b} {when.day}, {when.year}"
+
+
+def account_label(account: dict) -> str | None:
+    """How a person knows a linked account, "Chase Business Checking ••4821": a linked_account record's data or a
+    signal's account. None when it has no name code may write.
+
+    Code writes the name into sentences that reach a model unmarked (a specialist's hard facts), and a name can be
+    one the customer gave the account. So only a name that reads as a bank's name for an account is used: letters,
+    spaces and .&'- only, and at most five words, so that it is never six words of customer text in a row
+    (cash_flow.guardrails.QUOTE_WORDS). The mask is used when it is 2 to 4 letters or digits, as a bank feed gives it.
+    """
+    name, mask = account.get("name"), account.get("mask")
+    if not isinstance(name, str) or not _ACCOUNT_NAME.fullmatch(name) or len(re.findall(r"[A-Za-z']+", name)) > 5:
+        return None
+    return f"{name} ••{mask}" if isinstance(mask, str) and _MASK.fullmatch(mask) else name
 
 
 def _text(value, untrusted: bool) -> dict:
@@ -173,6 +196,8 @@ def signal_facts(signal: dict, window: dict) -> list[dict]:
     accounts = [
         {
             "id": account["id"],
+            # How a person knows the account, when the signal says (account_label).
+            **{key: account[key] for key in ("name", "mask") if account.get(key) is not None},
             "last_synced": account["last_synced"],
             "days_behind": (as_of - date.fromisoformat(account["last_synced"])).days,
         }
@@ -217,7 +242,12 @@ def history_facts(reviews: list[dict], signal: dict) -> list[dict]:
     earlier.sort(key=lambda pair: pair[0])  # newest first
 
     in_window = [review for days_before, review in earlier if days_before <= policy.REPEAT_WINDOW_DAYS]
-    requests = [review for review in in_window if review["approved"] and _decided(review) == "request_documents"]
+    # A request that reached the documents step counts however the case closed after it. Before that step existed
+    # (and in the seeds) an approved request closed the case as done.
+    requests = [
+        review for review in in_window
+        if review.get("requested_documents") or (review["approved"] and _decided(review) == "request_documents")
+    ]
     summary = {
         "earlier_reviews": len(earlier),
         "approved_reviews": sum(1 for _, review in earlier if review["approved"]),

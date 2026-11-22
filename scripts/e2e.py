@@ -30,7 +30,8 @@ whatever the report recommends:
 
 - pause_card: card_status was active and is paused, the limit unchanged.
 - reduce_limit: credit_limit_cents is the report's engine_limit_cents, card_status unchanged.
-- keep_limit, request_documents, needs_human, or a rejection: nothing changed on Card and no action was sent.
+- keep_limit, request_documents, needs_human, or a rejection: nothing changed on Card and no action was sent. An
+  approved request_documents leaves the case awaiting_documents: the script does not record what the documents showed.
 
 Tokens are made inside the containers (`app.dev_token` in the Orchestrator's and in Card's), so they carry the
 stack's own JWT_SECRET. With --container '' they are made here instead, with JWT_SECRET from the environment
@@ -228,8 +229,9 @@ def path_lines(path: dict, case_id: str, tracing: str) -> list[str]:
 
 
 def next_decision(step: str | None, decide: str) -> tuple[str, str] | None:
-    """Who answers the step the case waits on, and with what: (token name, decision). None when nothing waits."""
-    if step is None:
+    """Who answers the step the case waits on, and with what: (token name, decision). None when nothing waits, or
+    when the case waits for the customer's documents: a person records what they showed."""
+    if step is None or step == "documents":
         return None
     if step == "analyst":
         return "analyst", decide
@@ -273,8 +275,10 @@ def card_problems(report: dict, page: dict, before: dict, after: dict, decision:
     """What does not fit between the report, the decision, the case's action and Card before and after. Empty is a pass."""
     problems = []
     recommendation, action = report["recommendation"], page.get("action")
-    ended = "rejected" if decision == "reject" else "done"
-    if page["status"] != ended or page.get("waiting_for"):
+    ended, waits = ("rejected" if decision == "reject" else "done"), None
+    if decision != "reject" and recommendation == "request_documents":
+        ended, waits = "awaiting_documents", "documents"  # approved, it waits for the customer
+    if page["status"] != ended or page.get("waiting_for") != waits:
         problems.append(f"the case ended {page['status']} (waiting for {page.get('waiting_for')}), not {ended}")
     changed = {field: (before[field], after[field]) for field in ("card_status", "credit_limit_cents")
                if before[field] != after[field]}

@@ -68,7 +68,12 @@ def signal_for(customer: dict, today: date) -> dict:
                 "cash_7d_ago_cents": bank["cash_week_ago_cents"],
                 "cash_30d_avg_cents": bank["cash_week_ago_cents"],
                 "accounts": [
-                    {"id": account["id"], "last_synced": date.fromordinal(today.toordinal() - account["days_stale"]).isoformat()}
+                    {
+                        "id": account["id"],
+                        "last_synced": date.fromordinal(today.toordinal() - account["days_stale"]).isoformat(),
+                        # How a person knows the account, only when the data names it.
+                        **{key: account[key] for key in ("name", "mask") if key in account},
+                    }
                     for account in bank["linked_accounts"]
                 ],
             },

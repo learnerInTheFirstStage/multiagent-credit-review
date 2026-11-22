@@ -24,9 +24,15 @@ the hint's for the first vendor paid before, and the weeks before the window for
 a running cost, a payroll run or a tax payment. The stand-in works them out the
 same way, and says them only on the payee_history topic.
 
+A record holds what the real service's record holds, under the same names, where
+the file gives the value or the service's seeder sets it by a fixed rule: the day
+of a payment, the weekly inflows, a repayment's due date, statement, amount and
+how it was paid, the day of the card balance.
+
 Left out on purpose, because each would hand the model the answer: the notes the
 file's authors wrote on a record, the payee's name, and anything one side could
-only know from the other side's data.
+only know from the other side's data. Why a repayment failed is left out too:
+Card seeds every failure as insufficient funds, whatever the account held.
 """
 
 import os
@@ -68,6 +74,11 @@ _SHARED_PAYEES = ("payroll_vendor", "tax_authority")
 # The payments whose history is set against what the payee was usually paid (vs_usual_bp): a vendor's, as
 # Bank. G-02 reads vs_usual_bp on any payee history, whatever payment it is about.
 _SET_AGAINST_THE_USUAL = ("vendor_known",)
+
+# How Card's seeder dates a repayment (services/card/app/db/seed.py): a statement runs from the 11th to the 10th
+# and is due on the 5th of the month after, by autopay. A late one is paid by hand three days after it was due,
+# and a failed debit comes back two days after it was sent.
+_DUE_DAY, _CLOSES_ON, _LATE_DAYS, _RETURN_DAYS = 5, 10, 3, 2
 
 
 def _data_files() -> tuple[Path, ...]:
@@ -173,6 +184,12 @@ def _months_between(earlier: date, later: date) -> int:
     return months - 1 if later.day < earlier.day else months
 
 
+def _in_month(day: date, months: int, on: int) -> date:
+    """The `on`-th of the month that many months after day's, or before it when months is negative."""
+    years, month = divmod(day.month - 1 + months, 12)
+    return date(day.year + years, month + 1, on)
+
+
 class _Answer:
     """Collects findings and returns the records they cite.
 
@@ -247,13 +264,19 @@ class _Bank:
                     "days_stale": account["days_stale"],
                     "last_synced": last_synced.isoformat(),
                     "is_stale": account["id"] in self.stale,
+                    # How a person knows the account, as Bank has it: only when the file names it.
+                    **{key: account[key] for key in ("name", "mask") if account.get(key) is not None},
                 },
             )
 
-        self.events = {}
+        self.events, self.days = {}, {}
+        start, today = data["week"]
         for number, event in enumerate(customer["signal_window"]["bank_events"], 1):
             incoming = event["category"] == "income"
+            # The day Bank's seeder puts it on: one event a day through the window, in file order.
+            day = start + timedelta(days=1 + (number - 1) % (today - start).days)
             details = {
+                "date": day.isoformat(),
                 "amount_cents": event["amount_cents"] if incoming else -event["amount_cents"],
                 "category": event["category"],
                 "counterparty_kind": event["counterparty_kind"],
@@ -267,7 +290,7 @@ class _Bank:
             if shares and not incoming:
                 details["share_of_fall_bp"] = _bp(event["amount_cents"], fall)
             txn = f"txn_{cid}_{number:02d}"
-            self.events[txn] = event
+            self.events[txn], self.days[txn] = event, day
             records[txn] = ("bank_transaction", details)
         self.outflows = [txn for txn, event in self.events.items() if event["category"] != "income"]
         self.listed = listed = sum(self.events[txn]["amount_cents"] for txn in self.outflows)
@@ -314,6 +337,17 @@ class _Bank:
                 if (share := _bp(baseline["weekly_inflow_cents"], baseline[key])) is not None:
                     inflows["vs_compared_bp"] = share
                 break
+        # Week by week, oldest first, as Bank's seeder writes the weeks: a straight line from three months ago to
+        # this week, or else the usual level until this week.
+        now, weeks = baseline["weekly_inflow_cents"], data["weeks"]
+        if (then := baseline.get("weekly_inflow_3mo_ago_cents")) is not None:
+            weekly = [then + (now - then) * week // (weeks - 1) for week in range(weeks)]
+        else:
+            weekly = [baseline.get("weekly_inflow_typical_cents", now)] * (weeks - 1) + [now]
+        inflows["series"] = [
+            {"week_end": (today - timedelta(weeks=back)).isoformat(), "inflow_cents": amount}
+            for back, amount in zip(range(weeks - 1, -1, -1), weekly)
+        ]
         records[self.inflows] = ("weekly_inflow_series", inflows)
 
         self.last_year = f"agg_{cid}_prior_year"
@@ -360,7 +394,7 @@ class _Bank:
         """Each payment of the window whose payee was paid before, and those earlier payments, oldest first, as
         Bank's seeder writes them. The hint's vendor is not among them: its history is the hint's record."""
         start, today = data["week"]
-        day = {txn: start + timedelta(days=1 + (n - 1) % (today - start).days) for n, txn in enumerate(self.events, 1)}
+        day = self.days
         payee = {
             txn: event["counterparty_kind"] if event["counterparty_kind"] in _SHARED_PAYEES else txn
             for txn, event in self.events.items()
@@ -432,7 +466,7 @@ class _Bank:
             self._say_share()
         # Whether the books agree is for the reconciliation topic. Here only what a silent account hides.
         for account in self.stale:
-            self.answer.unknown.append(f"Which payments left through {account} since it stopped reporting")
+            self.answer.unknown.append(f"Which payments left through {self._named(account)} since it stopped reporting")
 
     def income(self) -> None:
         baseline, weekly = self.baseline, self.baseline["weekly_inflow_cents"]
@@ -480,7 +514,7 @@ class _Bank:
         if account is None:
             self._say_accounts()
         elif account in self.linked:
-            self.answer.find(f"{account} is one of the linked accounts.", account)
+            self.answer.find(f"{self._named(account)} is one of the linked accounts.", account)
             if account in self.stale:
                 self._say_stale(account)
         else:
@@ -497,7 +531,9 @@ class _Bank:
     def reconciliation(self) -> None:
         if self.stale:
             for account in self.stale:
-                self.answer.unknown.append(f"Whether balances and transactions agree: {account} is not reporting.")
+                self.answer.unknown.append(
+                    f"Whether balances and transactions agree: {self._named(account)} is not reporting."
+                )
         elif self.fall <= 0:
             self.answer.unknown.append("Linked cash did not fall in the window, so there is no fall to reconcile.")
         else:
@@ -520,13 +556,21 @@ class _Bank:
     def _say_accounts(self) -> None:
         for account in self.stale:
             self._say_stale(account)
-        self.answer.find(f"The linked accounts are: {', '.join(self.linked)}.", *self.linked)
+        self.answer.find(f"The linked accounts are: {', '.join(map(self._named, self.linked))}.", *self.linked)
+
+    def _named(self, account: str) -> str:
+        """A linked account as a person reads it, "Chase Business Checking ••4821", or its id when it has no name."""
+        data = self.records[account][1]
+        if "name" not in data:
+            return account
+        return f"{data['name']} ••{data['mask']}" if "mask" in data else data["name"]
 
     def _say_stale(self, account: str) -> None:
         days = self.records[account][1]["days_stale"]
         silent = f"has not reported for {_count(days, 'day')}" if days else "is not active"
-        self.answer.find(f"Account {account} {silent}. Its balance since then is not in the figures.", account)
-        self.answer.unknown.append(f"What {account} holds since it stopped reporting")
+        named = self._named(account) if "name" in self.records[account][1] else f"Account {account}"
+        self.answer.find(f"{named} {silent}. Its balance since then is not in the figures.", account)
+        self.answer.unknown.append(f"What {self._named(account)} holds since it stopped reporting")
 
     def _say_events(self) -> None:
         for txn, event in self.events.items():
@@ -610,8 +654,10 @@ def credit_behavior(request: InvestigateRequest) -> InvestigateResponse:
 
     # Every record the side holds about the customer, as on the bank side.
     card, funding, spend = f"bal_card_{cid}", f"rep_{cid}_funding", f"agg_{cid}_card_spend"
+    today = data["today"]
     owed = round(snapshot["credit_limit_cents"] * snapshot["utilization_pct"])
     balance = {
+        "date": today.isoformat(),
         "credit_limit_cents": snapshot["credit_limit_cents"],
         "balance_cents": owed,
         "used_share_bp": round(10000 * snapshot["utilization_pct"]),
@@ -624,9 +670,25 @@ def credit_behavior(request: InvestigateRequest) -> InvestigateResponse:
     latest_with = {status: number for number, status in enumerate(statuses, 1)}
     repayments = []
     for number, status in enumerate(statuses, 1):
-        details = {"sequence": number, "of": len(statuses), "status": status}
-        if latest_with[status] == number and (trouble := events.get(f"{status}_repayment")):
-            details["amount_cents"] = trouble["amount_cents"]
+        trouble = events.get(f"{status}_repayment") if latest_with[status] == number else None
+        # Dated and sized as the signal and Card's seeder have it: due on the 5th of the last months, for the
+        # statement that closed the month before, and the monthly spend unless an event of the week gives its amount.
+        due = _in_month(today, number - len(statuses), _DUE_DAY)
+        details = {
+            "sequence": number,
+            "of": len(statuses),
+            "status": status,
+            "due": due.isoformat(),
+            "amount_cents": trouble["amount_cents"] if trouble else baseline["monthly_card_spend_cents"],
+            "statement_period_start": _in_month(due, -2, _CLOSES_ON + 1).isoformat(),
+            "statement_period_end": _in_month(due, -1, _CLOSES_ON).isoformat(),
+            "payment_method": "ach_manual" if status == "late" else "ach_autopay",
+        }
+        if status == "late" and due + timedelta(days=_LATE_DAYS) <= today:
+            details["days_late"] = _LATE_DAYS
+        if status == "failed" and (returned := due + timedelta(days=_RETURN_DAYS)) <= today:
+            details["returned_on"] = returned.isoformat()
+        if trouble:
             # Whether a failed one was paid afterwards, where the file says.
             details |= {key: trouble[key] for key in ("repaid_after_days", "still_unpaid") if key in trouble}
         if status == "failed":

@@ -71,7 +71,7 @@ customers:
       bank:
         cash_now_cents:      49500000
         cash_week_ago_cents: 90000000
-        linked_accounts: [{id: acct_c001_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c001_a, name: "U.S. Bank Business Checking", mask: "3916", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  17000000
         utilization_pct:     0.35
@@ -112,7 +112,7 @@ customers:
       bank:
         cash_now_cents:      48000000
         cash_week_ago_cents: 120000000
-        linked_accounts: [{id: acct_c002_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c002_a, name: "Wells Fargo Business Checking", mask: "7364", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  22000000
         utilization_pct:     0.28
@@ -154,7 +154,7 @@ customers:
       bank:
         cash_now_cents:      30000000
         cash_week_ago_cents: 44000000
-        linked_accounts: [{id: acct_c003_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c003_a, name: "Bank of America Business Checking", mask: "5937", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  12500000
         utilization_pct:     0.85
@@ -196,7 +196,7 @@ customers:
       bank:
         cash_now_cents:      36000000
         cash_week_ago_cents: 64000000
-        linked_accounts: [{id: acct_c004_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c004_a, name: "PNC Business Checking", mask: "3158", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  15000000
         utilization_pct:     0.58
@@ -237,8 +237,8 @@ customers:
         cash_now_cents:      15000000
         cash_week_ago_cents: 50000000
         linked_accounts:
-          - {id: acct_c005_a, active: true, days_stale: 5}  # stopped reporting
-          - {id: acct_c005_b, active: true, days_stale: 0}
+          - {id: acct_c005_a, name: "Chase Business Checking", mask: "4821", active: true, days_stale: 5}  # stopped reporting
+          - {id: acct_c005_b, name: "Truist Business Checking", mask: "6402", active: true, days_stale: 0}
       card:
         credit_limit_cents:  10000000
         utilization_pct:     0.40
@@ -283,7 +283,7 @@ customers:
       bank:
         cash_now_cents:      21800000
         cash_week_ago_cents: 30800000
-        linked_accounts: [{id: acct_c006_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c006_a, name: "Capital One Business Checking", mask: "8275", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  8000000
         utilization_pct:     0.45
@@ -324,7 +324,7 @@ customers:
       bank:
         cash_now_cents:      40600000
         cash_week_ago_cents: 62000000
-        linked_accounts: [{id: acct_c007_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c007_a, name: "Citi Business Checking", mask: "2649", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  13000000
         utilization_pct:     0.50
@@ -369,7 +369,7 @@ customers:
       bank:
         cash_now_cents:      45600000
         cash_week_ago_cents: 83600000
-        linked_accounts: [{id: acct_c008_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c008_a, name: "Chase Business Checking", mask: "5713", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  19000000
         utilization_pct:     0.38
@@ -411,7 +411,7 @@ customers:
       bank:
         cash_now_cents:      14800000
         cash_week_ago_cents: 19300000
-        linked_accounts: [{id: acct_c009_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c009_a, name: "Wells Fargo Business Checking", mask: "9058", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  4800000
         utilization_pct:     0.30
@@ -461,7 +461,7 @@ customers:
       bank:
         cash_now_cents:      29000000
         cash_week_ago_cents: 52000000
-        linked_accounts: [{id: acct_c010_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c010_a, name: "Bank of America Business Checking", mask: "7290", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  10000000
         utilization_pct:     0.92
@@ -507,7 +507,7 @@ customers:
       bank:
         cash_now_cents:      24000000
         cash_week_ago_cents: 41000000
-        linked_accounts: [{id: acct_c011_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c011_a, name: "PNC Business Checking", mask: "4386", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  8000000
         utilization_pct:     0.33
@@ -555,7 +555,7 @@ customers:
       bank:
         cash_now_cents:      35000000
         cash_week_ago_cents: 64000000
-        linked_accounts: [{id: acct_c012_a, active: true, days_stale: 0}]
+        linked_accounts: [{id: acct_c012_a, name: "U.S. Bank Business Checking", mask: "6147", active: true, days_stale: 0}]
       card:
         credit_limit_cents:  12000000
         utilization_pct:     0.41

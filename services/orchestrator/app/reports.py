@@ -150,6 +150,9 @@ def _people_label(review: Review) -> str:
         return "handed to a person"
     if any(decision.get("decision") == "reject" for decision in review.decisions or []):
         return "rejected"
+    # A person chose the action on what the customer's documents showed, not the report.
+    if any(decision.get("step") == "documents" for decision in review.decisions or []):
+        return "decided on the documents"
     return "approved as recommended"
 
 

@@ -25,14 +25,18 @@ from app.graph import facts
 
 log = logging.getLogger(__name__)
 
-# The next move belongs to the analyst, to the manager, or to the approver again:
-# "retry" means the action was approved but Card has not carried it out.
-WaitingFor = Literal["analyst", "manager", "retry"]
+# The next move belongs to the analyst, to the manager, to the approver again, or to whoever records what the
+# customer's documents showed: "retry" means the action was approved but Card has not carried it out.
+WaitingFor = Literal["analyst", "manager", "retry", "documents"]
 _WAITING_AT: dict[tuple, WaitingFor] = {
     ("analyst_approval",): "analyst",
     ("manager_approval",): "manager",
     ("act",): "retry",
+    ("documents_approval",): "documents",
 }
+# The report is shown once code has checked it, never while it is being drafted.
+# In the graph state "failed" means closed after approval: see api/cases._close_unconfirmed.
+REPORT_IS_CHECKED = ("needs_approval", "needs_manager", "awaiting_documents", "done", "rejected", "failed")
 
 
 def thread(case_id: str, user_id: str | None = None) -> dict:
@@ -49,6 +53,28 @@ def thread(case_id: str, user_id: str | None = None) -> dict:
 
 def waiting_for(snapshot: StateSnapshot) -> WaitingFor | None:
     return _WAITING_AT.get(snapshot.next)
+
+
+def checked_report(state: dict) -> dict | None:
+    return state.get("report") if state.get("status") in REPORT_IS_CHECKED else None
+
+
+def keep_row(case: Case, snapshot: StateSnapshot) -> None:
+    """Write the status the graph saved onto the case's row, with what the queue shows of it besides: whose move it
+    is and the checked report's recommendation and confidence. Every status read from the graph is written here.
+
+    The other status writes are of a case that waits for nobody (queued, investigating, waiting for Bank or Card,
+    failed by its run): _set_status clears waiting_for, and the rest find it clear.
+    """
+    report = checked_report(snapshot.values) or {}
+    case.status = snapshot.values["status"]
+    case.waiting_for = waiting_for(snapshot)
+    case.recommendation = report.get("recommendation")
+    case.confidence = report.get("confidence")
+    # The queue shows when a request for documents falls due, so an overdue one is seen without opening the case. By
+    # whose move it is, not the status: once the documents step is decided, a Card retry keeps the old status.
+    waiting = case.waiting_for == "documents"
+    case.documents_due = (snapshot.values.get("documents_request") or {}).get("due") if waiting else None
 
 
 def unfinished() -> list[str]:
@@ -222,10 +248,14 @@ def _catch_up(graph, case_id: str) -> str:
     """
     with SessionLocal() as session:
         case = session.scalar(select(Case).where(Case.case_id == case_id).with_for_update())
-        state = graph.get_state(thread(case_id)).values
-        case.status = state["status"]
+        snapshot = graph.get_state(thread(case_id))
+        keep_row(case, snapshot)
+        # A resend Card applied after an earlier refusal, whose own write of the row was lost: the refusal is over.
+        # Only on Card's receipt, so a case a manager closed after the refusal keeps it.
+        if (snapshot.values.get("action") or {}).get("result"):
+            case.card_refusal = None
         session.execute(delete(OutageWait).where(OutageWait.case_id == case_id))
-        history.record(session, case, state, ledger=facts.ledger)
+        history.record(session, case, snapshot.values, ledger=facts.ledger)
         session.commit()
         return case.status
 
@@ -264,7 +294,8 @@ def keep_missing_reviews(graph) -> int:
 
 def _set_status(case_id: str, status: str, *, outage_over: bool = False) -> None:
     with SessionLocal() as session:
-        session.execute(update(Case).where(Case.case_id == case_id).values(status=status))
+        # A run picks up a case nobody is asked about. One a decision left part-way may still say who was.
+        session.execute(update(Case).where(Case.case_id == case_id).values(status=status, waiting_for=None))
         if outage_over:
             session.execute(delete(OutageWait).where(OutageWait.case_id == case_id))
         session.commit()

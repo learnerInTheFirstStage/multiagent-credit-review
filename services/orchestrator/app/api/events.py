@@ -23,11 +23,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
+from app.api.cases import from_signals
 from app.auth import User, _person, auth0
 from app.db import SessionLocal
-from app.db.models import Case, OutageWait, SignalRow
+from app.db.models import Case, OutageWait
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -89,12 +89,14 @@ def _row_signature(row: Case, wait: OutageWait | None) -> tuple:
     """Everything the UI's queue row depends on, in a value shape we can compare across polls."""
     return (
         row.status,
+        # A Card retry changes it and not the status, maybe within updated_at's second on SQLite.
+        row.waiting_for,
         row.updated_at,
         None if wait is None else (wait.codes, wait.attempts, wait.next_retry_at),
     )
 
 
-def _row_payload(row: Case, wait: OutageWait | None, reasons: list[str]) -> dict:
+def _row_payload(row: Case, wait: OutageWait | None, signals: dict) -> dict:
     return {
         "case_id": row.case_id,
         "customer_id": row.customer_id,
@@ -102,25 +104,14 @@ def _row_payload(row: Case, wait: OutageWait | None, reasons: list[str]) -> dict
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
         "outage": _outage_message(wait),
-        "signal_reasons": reasons,
+        "recommendation": row.recommendation,
+        "confidence": row.confidence,
+        "waiting_for": row.waiting_for,
+        "documents_due": row.documents_due,
+        "signal_reasons": [],
+        "cut_share_bp": None,  # a seeded case has no signal
+        **signals,
     }
-
-
-def _reasons_for(session: Session, case_ids: list[str]) -> dict[str, list[str]]:
-    """Distinct review_reasons per case in arrival order. Mirrors cases.py's helper."""
-    if not case_ids:
-        return {}
-    reasons: dict[str, list[str]] = {}
-    for signal in session.execute(
-        select(SignalRow)
-        .where(SignalRow.case_id.in_(case_ids))
-        .order_by(SignalRow.received_at, SignalRow.signal_id)
-    ).scalars():
-        seen = reasons.setdefault(signal.case_id, [])
-        for reason in signal.payload.get("review_reasons") or []:
-            if reason not in seen:
-                seen.append(reason)
-    return reasons
 
 
 def _scan(customers: set[str]) -> dict[str, tuple[tuple, dict]]:
@@ -139,9 +130,9 @@ def _scan(customers: set[str]) -> dict[str, tuple[tuple, dict]]:
             .outerjoin(OutageWait, OutageWait.case_id == Case.case_id)
             .where(Case.customer_id.in_(customers))
         ))
-        reasons = _reasons_for(session, [row.case_id for row, _ in rows])
+        signals = from_signals(session, [row.case_id for row, _ in rows])
         return {
-            row.case_id: (_row_signature(row, wait), _row_payload(row, wait, reasons.get(row.case_id, [])))
+            row.case_id: (_row_signature(row, wait), _row_payload(row, wait, signals.get(row.case_id, {})))
             for row, wait in rows
         }
 

@@ -5,6 +5,7 @@ import { devLogin } from "../api/cases";
 import { useAuth } from "../auth/AuthContext";
 import Auth0SignIn from "../auth/Auth0SignIn";
 import { auth0Settings } from "../auth/auth0";
+import { ErrorBanner } from "../components/ErrorBanner";
 
 const DEFAULT_CUSTOMERS = [
   "c_001",
@@ -65,15 +66,13 @@ function DevLoginPage() {
         className="w-full max-w-sm bg-white rounded-xl shadow-lg p-8 space-y-6"
       >
         <div className="text-center">
-          <h1 className="text-2xl font-semibold text-slate-900">Credit Risk Review</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Demo sign-in. The real Auth Service is coming next.
-          </p>
+          <h1 className="text-2xl font-semibold text-slate-900">Credit Review</h1>
+          <p className="text-sm text-slate-500 mt-1">Demo sign-in.</p>
         </div>
 
         <div className="space-y-4">
           <label className="block">
-            <span className="text-sm font-medium text-slate-700">Username</span>
+            <span className="text-sm font-medium text-slate-700">Demo user</span>
             <input
               type="text"
               value={sub}
@@ -106,11 +105,7 @@ function DevLoginPage() {
           </fieldset>
         </div>
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-md px-3 py-2">
-            {error}
-          </div>
-        )}
+        {error && <ErrorBanner>{error}</ErrorBanner>}
 
         <button
           type="submit"
@@ -120,8 +115,8 @@ function DevLoginPage() {
           {loading ? "Signing in…" : "Sign in"}
         </button>
 
-        <p className="text-xs text-slate-400 text-center">
-          Your token lets you see the 12 scenario customers (c_001 – c_013).
+        <p className="text-xs text-slate-500 text-center">
+          Your token covers {DEFAULT_CUSTOMERS.length} demo customers.
         </p>
       </form>
     </div>

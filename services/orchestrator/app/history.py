@@ -70,7 +70,13 @@ def row(case_id: str, customer_id: str, state: dict, *, records: dict[str, dict]
         likely_cause=report.get("likely_cause"),
         recommendation=report.get("recommendation"),
         confidence=report.get("confidence"),
-        human_decision=decisions[-1].get("decided") if decisions else None,
+        # The analyst's, not the last decision's: a manager, a retry or a documents step may follow it. A request for
+        # documents stays one whatever they showed.
+        human_decision=next(
+            (decision["decided"] for decision in decisions
+             if decision.get("step") == "analyst" and decision.get("decided")),
+            None,
+        ),
         guideline_ids=report.get("guideline_ids") or [],
         review_reasons=signal.get("review_reasons") or [],
         policy_version=state.get("policy_version"),
@@ -132,6 +138,9 @@ def earlier_reviews(customer_id: str, as_of: str, *, limit: int | None = EARLIER
                 "as_of": review.as_of.isoformat(),
                 "outcome": review.outcome,
                 "approved": review.outcome == "done",
+                # The customer was asked: only an approved request for documents reaches the documents step, and
+                # the case may still close rejected or failed after it (G-14, facts.history_facts).
+                "requested_documents": any(decision.get("step") == "documents" for decision in review.decisions or []),
                 "likely_cause": review.likely_cause,
                 "recommendation": review.recommendation,
                 "guideline_ids": review.guideline_ids,

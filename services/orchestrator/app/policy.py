@@ -27,6 +27,9 @@ UNPAID_MEANS = ("no", "not_recorded")
 # then after the second, and so on. The attempt after the last one hands the case to a person as failed (app.runner).
 OUTAGE_RETRY_SECONDS = (60, 300, 900)
 
+# Days the customer is given to send the documents an approved request_documents asks for, from the approval's day.
+DOCUMENTS_DUE_DAYS = 14
+
 # Readings of the policy that the owner has not ruled on. Each can be switched off on its own.
 RULES = {
     "every_cited_guideline_allows": True,   # 2.A rule 5

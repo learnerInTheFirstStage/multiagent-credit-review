@@ -150,3 +150,11 @@ def test_a_path_page_that_cannot_be_read_stops_the_run_before_anything_is_decide
 
     assert "path" in str(failed.value) and "500" in str(failed.value)
     assert stack.posted == ["/signals"]  # no decision went out
+
+
+def test_an_approved_request_for_documents_is_left_waiting_for_the_customer_and_passes():
+    page = case_page("awaiting_documents", waiting_for="documents")
+    card = {"card_status": "active", "credit_limit_cents": 10000000}
+
+    assert e2e.next_decision("documents", "approve") is None  # the script records no outcome of the documents
+    assert e2e.card_problems({"recommendation": "request_documents"}, page, card, card, "approve") == []

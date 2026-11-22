@@ -56,7 +56,9 @@ def _place(session: Session, signal: Signal) -> tuple[Case, Result]:
     Raises IntegrityError when another request stored this signal, or opened
     this customer's case, between the lookups and the commit.
     """
-    payload = signal.model_dump(mode="json")
+    # As sent: an optional field the sender left out (an account's name or mask) is not stored as null, so a signal
+    # stored before that field existed is still the same signal when it is sent again.
+    payload = signal.model_dump(mode="json", exclude_unset=True)
     seen = _stored(session, signal.signal_id)
     if seen is not None:
         if seen.payload != payload:

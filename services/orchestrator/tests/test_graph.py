@@ -3,6 +3,7 @@ import json
 import pickle
 import re
 import sys
+from datetime import datetime, timedelta
 from itertools import count
 from pathlib import Path
 from typing import ClassVar, get_args
@@ -17,21 +18,30 @@ from langgraph.types import Command
 from pydantic import ValidationError
 
 from app import guidelines as service_guidelines
+from app import policy
 from app.agents import mock
 from app.graph import build_graph, causes, facts, figures, prompts
-from app.graph.build import MAX_REFUSALS, MAX_ROUNDS, UNREADABLE, Cause
+from app.graph.build import (
+    DOCUMENTS_SHAPE, MAX_REFUSALS, MAX_ROUNDS, REASON_TOLD, UNREADABLE, Cause, documents_request,
+)  # fmt: skip
 from contracts import Evidence, Finding, InvestigateResponse
+from contracts.signal import ReviewReason
 from tests.test_signals import SIGNAL  # c_010: a large cut and a failed repayment
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "eval"))
 import signals as eval_signals  # noqa: E402
 
+# Shaped as app.guidelines.load() gives them, but with no needs. A guideline without a note has an empty one.
 GUIDELINES = [
-    {"id": "G-03", "when": "The fall is explained by payroll or tax.", "allows": ["keep_limit"]},
-    {"id": "G-07", "when": "A repayment failed.", "allows": ["reduce_limit", "request_documents"]},
-    {"id": "G-11", "when": "Cash cannot cover the balance owed.", "allows": ["pause_card", "reduce_limit"]},
-    {"id": "G-12", "when": "The limit is very large.", "allows": ["needs_human"]},
-]
+    {"id": "G-03", "title": "Payroll or tax", "when": "The fall is explained by payroll or tax.",
+     "allows": ["keep_limit"], "note": ""},
+    {"id": "G-07", "title": "Failed repayment", "when": "A repayment failed.",
+     "allows": ["reduce_limit", "request_documents"], "note": ""},
+    {"id": "G-11", "title": "Cash short", "when": "Cash cannot cover the balance owed.",
+     "allows": ["pause_card", "reduce_limit"], "note": "Spend stops until cash returns."},
+    {"id": "G-12", "title": "Large exposure", "when": "The limit is very large.",
+     "allows": ["needs_human"], "note": ""},
+]  # fmt: skip
 CONFIG = {"configurable": {"thread_id": "case_test"}}
 APPROVE = {"decision": "approve", "by": "u_analyst"}
 MANAGER_APPROVES = {"decision": "approve", "by": "u_manager"}
@@ -289,11 +299,8 @@ def test_a_rejected_report_changes_nothing():
     assert run.waiting_at == ()
 
 
-@pytest.mark.parametrize(
-    ("recommendation", "guideline"), [("keep_limit", "G-03"), ("request_documents", "G-07")]
-)
-def test_an_approved_report_with_nothing_to_carry_out_closes_the_case(recommendation, guideline):
-    run = Run([*INVESTIGATION, report(recommendation=recommendation, guideline_ids=[guideline])])
+def test_an_approved_report_with_nothing_to_carry_out_closes_the_case():
+    run = Run([*INVESTIGATION, report(recommendation="keep_limit", guideline_ids=["G-03"])])
 
     result = run.decide(APPROVE)
 
@@ -703,13 +710,19 @@ def test_two_outputs_that_are_not_reports_hand_the_case_to_a_person():
     assert "did not fit the report shape" in run.shown["report"]["summary"]
 
 
-def test_a_reduction_that_would_raise_the_limit_never_reaches_card():
-    # The engine wants a higher limit here, so setting the engine's limit is not a reduction.
-    raise_it = signal_with(current_limit_cents=10000000, engine_limit_cents=20000000)
+@pytest.mark.parametrize(
+    "engine_limit_cents",
+    [
+        pytest.param(20000000, id="the engine wants a higher limit"),
+        pytest.param(0, id="the engine wants a limit of 0, which Card refuses"),
+    ],
+)
+def test_a_reduction_card_cannot_set_never_reaches_card(engine_limit_cents):
+    signal = signal_with(current_limit_cents=10000000, engine_limit_cents=engine_limit_cents)
 
-    run = Run([*INVESTIGATION, report(), report()], signal=raise_it)
+    run = Run([*INVESTIGATION, report(), report()], signal=signal)
 
-    assert "the engine's limit is not below the current limit" in run.result["check"]["problems"][0]
+    assert "the engine's limit is not one Card can set" in run.result["check"]["problems"][0]
     assert run.shown["report"]["recommendation"] == "needs_human"
 
     run.decide(APPROVE)
@@ -813,7 +826,8 @@ def test_no_model_is_ever_shown_an_amount_in_cents():
     assert len(run.seen) == len(EVERY_TOPIC) + 2  # every question, the gap review and the report
     for text in written_by_code(run):
         assert "_cents" not in text and '_bp"' not in text
-        assert not re.search(r"\d{7,}", text), text
+        # Read as the model reads JSON: "••7290" is escaped as ••7290, which is no run of digits.
+        assert not re.search(r"\d{7,}", re.sub(r"\\u[0-9a-fA-F]{4}", " ", text)), text
 
 
 # The refused draft's own figures, as the figure line of the problems block quotes them back.
@@ -830,7 +844,8 @@ def test_every_figure_a_model_is_shown_is_an_allowed_figure():
         guideline_ids=[],
     )
     # Narrowed to dates no record holds: they stay with the investigator and the specialist (spec 0.3, item 14).
-    dated = ask_card("Did any repayment fail?", start="2026-11-04", end="2026-11-08")
+    # The two days before the week: every day of the week is the date of a listed payment.
+    dated = ask_card("Did any repayment fail?", start="2026-11-01", end="2026-11-02")
     # Five questions, so that a gap the review states could still send the case back. Not card use: here no record
     # may hold the gap's figure. ($90,000 is c_010's running costs for the week now, so the gap states $110,000.)
     questions = [EVERY_TOPIC[0], dated, EVERY_TOPIC[2], *EVERY_TOPIC[4:]]
@@ -840,8 +855,8 @@ def test_every_figure_a_model_is_shown_is_an_allowed_figure():
     every_topic = Run([*EVERY_TOPIC, gaps(), refused, report()])
 
     allowed = figures.allowed_figures(facts.ledger(run.state).values())
-    assert {"d:2026-11-04", "d:2026-11-08", "m:110000", "m:330000"}.isdisjoint(allowed)
-    assert run.result["asked"][1]["outcome"] == "answered" and run.result["asked"][1]["start"] == "2026-11-04"
+    assert {"d:2026-11-01", "d:2026-11-02", "m:110000", "m:330000"}.isdisjoint(allowed)
+    assert run.result["asked"][1]["outcome"] == "answered" and run.result["asked"][1]["start"] == "2026-11-01"
     assert run.result["gap_log"][0]["dropped"] == 1
     assert nudges(run) == []
     assert [entry["outcome"] for entry in every_topic.result["asked"]] == ["answered"] * len(EVERY_TOPIC)
@@ -1662,16 +1677,18 @@ NOTHING_TO_DO = report(likely_cause="no_clear_cause", recommendation="needs_huma
     [
         pytest.param({}, {}, id="neither"),
         pytest.param(
-            {"note": "  Called the customer.\x00 ", "decided": "request_documents"},
-            {"note": "Called the customer.", "decided": "request_documents"},
+            {"note": "  Called the customer.\x00 ", "decided": "keep_limit"},
+            {"note": "Called the customer.", "decided": "keep_limit"},
             id="both, the note trimmed and without NUL",
         ),
         pytest.param({"note": "x" * 600}, {"note": "x" * 500}, id="a note cut to its limit"),
         pytest.param({"note": "   ", "decided": "raise_limit"}, {}, id="an empty note and an action that does not exist"),
         pytest.param({"note": 7, "decided": None}, {}, id="a note that is not text"),
+        pytest.param({"reason": "wrong_action"}, {"reason": "wrong_action"}, id="a reason"),
+        pytest.param({"reason": "bored"}, {}, id="a reason that does not exist"),
     ],
 )
-def test_a_note_and_what_the_person_decided_are_kept_with_the_decision_and_a_decision_without_them_looks_as_before(
+def test_a_note_a_reason_and_what_the_person_decided_are_kept_with_the_decision_and_a_decision_without_them_looks_as_before(
     given, kept
 ):
     run = Run([*INVESTIGATION, NOTHING_TO_DO])
@@ -1680,6 +1697,7 @@ def test_a_note_and_what_the_person_decided_are_kept_with_the_decision_and_a_dec
 
     assert result["decisions"] == [{"step": "analyst", "decision": "approve", "by": "u_analyst", **kept}]
     assert result["status"] == "done"
+    assert run.sent == []
 
 
 def test_the_earlier_reviews_given_at_opening_are_records_a_report_can_cite():
@@ -2090,6 +2108,230 @@ def test_what_the_person_decided_is_kept_only_when_the_analyst_approves_a_hand_o
     assert [("decided" in decision) for decision in result["decisions"]] == [kept] + [False] * (len(decisions) - 1)
 
 
+# What a person decides on a hand-over is carried out under the rules of a recommendation
+
+
+@pytest.mark.parametrize(
+    ("decided", "signal", "manager"),
+    [
+        pytest.param("pause_card", SIGNAL, True, id="a pause needs the manager"),
+        pytest.param("reduce_limit", SIGNAL, False, id="a cut of at most half needs the analyst alone"),
+        pytest.param("reduce_limit", signal_with(engine_limit_cents=4999999), True, id="a cut over half"),
+    ],
+)
+def test_what_the_analyst_decides_on_a_hand_over_goes_to_card_by_the_rules_of_a_recommendation(
+    decided, signal, manager
+):
+    run = Run([*INVESTIGATION, NOTHING_TO_DO], signal=signal)
+
+    result = run.decide({**APPROVE, "decided": decided})
+
+    if manager:
+        assert run.waiting_at == ("manager_approval",)
+        assert result["status"] == "needs_manager"
+        assert run.sent == []
+        result = run.decide(MANAGER_APPROVES)
+    approver = MANAGER_APPROVES if manager else APPROVE
+    expected = {"type": "pause_card"}
+    if decided == "reduce_limit":
+        expected = {"type": "reduce_limit", "limit_cents": signal["engine_limit_cents"]}
+    assert run.sent == [
+        {
+            **expected,
+            "case_id": "case_test",
+            "customer_id": signal["customer_id"],
+            "approved_by": approver["by"],
+            "approval_id": f"case_test:{'manager' if manager else 'analyst'}",
+        }
+    ]
+    assert result["status"] == "done"
+    assert run.waiting_at == ()
+
+
+def test_a_hand_over_approved_to_keep_the_limit_closes_the_case_and_sends_nothing():
+    run = Run([*INVESTIGATION, NOTHING_TO_DO])
+
+    result = run.decide({**APPROVE, "decided": "keep_limit"})
+
+    assert run.sent == []
+    assert (result["status"], result["action"]) == ("done", None)
+    assert run.waiting_at == ()
+
+
+def test_a_manager_can_stop_a_pause_the_analyst_decided_on_a_hand_over():
+    run = Run([*INVESTIGATION, NOTHING_TO_DO])
+    run.decide({**APPROVE, "decided": "pause_card"})
+
+    result = run.decide({"decision": "reject", "by": "u_manager"})
+
+    assert run.sent == []
+    assert result["status"] == "rejected"
+    assert run.waiting_at == ()
+
+
+# An approved request for documents waits for the customer
+
+DOCUMENTS = {"recommendation": "request_documents", "guideline_ids": ["G-07"]}
+APPROVED_AT = "2026-11-20T23:30:00+00:00"  # late in the day, in UTC as the API stamps it
+
+
+@pytest.mark.parametrize(
+    ("draft", "approval"),
+    [
+        pytest.param(report(**DOCUMENTS), {}, id="a report that recommends it"),
+        pytest.param(NOTHING_TO_DO, {"decided": "request_documents"}, id="decided on a hand-over"),
+    ],
+)
+def test_an_approved_request_for_documents_waits_for_the_customer_with_a_request_code_drafted(draft, approval):
+    run = Run([*INVESTIGATION, draft])
+
+    result = run.decide({**APPROVE, **approval, "decided_at": APPROVED_AT})
+
+    assert run.waiting_at == ("documents_approval",)
+    assert (result["status"], run.shown["step"]) == ("awaiting_documents", "documents")
+    assert run.sent == [] and result.get("action") is None
+    request = result["documents_request"]
+    assert (request["requested_by"], request["requested_at"]) == (APPROVE["by"], APPROVED_AT)
+    due = datetime.fromisoformat(APPROVED_AT).date() + timedelta(days=policy.DOCUMENTS_DUE_DAYS)
+    assert request["due"] == due.isoformat()
+    message = request["message"]
+    assert facts.written_date(request["due"]) in message
+    for reason in SIGNAL["review_reasons"]:
+        assert REASON_TOLD[reason] in message, reason
+    for repayment in SIGNAL["snapshot"]["card"]["repayments"]:
+        assert (facts.written_date(repayment["due"]) in message) == (repayment["status"] == "failed"), repayment
+    assert all(item in message for item in request["asked_for"])
+    # The limit stays as it is while the case waits.
+    assert f"Your limit stays at {facts.usd(SIGNAL['current_limit_cents'])}" in message
+
+
+def test_only_an_account_whose_feed_stopped_is_asked_for_from_its_last_sync_by_its_name():
+    signal = copy.deepcopy(SIGNAL)
+    signal["snapshot"]["bank"]["accounts"][0] |= {"name": "Bank of America Business Checking", "mask": "7290"}
+    signal["snapshot"]["bank"]["accounts"].append(
+        {"id": "acct_c010_b", "last_synced": "2026-10-30", "name": "Chase Business Checking", "mask": "4821"}
+    )
+
+    asked_for = documents_request(signal, {"by": "u_analyst", "decided_at": APPROVED_AT})["asked_for"]
+
+    [stale] = [item for item in asked_for if "Chase Business Checking ••4821" in item]
+    assert stale.startswith("Reconnect Chase Business Checking ••4821") and "from Oct 30, 2026" in stale
+    assert not any("Bank of America" in item for item in asked_for)  # its feed is current: nothing is missing
+
+
+def test_the_customer_is_told_no_internal_id_and_no_day_as_yyyy_mm_dd():
+    # SIGNAL's accounts have no name: the customer reads the account by when it last updated.
+    signal = copy.deepcopy(SIGNAL)
+    signal["snapshot"]["bank"]["accounts"].append({"id": "acct_c010_b", "last_synced": "2026-10-30"})
+
+    request = documents_request(signal, {"by": "u_analyst", "decided_at": APPROVED_AT})
+
+    for text in (request["message"], *request["asked_for"]):
+        assert not re.search(r"\d{4}-\d{2}-\d{2}|acct_", text), text
+    [stale] = [item for item in request["asked_for"] if item.startswith("Reconnect")]
+    assert stale.startswith("Reconnect the linked bank account that last updated on Oct 30, 2026")
+    assert stale.count("Oct 30, 2026") == 1  # the day that names the account is not said twice
+
+
+def test_a_request_shows_who_asked_by_their_email_when_their_token_carried_one():
+    named = documents_request(SIGNAL, {"by": "auth0|a", "by_name": "analyst@credit-review.demo", "decided_at": APPROVED_AT})
+    unnamed = documents_request(SIGNAL, {"by": "u_analyst", "decided_at": APPROVED_AT})
+
+    assert (named["requested_by"], named["requested_by_name"]) == ("auth0|a", "analyst@credit-review.demo")
+    assert unnamed["requested_by_name"] is None
+
+
+def test_with_every_feed_current_each_account_is_asked_for_the_review_week_and_told_the_deadline():
+    request = documents_request(SIGNAL, {"by": "u_analyst", "decided_at": APPROVED_AT})
+
+    [current] = [item for item in request["asked_for"] if item.startswith("Statements for")]
+    assert "from Nov 3, 2026 to Nov 10, 2026" in current  # the review week, WINDOW_DAYS before the signal's day
+    assert f"If we have not heard from you by {facts.written_date(request['due'])}" in request["message"]
+
+
+def test_a_request_approved_before_decisions_were_stamped_counts_its_due_date_from_now():
+    request = documents_request(SIGNAL, {"by": "u_analyst"})
+
+    requested_at = datetime.fromisoformat(request["requested_at"])
+    assert requested_at.tzinfo is not None
+    assert request["due"] == (requested_at.date() + timedelta(days=policy.DOCUMENTS_DUE_DAYS)).isoformat()
+
+
+def test_every_review_reason_is_told_to_the_customer():
+    assert set(REASON_TOLD) == set(get_args(ReviewReason))
+
+
+def awaiting_documents() -> Run:
+    """A case whose request for documents the analyst approved."""
+    run = Run([*INVESTIGATION, report(**DOCUMENTS)])
+    run.decide(APPROVE)
+    assert run.waiting_at == ("documents_approval",)
+    return run
+
+
+@pytest.mark.parametrize(
+    ("decided", "manager"),
+    [
+        pytest.param("pause_card", True, id="a pause needs the manager"),
+        pytest.param("reduce_limit", False, id="a cut of at most half goes out as the analyst step Card knows"),
+    ],
+)
+def test_what_the_documents_showed_goes_to_card_by_the_rules_of_a_recommendation(decided, manager):
+    run = awaiting_documents()
+
+    result = run.decide({**APPROVE, "decided": decided})
+
+    if manager:
+        assert run.waiting_at == ("manager_approval",)
+        assert result["status"] == "needs_manager"
+        assert run.sent == []
+        result = run.decide(MANAGER_APPROVES)
+    expected = {"type": "pause_card"}
+    if decided == "reduce_limit":
+        expected = {"type": "reduce_limit", "limit_cents": SIGNAL["engine_limit_cents"]}
+    assert run.sent == [
+        {
+            **expected,
+            "case_id": "case_test",
+            "customer_id": "c_010",
+            "approved_by": (MANAGER_APPROVES if manager else APPROVE)["by"],
+            "approval_id": f"case_test:{'manager' if manager else 'analyst'}",
+        }
+    ]
+    steps = ["analyst", "documents", "manager"] if manager else ["analyst", "documents"]
+    assert [decision["step"] for decision in result["decisions"]] == steps
+    assert result["status"] == "done"
+    assert result["documents_request"] is not None  # kept after the case closes
+
+
+@pytest.mark.parametrize(
+    ("decision", "closed_as"),
+    [
+        pytest.param({**APPROVE, "decided": "keep_limit"}, "done", id="the documents showed the limit can stay"),
+        pytest.param(REJECT, "rejected", id="a rejection"),
+    ],
+)
+def test_the_documents_step_closes_the_case_with_nothing_sent(decision, closed_as):
+    run = awaiting_documents()
+
+    result = run.decide(decision)
+
+    assert run.sent == []
+    assert (result["status"], result.get("action")) == (closed_as, None)
+    assert run.waiting_at == ()
+
+
+@pytest.mark.parametrize("decided", [None, "request_documents"], ids=["nothing", "another request"])
+def test_an_approval_at_the_documents_step_that_does_not_say_what_they_showed_keeps_the_case_waiting(decided):
+    run = awaiting_documents()
+
+    run.decide({**APPROVE, "decided": decided})
+
+    assert run.waiting_at == ("documents_approval",)
+    assert run.shown["problem"] == DOCUMENTS_SHAPE
+    assert run.sent == []
+
+
 def test_every_figure_a_model_is_shown_is_an_allowed_figure_on_the_services_guidelines():
     # A draft refused under rules 7 and 8, the cause rule and the figure rule, after a pass where code found
     # the gaps, a question narrowed to dates no record holds, and a gap review that states a figure.
@@ -2097,7 +2339,7 @@ def test_every_figure_a_model_is_shown_is_an_allowed_figure_on_the_services_guid
         likely_cause="revenue_loss", recommendation="keep_limit", guideline_ids=["G-01"],
         summary="Inflows of $80,000 make outflows $330,000, so $110,000 is missing.",
     )  # fmt: skip
-    dated = ask_card("Did any repayment fail?", start="2026-11-04", end="2026-11-08")
+    dated = ask_card("Did any repayment fail?", start="2026-11-01", end="2026-11-02")
 
     run = on_the_services_guidelines([
         ask_bank("Where did the money go?"), DONE,
@@ -2106,7 +2348,7 @@ def test_every_figure_a_model_is_shown_is_an_allowed_figure_on_the_services_guid
     ])  # fmt: skip
 
     allowed = figures.allowed_figures(facts.ledger(run.state).values())
-    assert {"d:2026-11-04", "d:2026-11-08", "m:110000", "m:330000"}.isdisjoint(allowed)
+    assert {"d:2026-11-01", "d:2026-11-02", "m:110000", "m:330000"}.isdisjoint(allowed)
     assert [entry["by"] for entry in run.result["gap_log"]] == ["code", "model"]
     assert run.result["gap_log"][1]["dropped"] == 1
     assert run.result["draft_log"][0]["codes"] == ["guideline_need", "guideline_cover", "cause", "figure"]

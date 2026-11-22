@@ -448,6 +448,7 @@ def test_earlier_reviews_are_the_ten_newest_with_typed_facts_and_no_free_text():
         "as_of": "2025-12-15",
         "outcome": "done",
         "approved": True,
+        "requested_documents": False,
         "likely_cause": "payroll_or_tax",
         "recommendation": "pause_card",
         "guideline_ids": ["G-08b"],
@@ -485,6 +486,25 @@ def test_the_history_summary_counts_every_earlier_review_and_only_the_newest_get
     assert [record["id"] for record in records[1:]] == ["hist_case_01", "hist_case_02", "hist_case_03"]
     # The rows a case reads for itself stay the ten newest.
     assert len(history.earlier_reviews("c_010", "2026-11-10")) == history.EARLIER_MAX == 10
+
+
+@pytest.mark.parametrize(
+    ("status", "after"),
+    [
+        pytest.param("done", {"step": "documents", "decision": "approve", "decided": "keep_limit"},
+                     id="the documents showed the limit can stay"),
+        pytest.param("rejected", {"step": "documents", "decision": "reject"}, id="the documents step was rejected"),
+    ],
+)
+def test_an_approved_request_for_documents_counts_toward_a_repeat_however_the_case_closed(status, after):
+    # The customer was asked once the analyst step approved it (G-14), whatever came of it at the documents step.
+    report = {**REPORT, "likely_cause": "revenue_loss", "recommendation": "request_documents"}
+    decisions = [{"step": "analyst", "decision": "approve", "by": "u_analyst"}, {**after, "by": "u_analyst"}]
+    keep(closed(status, as_of="2026-10-01", report=report, decisions=decisions, action=None))
+
+    summary = facts.history_facts(history.earlier_reviews("c_010", "2026-11-10", limit=None), SIGNAL)[0]
+
+    assert summary["data"]["document_requests_in_window"] == 1
 
 
 def test_two_earlier_reviews_on_one_day_come_in_a_fixed_order():
@@ -612,6 +632,7 @@ def test_the_seed_file_in_the_repo_loads_and_gives_c_007_the_past_review_its_sto
         "as_of": "2025-11-10",
         "outcome": "done",
         "approved": True,
+        "requested_documents": False,
         "likely_cause": "seasonal_dip",
         "recommendation": "keep_limit",
         "guideline_ids": ["G-03"],

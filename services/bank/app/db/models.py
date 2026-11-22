@@ -133,6 +133,10 @@ class LinkedAccount(Base):
     opened_at: Mapped[date] = mapped_column(Date, nullable=False)
     last_reported_at: Mapped[date] = mapped_column(Date, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # How a person knows the account: its name at the bank, and the last 4 digits of its number. None when the
+    # data does not say.
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    mask: Mapped[str | None] = mapped_column(String(4), nullable=True)
 
     customer: Mapped[Customer] = relationship(back_populates="accounts")
     balances: Mapped[list["DailyBalance"]] = relationship(back_populates="account")

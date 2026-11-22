@@ -16,6 +16,7 @@ the day before to that day.
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from typing import Annotated
 
@@ -25,7 +26,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import require_service_access
 from app.api.schemas import ToolResponse
 from app.db import get_session
-from app.db.models import Customer
+from app.db.models import Customer, LinkedAccount
 from app.ledger import Ledger, Record
 
 router = APIRouter(prefix="/customers/{customer_id}/tools")
@@ -39,6 +40,8 @@ End = Annotated[date | None, Query(description="window end, inclusive")]
 _STALE = "Linked cash moved while {} did not report, so no share of the fall or reconciliation is worked out."
 _NO_FALL = "Linked cash did not fall in the window, so there is no fall to share out or reconcile."
 _NO_BALANCE = "No balance was reported on {}."
+_ACCOUNT_NAME = re.compile(r"[A-Za-z][A-Za-z .&'-]{0,63}")
+_MASK = re.compile(r"[A-Za-z0-9]{2,4}")
 
 
 def _ledger(session: Session, customer_id: str) -> Ledger:
@@ -46,6 +49,19 @@ def _ledger(session: Session, customer_id: str) -> Ledger:
     if customer is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, {"error": "not_found", "message": f"Unknown customer {customer_id}"})
     return Ledger(session, customer)
+
+
+def _named(account: LinkedAccount) -> str:
+    """An account as a person reads it, "Chase Business Checking ••4821", or its id.
+
+    This line reaches the Orchestrator's models as code's own text, and a customer can name the account. So, as
+    the Orchestrator's facts.account_label does, only a name of letters, spaces and .&'- and at most five words is
+    written, and a mask of 2 to 4 letters or digits; any other name gives the id.
+    """
+    name, mask = account.name, account.mask
+    if name is None or not _ACCOUNT_NAME.fullmatch(name) or len(re.findall(r"[A-Za-z']+", name)) > 5:
+        return account.id
+    return f"{name} ••{mask}" if mask and _MASK.fullmatch(mask) else name
 
 
 def _window(ledger: Ledger, start: date | None, end: date | None) -> tuple[date, date]:
@@ -67,7 +83,7 @@ def _why_no_figures(ledger: Ledger, start: date, end: date) -> list[str]:
     if missing := [day for day in (start, end) if ledger.cash_on(day) is None]:
         return [_NO_BALANCE.format(day.isoformat()) for day in missing]
     if stale := ledger.stale():
-        return [_STALE.format(", ".join(account.id for account in stale))]
+        return [_STALE.format(", ".join(_named(account) for account in stale))]
     return [_NO_FALL]
 
 

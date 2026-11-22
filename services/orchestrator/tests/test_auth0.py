@@ -83,6 +83,21 @@ def test_a_person_signed_in_through_auth0_has_the_role_and_customers_the_action_
     assert (user.sub, user.role, user.customers) == ("auth0|manager", "manager", ["c_002", "c_010"])
 
 
+@pytest.mark.parametrize(
+    ("email", "name"),
+    [
+        pytest.param("manager@credit-review.demo", "manager@credit-review.demo", id="the email the Action added"),
+        pytest.param(None, None, id="a token from before the Action added it"),
+        pytest.param("  ", None, id="an empty email"),
+        pytest.param(42, None, id="an email that is not text"),
+    ],
+)
+def test_a_person_is_named_by_the_email_the_action_added_and_otherwise_shown_by_sub(tenant, email, name):
+    user = caller(signed_in(**{f"{auth.CLAIMS}email": email}))
+
+    assert (user.sub, user.name) == ("auth0|manager", name)
+
+
 def test_the_domain_may_be_copied_with_its_scheme_and_a_trailing_slash(tenant, monkeypatch):
     monkeypatch.setenv("AUTH0_DOMAIN", f"https://{DOMAIN}/")
 

@@ -40,7 +40,10 @@ def test_a_stale_account_gives_no_verdict(client, auth_headers):
     """Regression: c_005 came back reconciled=false with a $350K discrepancy, an insufficient_data verdict."""
     body = call(client, auth_headers, "c_005", "balance_vs_txn").json()
     assert body["evidence"] == []
-    assert "acct_c005_a" in body["data"]["not_available"][0]
+    # The silent account is named as a person knows it, not by its id.
+    account = team_customer("c_005")["snapshot"]["bank"]["linked_accounts"][0]
+    assert f"while {account['name']} ••{account['mask']} did not report" in body["data"]["not_available"][0]
+    assert "acct_c005_a" not in body["data"]["not_available"][0]
 
 
 def test_another_window_gets_its_own_id(client, auth_headers):

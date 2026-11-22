@@ -102,6 +102,16 @@ def test_ids_that_hold_digits_are_not_figures():
     assert figures("_hist_seed_c_007_2025_, __G-07__, _c_010_ and *txn_c_010_01*") == {}
 
 
+def test_an_accounts_last_digits_after_two_bullets_are_not_a_figure():
+    # Regression: a gap that named the account as code does was dropped as one that states a figure.
+    assert not_backed("What Chase Business Checking ••4821 held since it stopped reporting", set(), loose=True) == []
+
+
+def test_a_run_of_digits_after_two_bullets_longer_than_an_accounts_last_digits_is_a_figure():
+    assert figures("••350000 left the account.") == {"n:350000": "350000"}
+    assert figures("••12,500 left the account.") == {"n:12500": "12,500"}
+
+
 def test_card_transaction_and_card_ids_are_not_figures():
     # The Card Service names a transaction ctx_<customer>_<n> and a card crd_<customer>_<n>.
     assert figures("ctx_c_003_00942 was declined on crd_c_010_1.") == {}

@@ -24,6 +24,10 @@ The Orchestrator does not pass the id on to Bank and Card yet, so their lines ha
 
 A line holds ids, status codes and counts, never customer names, account numbers, tokens, or text that a model or a customer wrote: Langfuse keeps those.
 
+## The review signal
+
+Each of `snapshot.bank.accounts` has `id` and `last_synced`, and may have `name` and `mask`: the bank's name for the account and the last digits of its number, which is how a person knows it ("Chase Business Checking ••4821"). A signal without them is valid, the id stays the key, and an account takes no other field.
+
 ## The specialist request and response
 
 Three optional fields of `InvestigateRequest` say what is asked. Left out, a specialist returns whatever it holds, as before they existed.
@@ -40,4 +44,4 @@ Conventions inside `Evidence.data`, which the Orchestrator relies on when it sho
 
 - Money is an integer number of cents under a key that contains `_cents` (`amount_cents`, `typical_amount_cents_max`).
 - A share is an integer number of basis points, 10000 being the whole, under a key that ends in `_bp` (`share_of_fall_bp`).
-- Text a customer or a person wrote goes under `memo` (or `note`, or a key that ends in `_text`). Any other string that holds whitespace, `$` or `%` is treated as such text.
+- Text a customer or a person wrote goes under `memo` (or `note`, or a key that ends in `_text`). Any other string that holds whitespace, `$` or `%` is treated as such text. A `linked_account`'s `name` follows that rule like any string: a name with a space, `$` or `%` in it is withheld or marked in a record a model reads, a one-word name such as "Mercury" is not, and the `mask` is shown as it is. Since a customer can name the account, code writes the name into a sentence only when it reads as a bank's name for the account (`account_label` in `services/orchestrator/app/graph/facts.py`, and the same rule in Bank's `not_available` line).

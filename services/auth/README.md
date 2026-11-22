@@ -4,7 +4,7 @@ People sign in through Auth0 (KAN-37, KAN-54). This service issues no tokens: it
 
 ## Tokens
 
-- **A person's** (`analyst`, `manager`, `admin`): an RS256 access token from Auth0. The Orchestrator and Card check it against the tenant's published keys, its issuer and the API audience. The Action adds two claims: `https://credit-review.demo/role`, the person's one role, and `https://credit-review.demo/customers`, the customer ids they review. Managers and admins need customers too, or their queue is empty. Card checks the token again when the Orchestrator passes on the approver's token with an action.
+- **A person's** (`analyst`, `manager`, `admin`): an RS256 access token from Auth0. The Orchestrator and Card check it against the tenant's published keys, its issuer and the API audience. The Action adds three claims: `https://credit-review.demo/role`, the person's one role, `https://credit-review.demo/customers`, the customer ids they review, and `https://credit-review.demo/email`, which the Orchestrator stamps on a decision as `by_name` so the app shows who decided by email (the sub stays who decided). Managers and admins need customers too, or their queue is empty. Card checks the token again when the Orchestrator passes on the approver's token with an action.
 - **A service's** (`service`): HS256, signed with `JWT_SECRET`. The signal sender uses one, and each specialist signs one for its case that names one customer. Auth0 is not involved.
 
 With `AUTH0_DOMAIN` and `AUTH0_AUDIENCE` set, the services accept HS256 tokens for role `service` only. With both unset, people's tokens are HS256 too, made by `python -m app.dev_token` in the Orchestrator container (`services/orchestrator/README.md`, Tokens and decisions). Local runs, the tests and the evaluation work that way.
@@ -30,7 +30,7 @@ Set up on 2026-11-19 in a development tenant the team shares with another projec
    - otherwise put the role in the user's app_metadata: `{"role": "manager"}`.
    Put their customers in app_metadata: `{"customers": ["c_002", "c_010"]}`.
 4. Create a post-login Action from `auth0/post-login.js`, deploy it and add it to the post-login trigger. A login with no role, or more than one, is refused.
-5. In `.env`, set `AUTH0_DOMAIN` to the tenant's domain (for example `your-tenant.us.auth0.com`), `AUTH0_AUDIENCE` to the API identifier and `AUTH0_CLIENT_ID` to the SPA's client id, and leave `DEV_LOGIN` empty. Then `docker compose up -d --build`: the frontend is built with them and shows "Sign in with Auth0", and the Orchestrator and Card check its tokens.
+5. In `.env`, set `AUTH0_DOMAIN` to the tenant's domain (for example `your-tenant.us.auth0.com`), `AUTH0_AUDIENCE` to the API identifier and `AUTH0_CLIENT_ID` to the SPA's client id, and leave `DEV_LOGIN` empty. Then `docker compose up -d --build`: the frontend is built with them and its sign-in page signs in through Auth0, and the Orchestrator and Card check its tokens.
 
 From then on the Orchestrator and Card accept only service tokens from `app.dev_token` and the dev login: both still make person tokens, but the services refuse them (401). The dashboard asks Auth0 for a token with `audience` set to the API identifier (`frontend/src/auth/WithAuth0.tsx`); without it, Auth0 returns an access token the services cannot check. Public sign-up on the tenant's database connection should be off: a signed-up account gets no token for this API (the Action refuses an account with no role), but it is better not to have one.
 

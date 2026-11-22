@@ -1,6 +1,7 @@
 import { useAuth0 } from "@auth0/auth0-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ErrorBanner } from "../components/ErrorBanner";
 import { useAuth } from "./AuthContext";
 import { userFromAccessToken } from "./auth0";
 
@@ -41,32 +42,61 @@ export default function Auth0SignIn() {
 
   // Auth0 reports a refused login (the Action's "needs exactly one role", a wrong password) here.
   const shown = problem ?? error?.message ?? null;
+  // Back from Auth0 while the effect swaps its session for a token. A failed swap leaves PENDING set, so a problem
+  // brings the button back rather than leaving the page stuck here.
+  const finishing = isAuthenticated && sessionStorage.getItem(PENDING) !== null && !shown;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-100 p-6">
-      <div className="w-full max-w-sm bg-white rounded-xl shadow-lg p-8 space-y-6">
-        <div className="text-center">
-          <h1 className="text-2xl font-semibold text-slate-900">Credit Risk Review</h1>
-          <p className="text-sm text-slate-500 mt-1">Sign in with your Credit Review account.</p>
+    <main className="min-h-screen grid lg:grid-cols-2">
+      <section className="bg-slate-900 text-white p-8 lg:p-12 flex flex-col justify-center">
+        <h1 className="text-2xl font-semibold">Credit Review</h1>
+        <p className="mt-2 max-w-md text-slate-300">
+          An AI agent investigates corporate card customers the limit engine holds for review and recommends what to do
+          about their limit. A person decides, and the card system applies an approved change.
+        </p>
+        <ol className="mt-8 max-w-md space-y-3 text-sm text-slate-300 list-decimal list-inside">
+          <li>
+            The limit engine holds its limit decision for review when it sees a large cut, a failed repayment,
+            incomplete bank data or a large limit.
+          </li>
+          <li>An AI agent investigates and recommends, citing records and policy.</li>
+          <li>
+            An analyst or a manager decides. A pause or a cut over half the limit needs a manager's authority, so an
+            analyst's approval of one goes to a manager.
+          </li>
+          <li>The card system applies an approved change and returns a receipt.</li>
+        </ol>
+      </section>
+
+      <div className="flex items-center justify-center bg-slate-50 p-6">
+        <div className="w-full max-w-sm rounded-xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
+          <h2 className="text-lg font-semibold text-slate-900">Sign in</h2>
+
+          {shown && <ErrorBanner className="mt-4">{shown}</ErrorBanner>}
+
+          <div className="mt-6">
+            {finishing ? (
+              <p role="status" className="text-sm text-slate-600">
+                Finishing sign-in…
+              </p>
+            ) : (
+              <button
+                type="button"
+                disabled={isLoading}
+                onClick={() => {
+                  sessionStorage.setItem(PENDING, "1");
+                  // "login" asks every time, so the analyst and the manager can take turns on one browser.
+                  void loginWithRedirect({ authorizationParams: { prompt: "login" } });
+                }}
+                className="w-full bg-brand-700 enabled:hover:bg-brand-800 disabled:bg-slate-200 disabled:text-slate-500 text-white font-medium rounded-md px-4 py-2 transition"
+              >
+                {isLoading ? "Loading…" : "Sign in"}
+              </button>
+            )}
+          </div>
+          <p className="mt-3 text-center text-xs text-slate-500">Secured by Auth0</p>
         </div>
-
-        {shown && (
-          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-md px-3 py-2">{shown}</div>
-        )}
-
-        <button
-          type="button"
-          disabled={isLoading}
-          onClick={() => {
-            sessionStorage.setItem(PENDING, "1");
-            // "login" asks every time, so the analyst and the manager can take turns on one browser.
-            void loginWithRedirect({ authorizationParams: { prompt: "login" } });
-          }}
-          className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-medium rounded-md px-4 py-2 transition"
-        >
-          {isLoading ? "Signing in…" : "Sign in with Auth0"}
-        </button>
       </div>
-    </div>
+    </main>
   );
 }

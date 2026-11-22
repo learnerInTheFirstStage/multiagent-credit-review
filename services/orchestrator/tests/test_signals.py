@@ -74,6 +74,15 @@ def test_new_signal_opens_a_queued_case(client, session):
     assert stored.payload == SIGNAL
 
 
+def test_a_signal_that_names_its_accounts_is_stored_with_their_names(client, session):
+    # Without them (SIGNAL) it is stored as sent too, with no null name or mask.
+    account = {"id": "acct_c010_a", "last_synced": "2026-11-10", "name": "Bank of America Business Checking", "mask": "7290"}
+    named = changed("snapshot.bank.accounts", [account])
+
+    assert client.post("/signals", json=named).status_code == 201
+    assert session.get(SignalRow, "sig_551").payload == named
+
+
 def test_repeated_signal_returns_the_same_case_and_stores_nothing(client, session):
     first = client.post("/signals", json=SIGNAL)
     second = client.post("/signals", json=SIGNAL)

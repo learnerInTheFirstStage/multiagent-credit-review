@@ -20,20 +20,13 @@ from tests._bank_standin import BankStandin
 
 CUSTOMERS = sorted(mock.customer_ids())
 RECORDED = _bank_standin.recorded()
-# Keys Bank adds that the stand-in never uses for that kind, as Bank's own parity test allows
-# (services/bank/tests/test_standin_parity.py). Any other difference fails.
-BANK_ONLY = {"bank_transaction": {"date"}, "weekly_inflow_series": {"series"}}
-
-
-def as_the_stand_in_has_it(item: dict) -> dict:
-    extra = BANK_ONLY.get(item["kind"], set())
-    return {**item, "data": {key: value for key, value in item["data"].items() if key not in extra}}
 
 
 def test_the_fixture_holds_exactly_the_stand_ins_records():
     # The fixture is recorded from the real Bank: python -m tests._bank_standin --from-bank <url>
+    # Every key counts: the stand-in gives a payment's date and the weekly series as Bank's seeder writes them.
     for customer_id in CUSTOMERS:
-        ours = {item["id"]: as_the_stand_in_has_it(item) for key, body in RECORDED.items()
+        ours = {item["id"]: item for key, body in RECORDED.items()
                 if key.split("/")[0] == customer_id for item in body["evidence"]}
         theirs = {item["id"]: item for key, body in _bank_standin.build().items()
                   if key.split("/")[0] == customer_id for item in body["evidence"]}
@@ -62,8 +55,7 @@ def test_with_no_model_the_agent_returns_every_record_the_stand_in_returns_uncha
     for topic, focus in asks(customer_id):
         ask = request(customer_id, topic, **focus)
         theirs = mock.cash_flow(ask)
-        ours = {item.id: as_the_stand_in_has_it(item.model_dump(mode="json"))
-                for item in cash_flow(ask, http=BankStandin().client()).evidence}
+        ours = {item.id: item.model_dump(mode="json") for item in cash_flow(ask, http=BankStandin().client()).evidence}
         if topic is None:
             # A payee's history needs a payment's id; with no topic the agent does not look one up.
             theirs.evidence = [item for item in theirs.evidence if item.kind != "payee_history"]

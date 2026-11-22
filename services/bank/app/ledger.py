@@ -132,16 +132,18 @@ class Ledger:
 
     def account(self, account: LinkedAccount) -> Record:
         days = (self.as_of - account.last_reported_at).days
-        return Record(
-            account.id,
-            ev.LINKED_ACCOUNT,
-            {
-                "active": account.active,
-                "days_stale": days,
-                "last_synced": account.last_reported_at.isoformat(),
-                "is_stale": days > 0 or not account.active,
-            },
-        )
+        data = {
+            "active": account.active,
+            "days_stale": days,
+            "last_synced": account.last_reported_at.isoformat(),
+            "is_stale": days > 0 or not account.active,
+        }
+        # How a person knows the account, only when the data names it: a row seeded without them has neither key.
+        if account.name is not None:
+            data["name"] = account.name
+        if account.mask is not None:
+            data["mask"] = account.mask
+        return Record(account.id, ev.LINKED_ACCOUNT, data)
 
     def txn(self, txn: Txn) -> Record:
         data = {"date": txn.day.isoformat(), "amount_cents": txn.amount_cents, "category": txn.category}

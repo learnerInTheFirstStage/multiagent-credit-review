@@ -11,7 +11,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "3916",
+     "name": "U.S. Bank Business Checking"
     },
     "id": "acct_c001_a",
     "kind": "linked_account"
@@ -29,7 +31,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "3916",
+     "name": "U.S. Bank Business Checking"
     },
     "id": "acct_c001_a",
     "kind": "linked_account"
@@ -648,7 +652,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "7364",
+     "name": "Wells Fargo Business Checking"
     },
     "id": "acct_c002_a",
     "kind": "linked_account"
@@ -666,7 +672,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "7364",
+     "name": "Wells Fargo Business Checking"
     },
     "id": "acct_c002_a",
     "kind": "linked_account"
@@ -1320,7 +1328,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "5937",
+     "name": "Bank of America Business Checking"
     },
     "id": "acct_c003_a",
     "kind": "linked_account"
@@ -1338,7 +1348,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "5937",
+     "name": "Bank of America Business Checking"
     },
     "id": "acct_c003_a",
     "kind": "linked_account"
@@ -1829,7 +1841,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "3158",
+     "name": "PNC Business Checking"
     },
     "id": "acct_c004_a",
     "kind": "linked_account"
@@ -1847,7 +1861,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "3158",
+     "name": "PNC Business Checking"
     },
     "id": "acct_c004_a",
     "kind": "linked_account"
@@ -2396,7 +2412,9 @@
      "active": true,
      "days_stale": 5,
      "is_stale": true,
-     "last_synced": "2026-11-05"
+     "last_synced": "2026-11-05",
+     "mask": "4821",
+     "name": "Chase Business Checking"
     },
     "id": "acct_c005_a",
     "kind": "linked_account"
@@ -2406,7 +2424,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "6402",
+     "name": "Truist Business Checking"
     },
     "id": "acct_c005_b",
     "kind": "linked_account"
@@ -2424,7 +2444,9 @@
      "active": true,
      "days_stale": 5,
      "is_stale": true,
-     "last_synced": "2026-11-05"
+     "last_synced": "2026-11-05",
+     "mask": "4821",
+     "name": "Chase Business Checking"
     },
     "id": "acct_c005_a",
     "kind": "linked_account"
@@ -2442,7 +2464,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "6402",
+     "name": "Truist Business Checking"
     },
     "id": "acct_c005_b",
     "kind": "linked_account"
@@ -2453,7 +2477,7 @@
   "data": {
    "end": "2026-11-10",
    "not_available": [
-    "Linked cash moved while acct_c005_a did not report, so no share of the fall or reconciliation is worked out."
+    "Linked cash moved while Chase Business Checking \u2022\u20224821 did not report, so no share of the fall or reconciliation is worked out."
    ],
    "start": "2026-11-03"
   },
@@ -2463,7 +2487,7 @@
   "data": {
    "end": "2026-11-10",
    "not_available": [
-    "Linked cash moved while acct_c005_a did not report, so no share of the fall or reconciliation is worked out."
+    "Linked cash moved while Chase Business Checking \u2022\u20224821 did not report, so no share of the fall or reconciliation is worked out."
    ],
    "start": "2026-11-03"
   },
@@ -2775,7 +2799,7 @@
   "data": {
    "end": "2026-11-10",
    "not_available": [
-    "Linked cash moved while acct_c005_a did not report, so no share of the fall or reconciliation is worked out."
+    "Linked cash moved while Chase Business Checking \u2022\u20224821 did not report, so no share of the fall or reconciliation is worked out."
    ],
    "start": "2026-11-03",
    "transaction_ids": [
@@ -2894,7 +2918,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "8275",
+     "name": "Capital One Business Checking"
     },
     "id": "acct_c006_a",
     "kind": "linked_account"
@@ -2912,7 +2938,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "8275",
+     "name": "Capital One Business Checking"
     },
     "id": "acct_c006_a",
     "kind": "linked_account"
@@ -3403,7 +3431,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "2649",
+     "name": "Citi Business Checking"
     },
     "id": "acct_c007_a",
     "kind": "linked_account"
@@ -3421,7 +3451,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "2649",
+     "name": "Citi Business Checking"
     },
     "id": "acct_c007_a",
     "kind": "linked_account"
@@ -4034,7 +4066,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "5713",
+     "name": "Chase Business Checking"
     },
     "id": "acct_c008_a",
     "kind": "linked_account"
@@ -4052,7 +4086,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "5713",
+     "name": "Chase Business Checking"
     },
     "id": "acct_c008_a",
     "kind": "linked_account"
@@ -4673,7 +4709,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "9058",
+     "name": "Wells Fargo Business Checking"
     },
     "id": "acct_c009_a",
     "kind": "linked_account"
@@ -4691,7 +4729,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "9058",
+     "name": "Wells Fargo Business Checking"
     },
     "id": "acct_c009_a",
     "kind": "linked_account"
@@ -5256,7 +5296,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "7290",
+     "name": "Bank of America Business Checking"
     },
     "id": "acct_c010_a",
     "kind": "linked_account"
@@ -5274,7 +5316,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "7290",
+     "name": "Bank of America Business Checking"
     },
     "id": "acct_c010_a",
     "kind": "linked_account"
@@ -5936,7 +5980,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "4386",
+     "name": "PNC Business Checking"
     },
     "id": "acct_c011_a",
     "kind": "linked_account"
@@ -5954,7 +6000,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "4386",
+     "name": "PNC Business Checking"
     },
     "id": "acct_c011_a",
     "kind": "linked_account"
@@ -6561,7 +6609,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "6147",
+     "name": "U.S. Bank Business Checking"
     },
     "id": "acct_c012_a",
     "kind": "linked_account"
@@ -6579,7 +6629,9 @@
      "active": true,
      "days_stale": 0,
      "is_stale": false,
-     "last_synced": "2026-11-10"
+     "last_synced": "2026-11-10",
+     "mask": "6147",
+     "name": "U.S. Bank Business Checking"
     },
     "id": "acct_c012_a",
     "kind": "linked_account"

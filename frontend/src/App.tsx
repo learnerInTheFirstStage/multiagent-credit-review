@@ -1,4 +1,4 @@
-import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { useCaseEvents } from "./hooks/useCaseEvents";
 import { LiveStateChip } from "./components/LiveStateChip";
@@ -8,24 +8,27 @@ import CaseDetailPage from "./pages/CaseDetailPage";
 
 function TopBar({ liveState }: { liveState: ReturnType<typeof useCaseEvents> }) {
   const { user, signOut } = useAuth();
-  const navigate = useNavigate();
+  // At 375px the right group gives way: the name truncates (the full one in its title), and the role line and the
+  // brand's subtitle show from sm up.
   return (
     <header className="bg-white border-b border-slate-200 px-4 py-3">
-      <div className="max-w-5xl mx-auto flex items-center justify-between">
-        <button onClick={() => navigate("/")} className="text-left">
-          <div className="text-sm text-brand-600 font-semibold">Credit Review</div>
-          <div className="text-xs text-slate-500">cash-flow signal queue</div>
-        </button>
+      <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
+        <Link to="/" className="shrink-0 text-left">
+          <div className="text-sm text-brand-700 font-semibold">Credit Review</div>
+          <div className="hidden sm:block text-xs text-slate-500">Limit review queue</div>
+        </Link>
         {user && (
-          <div className="flex items-center gap-3 text-sm">
+          <div className="flex min-w-0 items-center gap-2 text-sm">
             <LiveStateChip state={liveState} />
-            <div className="text-right">
-              <div className="text-slate-900">{user.name ?? user.sub}</div>
-              <div className="text-xs text-slate-500">{user.role}</div>
+            <div className="min-w-0 text-right">
+              <div className="truncate max-w-[9rem] sm:max-w-none text-slate-900" title={user.name ?? user.sub}>
+                {user.name ?? user.sub}
+              </div>
+              <div className="hidden sm:block text-xs text-slate-500">{user.role}</div>
             </div>
             <button
               onClick={signOut}
-              className="text-xs text-slate-500 hover:text-rose-700 border border-slate-200 rounded px-2 py-1"
+              className="whitespace-nowrap text-xs text-slate-500 hover:text-rose-700 border border-slate-200 rounded px-2 py-1"
             >
               Sign out
             </button>

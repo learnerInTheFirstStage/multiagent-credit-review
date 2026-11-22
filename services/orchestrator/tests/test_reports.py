@@ -129,6 +129,23 @@ def test_the_figures_count_this_months_cases_only_and_never_the_seeded_ones():
                        "case_human": "u_analyst; decided request_documents"}
 
 
+def test_an_action_chosen_on_the_customers_documents_is_not_counted_as_approved_as_recommended():
+    asked = [{"step": "analyst", "decision": "approve", "by": "u_analyst"},
+             {"step": "documents", "decision": "approve", "by": "u_analyst", "decided": "pause_card"}]
+    add(
+        case("case_shown"), review("case_shown", recommendation="request_documents",
+                                   decisions=[*asked, {"step": "manager", "decision": "approve", "by": "u_manager"}],
+                                   action={"type": "pause_card", "result": {}}),
+        case("case_refused", customer_id="c_011"),
+        review("case_refused", recommendation="request_documents", outcome="rejected", customer_id="c_011",
+               decisions=[*asked, {"step": "manager", "decision": "reject", "by": "u_manager"}]),
+    )
+    with SessionLocal() as session:
+        people = reports.build(session, "2026-11", NOV_23)["totals"]["people"]
+
+    assert people == {"decided on the documents": 1, "rejected": 1}
+
+
 def test_the_pdf_names_every_closed_case_and_the_month(folder):
     november()
     made = reports.generate("2026-11", by="u_manager", now=NOV_23)

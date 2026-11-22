@@ -16,6 +16,8 @@ class CaseStatus(StrEnum):
     WAITING_FOR_DATA = "waiting_for_data"
     NEEDS_APPROVAL = "needs_approval"
     NEEDS_MANAGER = "needs_manager"
+    # request_documents was approved: a person records what the customer's documents showed.
+    AWAITING_DOCUMENTS = "awaiting_documents"
     DONE = "done"
     REJECTED = "rejected"
     FAILED = "failed"
@@ -27,6 +29,7 @@ OPEN_STATUSES = (
     CaseStatus.WAITING_FOR_DATA,
     CaseStatus.NEEDS_APPROVAL,
     CaseStatus.NEEDS_MANAGER,
+    CaseStatus.AWAITING_DOCUMENTS,
 )
 _is_open = text("status IN (" + ", ".join(f"'{s.value}'" for s in OPEN_STATUSES) + ")")
 
@@ -47,6 +50,14 @@ class Case(Base):
     case_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     customer_id: Mapped[str] = mapped_column(String(16), index=True)
     status: Mapped[str] = mapped_column(String(32), default=CaseStatus.QUEUED)
+    # Copied from the graph state with the status (runner.keep_row), so the queue need not read the graph.
+    waiting_for: Mapped[str | None] = mapped_column(String(16))
+    recommendation: Mapped[str | None] = mapped_column(String(32))  # the checked report's, null before there is one
+    confidence: Mapped[str | None] = mapped_column(String(8))
+    # Card's words when it refused the approved action at the last attempt; null once it applies one or only failed.
+    card_refusal: Mapped[str | None] = mapped_column(String(500))
+    # YYYY-MM-DD the customer's documents are due, while the case waits for them (runner.keep_row); else null.
+    documents_due: Mapped[str | None] = mapped_column(String(10))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -113,7 +124,7 @@ class Review(Base):
     cash_now_cents: Mapped[int] = mapped_column(BigInteger)
     report: Mapped[dict | None] = mapped_column(JSON)  # the checked report, whole
     evidence: Mapped[list] = mapped_column(JSON)  # the cited records, copied: ids mean nothing outside their case
-    decisions: Mapped[list] = mapped_column(JSON)  # with notes where given
+    decisions: Mapped[list] = mapped_column(JSON)  # with notes and reasons where given
     action: Mapped[dict | None] = mapped_column(JSON)
     asked: Mapped[list] = mapped_column(JSON)
     text: Mapped[str] = mapped_column(Text)  # what search reads, composed by code
