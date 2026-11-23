@@ -103,7 +103,9 @@ async def _report_monthly(stop: asyncio.Event, every: float) -> None:
             pass
 
 
-app = FastAPI(title="Orchestrator Service", lifespan=lifespan)
+# No redirect to add or drop a trailing slash. Behind the gateway it would point at http:// and the path with
+# /api/orchestrator cut, with any token in the query. A path with a trailing slash is a 404.
+app = FastAPI(title="Orchestrator Service", lifespan=lifespan, redirect_slashes=False)
 app.add_middleware(RequestLog)
 app.include_router(signals.router)
 # Events must come before cases: `/cases/events` would otherwise match the

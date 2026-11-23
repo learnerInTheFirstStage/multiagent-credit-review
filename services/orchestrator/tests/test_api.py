@@ -276,6 +276,25 @@ def test_a_failure_inside_the_service_is_an_error_of_the_same_shape_that_gives_n
     assert "hunter2" not in answer.text
 
 
+# Paths behind the gateway
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("/cases/", id="the queue"),
+        pytest.param("/cases/events/?token=x", id="the stream, with its token"),
+    ],
+)
+def test_a_trailing_slash_is_not_found_and_never_redirected(api, path):
+    # FastAPI's default redirect is built from what the gateway hands the service: http:// and the path with
+    # /api/orchestrator cut. It would send the browser, and the token in the query, over plain http to a wrong path.
+    answer = api.get(path, follow_redirects=False)
+
+    assert answer.status_code == 404
+    assert "location" not in answer.headers
+
+
 # Tokens for local use
 
 
