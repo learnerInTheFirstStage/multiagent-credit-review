@@ -41,9 +41,10 @@ spec:
             - name: DATABASE_URL
               value: postgresql+psycopg://card:$(CARD_DB_PASSWORD)@postgres:5432/card
             - {name: JWT_SECRET, valueFrom: {secretKeyRef: {name: credit-review, key: JWT_SECRET}}}
-            # Empty: people's tokens are HS256 too (services/auth/README.md).
-            - {name: AUTH0_DOMAIN, valueFrom: {configMapKeyRef: {name: settings, key: AUTH0_DOMAIN}}}
-            - {name: AUTH0_AUDIENCE, valueFrom: {configMapKeyRef: {name: settings, key: AUTH0_AUDIENCE}}}
+            # From k8s/up.sh: .env's on kind, empty in a cloud, where people's tokens are HS256 too
+            # (services/auth/README.md).
+            - {name: AUTH0_DOMAIN, valueFrom: {configMapKeyRef: {name: auth0, key: AUTH0_DOMAIN}}}
+            - {name: AUTH0_AUDIENCE, valueFrom: {configMapKeyRef: {name: auth0, key: AUTH0_AUDIENCE}}}
           ports:
             - containerPort: 8000
           readinessProbe:

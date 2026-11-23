@@ -74,8 +74,8 @@ spec:
             - name: DATABASE_URL
               value: postgresql+psycopg://orchestrator:$(ORCHESTRATOR_DB_PASSWORD)@postgres:5432/orchestrator
             - {name: JWT_SECRET, valueFrom: {secretKeyRef: {name: credit-review, key: JWT_SECRET}}}
-            - {name: AUTH0_DOMAIN, valueFrom: {configMapKeyRef: {name: settings, key: AUTH0_DOMAIN}}}
-            - {name: AUTH0_AUDIENCE, valueFrom: {configMapKeyRef: {name: settings, key: AUTH0_AUDIENCE}}}
+            - {name: AUTH0_DOMAIN, valueFrom: {configMapKeyRef: {name: auth0, key: AUTH0_DOMAIN}}}
+            - {name: AUTH0_AUDIENCE, valueFrom: {configMapKeyRef: {name: auth0, key: AUTH0_AUDIENCE}}}
             - {name: BANK_URL, value: "http://bank:8000"}
             - {name: CARD_URL, value: "http://card:8000"}
             - {name: LLM_MODEL, valueFrom: {secretKeyRef: {name: credit-review, key: LLM_MODEL}}}

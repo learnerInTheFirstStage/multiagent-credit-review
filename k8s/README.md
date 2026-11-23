@@ -21,7 +21,7 @@ The whole system on Kubernetes, so the case workers scale with the number of wai
 | `postgres`, `rabbitmq` | StatefulSet with a volume | 1 | on AWS: RDS and Amazon MQ |
 
 - **Secrets:** a Secret, `credit-review`, made by `up.sh` from the repo-root `.env`. Anything `.env` leaves out gets compose's fallback on kind, and a random value in a cloud, kept across re-runs. It is never written to a file in the repo. Each pod gets only the keys it needs.
-- **Settings that are not secret:** `settings` in `base/kustomization.yaml`, with compose's defaults.
+- **Settings that are not secret:** `settings` in `base/kustomization.yaml`, with compose's defaults. People's Auth0 settings are in `auth0`, made by `up.sh`: `.env`'s `AUTH0_DOMAIN` and `AUTH0_AUDIENCE` on kind, empty in a cloud.
 - **The gateway** runs stock nginx with `base/gateway.conf`, a copy of `gateway/nginx.conf`. The original looks names up through Docker's DNS, which Kubernetes doesn't have. **When a route changes in `gateway/nginx.conf`, change it here too.**
 
 ## Run it on a laptop
@@ -35,9 +35,21 @@ kubectl -n credit-review get pods
 kind delete cluster --name credit-review    # remove it all
 ```
 
+With the three `AUTH0_*` values in `.env`, the review app signs people in through Auth0, as on compose: the frontend image is built with them, and `up.sh` gives the Orchestrator and Card the domain and audience. The Auth0 app allows http://127.0.0.1:8088 and http://localhost:8088. Without them nobody can sign in, since the cluster has no dev login.
+
 ### The end-to-end check
 
-`scripts/e2e.py` runs unchanged. Point it at the cluster:
+`scripts/e2e.py` runs unchanged, on a cluster without Auth0: its analyst and manager tokens are made in the containers, and with Auth0 the services refuse them. Empty the `auth0` ConfigMap first (`k8s/up.sh` fills it again):
+
+```bash
+kubectl -n credit-review create configmap auth0 --from-literal=AUTH0_DOMAIN= --from-literal=AUTH0_AUDIENCE= \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n credit-review rollout restart deployment/orchestrator deployment/card
+kubectl -n credit-review rollout status deployment/orchestrator --timeout=900s
+kubectl -n credit-review rollout status deployment/card --timeout=900s
+```
+
+Then point it at the cluster:
 
 ```bash
 kubectl -n credit-review port-forward svc/orchestrator 8034:8000 &

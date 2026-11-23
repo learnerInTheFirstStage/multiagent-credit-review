@@ -90,6 +90,17 @@ LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-}
 EOF
   kubectl -n "$NAMESPACE" create secret generic credit-review --from-env-file="$env_file" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # People's sign-in. On kind, .env's Auth0, as compose takes it: the frontend image is built with it too, and the
+  # Auth0 app allows http://127.0.0.1:8088. A cloud is reached through a tunnel Auth0 does not allow, so it stays
+  # empty there and the services take HS256 tokens only (services/auth/README.md), as scripts/e2e.py needs.
+  if [ "$OVERLAY" = local ]; then
+    auth0_domain="${AUTH0_DOMAIN:-}" auth0_audience="${AUTH0_AUDIENCE:-}"
+  else
+    auth0_domain="" auth0_audience=""
+  fi
+  kubectl -n "$NAMESPACE" create configmap auth0 \
+    --from-literal=AUTH0_DOMAIN="$auth0_domain" --from-literal=AUTH0_AUDIENCE="$auth0_audience" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 )
 kubectl -n "$NAMESPACE" create configmap postgres-init --from-file=infra/postgres/init/ \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
