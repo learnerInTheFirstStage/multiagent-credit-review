@@ -2,7 +2,8 @@
 # Deploy the whole system to Kubernetes. Run from anywhere in the checkout:
 #
 #   k8s/up.sh              a local kind cluster: create it if needed, build and load the images, deploy
-#   k8s/up.sh aws-k3s      k3s on EC2 (k8s/aws/): after create.sh, push-images.sh and connect.sh
+#   k8s/up.sh aws-k3s      k3s on EC2 (k8s/aws/): after create.sh, push-images.sh and connect.sh.
+#                          With create.sh's PUBLIC_HTTPS=1, also Caddy (k8s/aws/caddy.yaml) on https://<Elastic IP>
 #   k8s/up.sh gcp-k3s      k3s on a Google Cloud VM (k8s/gcp/): the same three scripts there
 #   kind delete cluster --name credit-review       remove the local cluster
 #
@@ -17,6 +18,7 @@ CLUSTER=credit-review
 NAMESPACE=credit-review
 KEDA_VERSION=2.21.0
 IMAGES=(auth bank card orchestrator frontend)            # built by compose as credit-review-<name>
+PUBLIC_IP=""                                             # from k8s/aws/state.env only, never from the shell
 
 step() { printf '\n== %s\n' "$*"; }
 
@@ -88,18 +90,17 @@ LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
 LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
 LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-}
 EOF
+  # .env.example's secret is public: on a public address, anyone could sign tokens with it.
+  if [ -n "${PUBLIC_IP:-}" ] && grep -qx 'JWT_SECRET=local-jwt-secret-for-development-only' "$env_file"; then
+    echo "A public address needs a real JWT_SECRET in .env"; exit 1
+  fi
   kubectl -n "$NAMESPACE" create secret generic credit-review --from-env-file="$env_file" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  # People's sign-in. On kind, .env's Auth0, as compose takes it: the frontend image is built with it too, and the
-  # Auth0 app allows http://127.0.0.1:8088. A cloud is reached through a tunnel Auth0 does not allow, so it stays
-  # empty there and the services take HS256 tokens only (services/auth/README.md), as scripts/e2e.py needs.
-  if [ "$OVERLAY" = local ]; then
-    auth0_domain="${AUTH0_DOMAIN:-}" auth0_audience="${AUTH0_AUDIENCE:-}"
-  else
-    auth0_domain="" auth0_audience=""
-  fi
+  # People's sign-in: .env's Auth0, as compose takes it. The frontend image is built with it too, and the Auth0 app
+  # allows kind's http://127.0.0.1:8088, a cloud's port-forward on :8089 and each public address
+  # (services/auth/README.md). scripts/e2e.py needs it empty (k8s/README.md, The end-to-end check).
   kubectl -n "$NAMESPACE" create configmap auth0 \
-    --from-literal=AUTH0_DOMAIN="$auth0_domain" --from-literal=AUTH0_AUDIENCE="$auth0_audience" \
+    --from-literal=AUTH0_DOMAIN="${AUTH0_DOMAIN:-}" --from-literal=AUTH0_AUDIENCE="${AUTH0_AUDIENCE:-}" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 )
 kubectl -n "$NAMESPACE" create configmap postgres-init --from-file=infra/postgres/init/ \
@@ -115,6 +116,10 @@ else
     sed -e "s|IMAGE_REGISTRY|$REGISTRY|g" -e "s|REPORTS_BUCKET_NAME|$REPORTS_BUCKET|g" -e "s|AWS_REGION_NAME|$REGION|g" |
     kubectl apply -f -
 fi
+# Public HTTPS, when create.sh made an Elastic IP. The address is filled in here, so it is not committed.
+if [ -n "${PUBLIC_IP:-}" ]; then
+  sed "s|PUBLIC_IP_ADDRESS|$PUBLIC_IP|g" k8s/aws/caddy.yaml | kubectl apply -f -
+fi
 # On a re-run the images may be new under the same names: restart what runs them, so the pods take them up.
 if [ -n "$running" ]; then
   kubectl -n "$NAMESPACE" rollout restart deployment >/dev/null
@@ -124,9 +129,14 @@ step "Waiting for every service"
 for deployment in auth bank card orchestrator worker frontend gateway; do
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=900s
 done
+if [ -n "${PUBLIC_IP:-}" ]; then
+  kubectl -n "$NAMESPACE" rollout status deployment/caddy --timeout=300s
+fi
 
 if [ "$OVERLAY" = local ]; then
   echo; echo "Up. The app: http://127.0.0.1:8088"
+elif [ -n "${PUBLIC_IP:-}" ]; then
+  echo; echo "Up. The app: https://$PUBLIC_IP (its first certificate can take a minute)"
 else
   echo; echo "Up. The app: kubectl -n $NAMESPACE port-forward svc/gateway 8089:80, then http://127.0.0.1:8089"
 fi

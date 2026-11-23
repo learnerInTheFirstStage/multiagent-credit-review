@@ -21,7 +21,7 @@ The whole system on Kubernetes, so the case workers scale with the number of wai
 | `postgres`, `rabbitmq` | StatefulSet with a volume | 1 | on AWS: RDS and Amazon MQ |
 
 - **Secrets:** a Secret, `credit-review`, made by `up.sh` from the repo-root `.env`. Anything `.env` leaves out gets compose's fallback on kind, and a random value in a cloud, kept across re-runs. It is never written to a file in the repo. Each pod gets only the keys it needs.
-- **Settings that are not secret:** `settings` in `base/kustomization.yaml`, with compose's defaults. People's Auth0 settings are in `auth0`, made by `up.sh`: `.env`'s `AUTH0_DOMAIN` and `AUTH0_AUDIENCE` on kind, empty in a cloud.
+- **Settings that are not secret:** `settings` in `base/kustomization.yaml`, with compose's defaults. People's Auth0 settings are in `auth0`, made by `up.sh` from `.env`'s `AUTH0_DOMAIN` and `AUTH0_AUDIENCE`, on kind and in a cloud.
 - **The gateway** runs stock nginx with `base/gateway.conf`, a copy of `gateway/nginx.conf`. The original looks names up through Docker's DNS, which Kubernetes doesn't have. **When a route changes in `gateway/nginx.conf`, change it here too.**
 
 ## Run it on a laptop
@@ -77,22 +77,41 @@ To load them into a cluster, here or on AWS: `demo/load-k8s.sh` (`demo/README.md
 
 ## Run it on AWS: k3s on one EC2 instance
 
-Needs the AWS CLI signed in (`aws login`), its [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html), Docker and `kubectl`. Nothing on the instance is open to the internet: the cluster is reached through an SSM tunnel.
+Needs the AWS CLI signed in (`aws login`), its [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html), Docker and `kubectl`. The cluster is reached through an SSM tunnel. Nothing on the instance is open to the internet, unless `PUBLIC_HTTPS=1` (below) opens ports 80 and 443 for the app.
 
 ```bash
-REPORTS_BUCKET=<your reports bucket> k8s/aws/create.sh   # ECR, IAM role, security group, EC2 with k3s (k8s/aws/state.env)
-k8s/aws/push-images.sh                                   # build and push the five images to ECR
+REPORTS_BUCKET=<your reports bucket> k8s/aws/create.sh   # the bucket if new, ECR, IAM role, security group, EC2 with k3s (k8s/aws/state.env)
+k8s/aws/push-images.sh                                   # build the five images for linux/amd64 and push them to ECR
 k8s/aws/connect.sh                                       # wait for k3s, save k8s/aws/kubeconfig, open the tunnel
 k8s/up.sh aws-k3s                                        # KEDA, secrets, deploy
 export KUBECONFIG=$PWD/k8s/aws/kubeconfig
 kubectl -n credit-review port-forward svc/gateway 8089:80   # the app on http://127.0.0.1:8089
-k8s/aws/teardown.sh                                      # delete everything create.sh made; the bucket is kept
+k8s/aws/teardown.sh                                      # delete everything create.sh made
+k8s/aws/teardown-test.sh                                 # check teardown.sh with a stand-in aws: no account, no tunnel touched
+k8s/aws/push-images-test.sh                              # check push-images.sh builds for the x86_64 instance: no docker, no AWS
 ```
 
 - **Instance:** m7i-flex.large (2 vCPU, 8 GB), Amazon Linux 2023, k3s with Secrets encrypted at rest, IMDSv2 only. About $0.096 an hour in us-east-2; free-tier eligible on accounts created after July 2025, drawn from their credits.
 - **Images:** from ECR. The instance's role pulls them; a timer renews k3s's ECR login every 6 hours.
-- **Reports:** to S3 through the instance's role, which may write to the reports bucket's `monthly/` only. No AWS key is in a pod.
+- **Reports:** to S3 through the instance's role, which may write to the reports bucket's `monthly/` only. No AWS key is in a pod. A bucket that exists is used as is and kept. One that does not is made by `create.sh` in the region, with SSE-S3, Block Public Access and no Object Lock, and `teardown.sh` deletes it with its reports. Its reports are not locked against early deletion. The Orchestrator sets no retention on a report, so for write-once retention name a bucket with Object Lock and a default retention rule, as the 2026-11-21 test bucket had (GOVERNANCE, 1 day).
 - **One instance, one role:** every pod on it shares the instance's AWS permissions. Per-service roles need EKS Pod Identity.
+- **Sign-in:** through Auth0, with `.env`'s settings, on http://127.0.0.1:8089 through the port-forward, or on the public address. `scripts/e2e.py` runs through the tunnel as in [The end-to-end check](#the-end-to-end-check), with `KUBECONFIG` set: empty the `auth0` ConfigMap first.
+  On a public cluster, run `kubectl -n credit-review scale deploy/caddy --replicas=0` while the `auth0` ConfigMap is empty for e2e. `k8s/up.sh` brings back both.
+- **Teardown:** a step that fails does not stop the rest. If any failed, `teardown.sh` lists what may remain and keeps `state.env`, the record of what `create.sh` made. With a public address, remove `https://<the address>` from the Auth0 app's callback, logout and web origin URLs (`services/auth/README.md`).
+
+### A public HTTPS address
+
+```bash
+PUBLIC_HTTPS=1 REPORTS_BUCKET=<your reports bucket> k8s/aws/create.sh   # also an Elastic IP, and 80 and 443 open
+k8s/aws/push-images.sh && k8s/aws/connect.sh && k8s/up.sh aws-k3s       # up.sh also starts Caddy, then prints https://<the address>
+k8s/up-test.sh                                                          # check up.sh refuses .env.example's JWT_SECRET here: no cluster touched
+```
+
+- **What it adds:** an Elastic IP tagged `credit-review-k3s`, associated with the instance, and TCP 80 and 443 from anywhere on its security group. The cluster's API stays behind the SSM tunnel. `create.sh` saves `EIP_ALLOCATION`, `EIP_ASSOCIATION` and `PUBLIC_IP` to `state.env`; `teardown.sh` disassociates and releases the address.
+- **Caddy** (`aws/caddy.yaml`, Caddy 2.11.6) listens on the node's ports 80 and 443 and passes everything to the gateway. It gets a Let's Encrypt certificate for the IP address itself (ACME profile `shortlived`, HTTP-01 on port 80) and keeps it on the node's disk, in `/var/lib/caddy`, so a restart does not ask again. `up.sh` fills in the address, so it is never committed.
+- **The token in the live-updates stream:** the stream carries the access token as `?token=`, and Caddy's error lines quote the URI, so its log replaces that value with `REDACTED`.
+- **Sign-in:** each new address must be added to the Auth0 app by hand: `https://<the address>/login` as a callback, `https://<the address>` as a logout and web origin (`services/auth/README.md`).
+- **Cost:** one public IPv4, USD 0.005 an hour whether in use or idle ([Amazon VPC pricing](https://aws.amazon.com/vpc/pricing/)). While the instance runs, the Elastic IP takes the place of its own public address. Unlike that one, it is charged while the instance is stopped too, until `teardown.sh` releases it.
 
 ## Run it on Google Cloud: k3s on one VM
 
@@ -108,15 +127,17 @@ kubectl -n credit-review port-forward svc/gateway 8099:80   # the app on http://
 k8s/gcp/teardown.sh                                      # delete the project, bucket and all
 ```
 
+Sign-in through Auth0 needs an address the Auth0 app allows: forward to 8089 instead of 8099, or add 8099 to the app.
+
 | | AWS (`k8s/aws/`) | Google Cloud (`k8s/gcp/`) |
 |---|---|---|
 | Machine | EC2 m7i-flex.large, Amazon Linux 2023 | Compute Engine e2-standard-2, Debian 12, Shielded VM |
-| Way in | SSM Session Manager, no inbound rule | IAP, inbound only from IAP's range (22 and 6443) |
+| Way in | SSM Session Manager, no inbound rule; with `PUBLIC_HTTPS=1`, 80 and 443 for Caddy | IAP, inbound only from IAP's range (22 and 6443) |
 | Images | ECR; k3s's login renewed every 6 h | Artifact Registry; a pull secret renewed every 10 min from the VM's account |
-| Reports | S3, Object Lock GOVERNANCE 1 day | Cloud Storage, retention policy 1 day, public access prevented |
+| Reports | S3: Object Lock GOVERNANCE 1 day on the 2026-11-21 test bucket, none on a bucket `create.sh` makes | Cloud Storage, retention policy 1 day, public access prevented |
 | Identity in the pods | the instance's role | the VM's service account; links signed through IAM (no key file) |
 | Overlay | `overlays/aws-k3s` | `overlays/gcp-k3s` |
-| Cost | about $0.096/h | about $0.08/h (VM, address, disk) |
+| Cost | about $0.096/h; with `PUBLIC_HTTPS=1`, $0.005/h for the Elastic IP, stopped or not | about $0.08/h (VM, address, disk) |
 
 ## Checked on Google Cloud, 2026-11-21 (us-east1)
 

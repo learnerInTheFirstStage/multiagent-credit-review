@@ -1,0 +1,79 @@
+# Public HTTPS for the AWS demo, only when k8s/aws/create.sh ran with PUBLIC_HTTPS=1 (k8s/README.md).
+# Caddy listens on the node's ports 80 and 443 and gets a Let's Encrypt certificate for the Elastic IP
+# (ACME profile shortlived, HTTP-01 on port 80), then passes everything to the cluster's Nginx gateway.
+# k8s/up.sh aws-k3s fills in PUBLIC_IP_ADDRESS from k8s/aws/state.env, so no address is committed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caddy
+  namespace: credit-review
+data:
+  Caddyfile: |
+    {
+    	admin off
+    	# The live-updates stream carries the access token as ?token=. Caddy's error lines quote the whole URI.
+    	log default {
+    		format filter {
+    			wrap json
+    			fields {
+    				request>uri query {
+    					replace token REDACTED
+    				}
+    			}
+    		}
+    	}
+    	default_sni {$PUBLIC_IP}
+    	servers {
+    		protocols h1 h2
+    	}
+    }
+
+    https://{$PUBLIC_IP} {
+    	tls {
+    		issuer acme {
+    			profile shortlived
+    			disable_tlsalpn_challenge
+    		}
+    	}
+
+    	reverse_proxy gateway:80
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caddy
+  namespace: credit-review
+spec:
+  replicas: 1
+  # The ports are the node's own: a second copy could not bind them.
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: caddy}
+  template:
+    metadata:
+      labels: {app: caddy}
+    spec:
+      containers:
+        - name: caddy
+          image: caddy:2.11.6
+          env:
+            - {name: PUBLIC_IP, value: "PUBLIC_IP_ADDRESS"}
+          ports:
+            - {containerPort: 80, hostPort: 80}
+            - {containerPort: 443, hostPort: 443}
+          volumeMounts:
+            - {name: caddyfile, mountPath: /etc/caddy}
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /config}
+          resources:
+            requests: {memory: 64Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - name: caddyfile
+          configMap: {name: caddy}
+        # On the node's disk, so the certificate survives k3s's restarts and is not requested again.
+        - name: data
+          hostPath: {path: /var/lib/caddy/data, type: DirectoryOrCreate}
+        - name: config
+          hostPath: {path: /var/lib/caddy/config, type: DirectoryOrCreate}

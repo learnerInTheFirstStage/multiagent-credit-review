@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reach the k3s cluster on the instance through an SSM tunnel: nothing on the instance is open to the internet.
+# Reach the k3s cluster on the instance through an SSM tunnel: the cluster's API is not open to the internet.
 #
 #   k8s/aws/connect.sh          waits for k3s, saves its kubeconfig to k8s/aws/kubeconfig, opens the tunnel
 #   export KUBECONFIG=k8s/aws/kubeconfig

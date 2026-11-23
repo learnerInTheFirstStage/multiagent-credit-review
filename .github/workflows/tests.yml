@@ -1,5 +1,5 @@
-# Runs on every pull request and on main: the three services' test suites and the frontend build.
-# The tests need Python 3.12 and nothing else: no Docker, no database server, no model, no network.
+# Runs on every pull request and on main: the three services' test suites, the frontend build and the deploy
+# scripts' checks. The tests need Python 3.12 and nothing else: no Docker, no database server, no model, no network.
 # The steps are the ones in the README under "Run the tests".
 name: Tests
 
@@ -59,3 +59,20 @@ jobs:
       # Type check and bundle. The frontend has no tests yet.
       - name: Build
         run: npm run build
+
+  deploy-scripts:
+    name: deploy scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      # Stand-in aws, kubectl and docker first on PATH: no account, cluster or build is touched.
+      # Every check runs, and the job fails if any of them did.
+      - name: Test
+        run: |
+          status=0
+          for t in k8s/up-test.sh k8s/aws/teardown-test.sh k8s/aws/push-images-test.sh; do
+            echo "== $t"
+            bash "$t" || status=1
+          done
+          exit "$status"

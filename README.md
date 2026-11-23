@@ -307,7 +307,7 @@ done
 
 Run them in a shell without the stack's variables (`LLM_*`, `LANGFUSE_*`, `SHARED_CUSTOMERS_*`): the tests set their own. Tests that only mean something on Postgres are skipped unless `TEST_DATABASE_URL` (Orchestrator: the whole suite then runs there and drops its tables) or `CARD_PG_URL` (Card) names a throwaway Postgres database.
 
-Every pull request, and every push to main, runs these three suites and the frontend build on GitHub Actions (`.github/workflows/tests.yml`).
+Every pull request, and every push to main, runs these three suites, the frontend build and the deploy scripts' checks (`k8s/up-test.sh`, `k8s/aws/teardown-test.sh`, `k8s/aws/push-images-test.sh`) on GitHub Actions (`.github/workflows/tests.yml`).
 
 ### Run the evaluation
 
@@ -353,7 +353,7 @@ Database passwords are applied when the Postgres volume is first created. After 
 
 ## Deploy
 
-`docker compose up` runs the whole system on one machine. `k8s/` runs the same services on Kubernetes, with case workers fed by RabbitMQ that KEDA scales from 1 to 5 by queue length: on kind on a laptop (`k8s/up.sh`, the app on http://127.0.0.1:8088), on k3s on one AWS EC2 instance (`k8s/aws/`), or on k3s on one Google Cloud VM (`k8s/gcp/`). Neither cloud setup is open to the internet: the app is reached through an SSM or IAP tunnel and a port-forward. There is no public URL: the Auth0 application allows sign-in callbacks on `localhost` and `127.0.0.1` only, ports 8080, 5173 and 8088 (`services/auth/README.md`), and the gateway serves plain HTTP. On kind the review app signs people in through Auth0 at http://127.0.0.1:8088, with the settings from `.env`. In the clouds the Orchestrator and Card get no Auth0 settings and there is no dev login, so nobody signs in to the review app there; they are checked through the tunnel with `scripts/e2e.py`, which passed on both clouds with the real model. Commands, costs and every check are in `k8s/README.md`.
+`docker compose up` runs the whole system on one machine. `k8s/` runs the same services on Kubernetes, with case workers fed by RabbitMQ that KEDA scales from 1 to 5 by queue length: on kind on a laptop (`k8s/up.sh`, the app on http://127.0.0.1:8088), on k3s on one AWS EC2 instance (`k8s/aws/`), or on k3s on one Google Cloud VM (`k8s/gcp/`). By default neither cloud setup is open to the internet: the app is reached through an SSM or IAP tunnel and a port-forward. On AWS, `PUBLIC_HTTPS=1 k8s/aws/create.sh` adds a public URL, `https://<the instance's Elastic IP>`: Caddy serves it with a Let's Encrypt certificate for the address and passes it to the gateway, which serves plain HTTP inside the cluster. People sign in to the review app through Auth0 with the settings from `.env`: on kind at http://127.0.0.1:8088, on AWS at http://127.0.0.1:8089 through the port-forward or at the public URL, which is added to the Auth0 application for each deployment (`services/auth/README.md`). There is no dev login on a cluster. `scripts/e2e.py` passed on both clouds with the real model, through the tunnel, when they had no Auth0 settings; it now needs the `auth0` ConfigMap emptied first (`k8s/README.md`). Commands, costs and every check are in `k8s/README.md`.
 
 ## Documentation
 

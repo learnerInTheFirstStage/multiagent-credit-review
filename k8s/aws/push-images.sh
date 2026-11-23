@@ -8,6 +8,9 @@ cd "$(dirname "$0")"
 . ./state.env
 cd ../..
 
+# The instance is x86_64 (create.sh's AMI). Compose builds for the machine it runs on, so on Apple Silicon it
+# would push arm64 images the node cannot start.
+export DOCKER_DEFAULT_PLATFORM=linux/amd64
 docker compose build ${REPOS}
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY" >/dev/null
 for repo in ${REPOS}; do

@@ -17,9 +17,9 @@ Set up on 2026-11-19 in a development tenant the team shares with another projec
 |---|---|
 | `AUTH0_DOMAIN` | `dev-pd2uh1dimju6bx2a.us.auth0.com` |
 | `AUTH0_AUDIENCE` | `https://api.credit-review.demo` (API "Credit Review API") |
-| `AUTH0_CLIENT_ID` | `Nwe76UaM6WetJUAsrc3xfEt8yiMzc6tj` (SPA "Credit Review Dashboard"; callbacks `/login` on `http://localhost` and `http://127.0.0.1`, ports 8080, 5173 and 8088 (kind, `k8s/README.md`); logout and web origins the same addresses without `/login`) |
+| `AUTH0_CLIENT_ID` | `Nwe76UaM6WetJUAsrc3xfEt8yiMzc6tj` (SPA "Credit Review Dashboard"; callbacks `/login` on `http://localhost` and `http://127.0.0.1`, ports 8080, 5173, 8088 (kind) and 8089 (a cloud's port-forward), plus each AWS deployment's public `https://<Elastic IP>`, added by hand for each one (`k8s/README.md`); logout and web origins the same addresses without `/login`) |
 | Action | `credit-review-claims` on the post-login trigger |
-| Demo users | `analyst@credit-review.demo` (analyst), `manager@credit-review.demo` (manager) and `admin@credit-review.demo` (admin), customers `c_001` to `c_012`; ask the team lead for the passwords |
+| Demo users | `analyst@credit-review.demo` (analyst), `manager@credit-review.demo` (manager) and `admin@credit-review.demo` (admin). The analyst and the manager list customers `c_001` to `c_012`, `c_201` and `c_301`; the admin lists all 27. Ask the team lead for the passwords |
 
 ## Setting up the Auth0 tenant
 
