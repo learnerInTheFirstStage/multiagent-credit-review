@@ -71,6 +71,10 @@ kubectl -n credit-review set env deploy/worker MOCK_PROCESSING- MOCK_SECONDS-   
 kubectl apply -k k8s/overlays/local                                             # and the settings' values
 ```
 
+### The 27 demo cases
+
+To load them into a cluster, here or on AWS: `demo/load-k8s.sh` (`demo/README.md`).
+
 ## Run it on AWS: k3s on one EC2 instance
 
 Needs the AWS CLI signed in (`aws login`), its [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html), Docker and `kubectl`. Nothing on the instance is open to the internet: the cluster is reached through an SSM tunnel.
