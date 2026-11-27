@@ -1,5 +1,7 @@
 # multiagent-credit-review
 
+> **Team project, personal fork.** This is a 3-person course project for a Generative AI class (Fall 2026), mirrored here for personal portfolio use with the team's consent. The original repository is at [github.com/lqc412/multiagent-credit-review](https://github.com/lqc412/multiagent-credit-review). See [CONTRIBUTIONS.md](CONTRIBUTIONS.md) for who built what. For the full technical overview, see [docs/OVERVIEW.md](docs/OVERVIEW.md).
+
 Credit Risk Review Agent: a proof of concept modelled on the credit risk review workflow at Ramp. A risk engine flags a customer whose numbers moved, three agents work out why, and an analyst approves before anything changes.
 
 All customers and data are simulated. This project is not affiliated with Ramp.
